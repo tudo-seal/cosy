@@ -5,7 +5,7 @@ Overall description of this example goes here.
 
 from cosy import CoSy
 from cosy.dsl import DSL
-from cosy.types import Constructor, Literal, Var
+from cosy.types import Constructor, Group, Literal, Var
 
 
 def fst(_x: int, f: tuple[int, int]) -> int:
@@ -41,27 +41,35 @@ def fib_next(_y: int, _x: int, f: tuple[int, int]) -> tuple[int, int]:
 
 
 def main():
+    # range of relevant indices for Fibonacci numbers
+    class Int(Group):
+        name = "int"
+        _bound = 6000
+
+        def __contains__(self, item: object) -> bool:
+            return isinstance(item, int) and 0 <= item < self._bound
+
+        def __iter__(self):
+            yield from frozenset(range(self._bound))
+
     component_specifications = {
         fst: DSL()
-        .parameter("x", "int")
+        .parameter("x", Int())
         .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
         .suffix(Constructor("fib") & Constructor("at", Var("x"))),
-        fib_zero_one: DSL().suffix(Constructor("fibs") & Constructor("at", Literal(0, "int"))),
+        fib_zero_one: DSL().suffix(Constructor("fibs") & Constructor("at", Literal(0))),
         fib_next: DSL()
-        .parameter("y", "int")
-        .parameter("x", "int", lambda vs: [vs["y"] - 1])
+        .parameter("y", Int())
+        .parameter("x", Int(), lambda vs: [vs["y"] - 1])
         .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
         .suffix(Constructor("fibs") & Constructor("at", Var("y"))),
     }
 
-    # range of relevant indices for Fibonacci numbers
-    parameter_space = {"int": frozenset(range(6000))}
-
     # CoSy instance with the component specifications and parameter space
-    cosy = CoSy(component_specifications, parameter_space)
+    cosy = CoSy(component_specifications)
 
     # query for the Fibonacci number at index 5000
-    query = Constructor("fib") & Constructor("at", Literal(5000, "int"))
+    query = Constructor("fib") & Constructor("at", Literal(5000))
 
     # solve the query and print the only solution
     print("5000th Fibonacci number:", next(iter(cosy.solve(query))))

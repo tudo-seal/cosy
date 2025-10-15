@@ -4,7 +4,7 @@ from itertools import product
 import pytest
 from cosy.dsl import DSL
 from cosy.synthesizer import Specification, Synthesizer
-from cosy.types import Constructor, Literal, Type, Var
+from cosy.types import Constructor, Group, Literal, Type, Var
 
 
 def is_free(pos: tuple[int, int]) -> bool:
@@ -37,41 +37,48 @@ def component_specifications() -> (
     def pos(ab: str) -> Type:
         return Constructor("pos", Var(ab))
 
+    class Int2(Group):
+        name = "int2"
+        _positions = frozenset(filter(is_free, product(range(SIZE), range(SIZE))))
+
+        def __contains__(self, x):
+            return x in self._positions
+
+        def __iter__(self):
+            yield from self._positions
+
+    int2 = Int2()
+
     return {
         up: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0], vs["b"][1] + 1)])
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0], vs["b"][1] + 1)])
         .argument("pos", pos("a"))
         .suffix(pos("b")),
         down: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0], vs["b"][1] - 1)])
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0], vs["b"][1] - 1)])
         .argument("pos", pos("a"))
         .suffix(pos("b")),
         left: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0] + 1, vs["b"][1])])
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0] + 1, vs["b"][1])])
         .argument("pos", pos("a"))
         .suffix(pos("b")),
         right: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0] - 1, vs["b"][1])])
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0] - 1, vs["b"][1])])
         .argument("pos", pos("a"))
         .suffix(pos("b")),
-        "START": "pos" @ (Literal((0, 0), "int2")),
+        "START": "pos" @ (Literal((0, 0))),
     }
 
 
 SIZE = 50
 
 
-@pytest.fixture
-def literals():
-    return {"int2": frozenset(filter(is_free, product(range(SIZE), range(SIZE))))}
+def test_benchmark_maze(component_specifications, benchmark):
+    fin = "pos" @ (Literal((SIZE - 1, SIZE - 1)))
 
-
-def test_benchmark_maze(component_specifications, literals, benchmark):
-    fin = "pos" @ (Literal((SIZE - 1, SIZE - 1), "int2"))
-
-    synthesizer = Synthesizer(component_specifications, literals)
+    synthesizer = Synthesizer(component_specifications)
     benchmark(synthesizer.construct_solution_space, fin)

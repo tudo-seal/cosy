@@ -5,7 +5,7 @@ Overall description of this example goes here.
 
 from cosy import CoSy
 from cosy.dsl import DSL
-from cosy.types import Constructor, Literal, Type, Var
+from cosy.types import Constructor, Group, Literal, Type, Var
 
 
 def fib_zero() -> int:
@@ -42,23 +42,27 @@ def fib_next(_z: int, _y: int, _x: int, f1: int, f2: int) -> int:
 
 
 def main():
+    # range of relevant indices for Fibonacci numbers
+    class Int(Group):
+        name = "int"
+
+        def __iter__(self):
+            yield from range(20)
+
     component_specifications = {
-        fib_zero: DSL().suffix(Constructor("fib") & Constructor("at", Literal(0, "int"))),
-        fib_one: DSL().suffix(Constructor("fib") & Constructor("at", Literal(1, "int"))),
+        fib_zero: DSL().suffix(Constructor("fib") & Constructor("at", Literal(0))),
+        fib_one: DSL().suffix(Constructor("fib") & Constructor("at", Literal(1))),
         fib_next: DSL()
-        .parameter("z", "int")
-        .parameter("y", "int", lambda vs: [vs["z"] - 1])
-        .parameter("x", "int", lambda vs: [vs["z"] - 2])
+        .parameter("z", Int())
+        .parameter("y", Int(), lambda vs: [vs["z"] - 1])
+        .parameter("x", Int(), lambda vs: [vs["z"] - 2])
         .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
         .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
         .suffix(Constructor("fib") & Constructor("at", Var("z"))),
     }
 
-    # range of relevant indices for Fibonacci numbers
-    parameter_space = {"int": list(range(20))}
-
     # CoSy instance with the component specifications and parameter space
-    cosy = CoSy(component_specifications, parameter_space)
+    cosy = CoSy(component_specifications)
 
     # query for Fibonacci numbers at relevant indices
     query: Type = Constructor("fib")
@@ -69,7 +73,7 @@ def main():
 
     for i in range(20):
         # query for Fibonacci numbers at index i
-        query = Constructor("fib") & Constructor("at", Literal(i, "int"))
+        query = Constructor("fib") & Constructor("at", Literal(i))
 
         # solve the query and print the only solution
         print(i, next(iter(cosy.solve(query))))

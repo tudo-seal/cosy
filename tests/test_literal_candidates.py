@@ -1,10 +1,9 @@
 # test for candidate generation for assigning values to literal variables
 
-from collections.abc import Container
 
 from cosy.dsl import DSL
 from cosy.synthesizer import Synthesizer
-from cosy.types import Constructor, Literal, Omega, Type, Var
+from cosy.types import Constructor, Group, Literal, Omega, Type, Var
 
 
 def test_candidates() -> None:
@@ -12,24 +11,29 @@ def test_candidates() -> None:
     def c(x: bool, y: bool, z: bool) -> str:
         return f"C {x} {y} {z}"
 
+    class Bool(Group):
+        name = "bool"
+
+        def __iter__(self):
+            yield from [True, False]
+
     component_specifications = {
         c: DSL()
-        .parameter("x", "bool")
+        .parameter("x", Bool())
         .parameter_constraint(lambda vs: vs["x"])  # x is True
-        .parameter("y", "bool", lambda _vs: [False])  # y is False
-        .parameter("z", "bool", lambda vs: [vs["x"]])  # z is equal to x
+        .parameter("y", Bool(), lambda _vs: [False])  # y is False
+        .parameter("z", Bool(), lambda vs: [vs["x"]])  # z is equal to x
         .suffix(Constructor("a", Var("x")) & Constructor("b", Var("y")) & Constructor("c", Var("z")))
     }
 
     def xyz(x: bool | None, y: bool | None, z: bool | None) -> Type:
         return (
-            Constructor("a", Omega() if x is None else Literal(x, "bool"))
-            & Constructor("b", Omega() if y is None else Literal(y, "bool"))
-            & Constructor("c", Omega() if z is None else Literal(z, "bool"))
+            Constructor("a", Omega() if x is None else Literal(x))
+            & Constructor("b", Omega() if y is None else Literal(y))
+            & Constructor("c", Omega() if z is None else Literal(z))
         )
 
-    parameter_space = {"bool": [True, False]}
-    synthesizer = Synthesizer(component_specifications, parameter_space)
+    synthesizer = Synthesizer(component_specifications)
 
     for x in [True, False, None]:
         for y in [True, False, None]:
@@ -48,16 +52,21 @@ def test_multi_values1() -> None:
     def c(a: int, b: int) -> str:
         return f"C {a} {b}"
 
-    parameter_space = {"int": [0, 1, 2, 3]}
+    class Int(Group):
+        name = "int"
+
+        def __iter__(self):
+            yield from [0, 1, 2, 3]
+
     component_specifications = {
         c: DSL()
-        .parameter("a", "int")  # a in [0, 1, 2, 3]
-        .parameter("b", "int", lambda vs: [vs["a"] - 1, vs["a"] + 1])  # b in [a-1, a+1]
+        .parameter("a", Int())  # a in [0, 1, 2, 3]
+        .parameter("b", Int(), lambda vs: [vs["a"] - 1, vs["a"] + 1])  # b in [a-1, a+1]
         .suffix(Constructor("c", Var("a")))
     }
 
-    synthesizer = Synthesizer(component_specifications, parameter_space)
-    target = Constructor("c", Literal(0, "int"))
+    synthesizer = Synthesizer(component_specifications)
+    target = Constructor("c", Literal(0))
     solution_space = synthesizer.construct_solution_space(target)
     assert [tree.interpret() for tree in solution_space.enumerate_trees(target)] == ["C 0 1"]
 
@@ -67,16 +76,21 @@ def test_multi_values2() -> None:
     def c(a: int, b: int) -> str:
         return f"C {a} {b}"
 
-    parameter_space = {"int": [0, 1, 2, 3]}
+    class Int(Group):
+        name = "int"
+
+        def __iter__(self):
+            yield from [0, 1, 2, 3]
+
     component_specifications = {
         c: DSL()
-        .parameter("a", "int")
-        .parameter("b", "int", lambda vs: [vs["a"] - 1, vs["a"] + 1])
+        .parameter("a", Int())
+        .parameter("b", Int(), lambda vs: [vs["a"] - 1, vs["a"] + 1])
         .suffix(Constructor("c", Var("a")))
     }
 
-    synthesizer = Synthesizer(component_specifications, parameter_space)
-    target = Constructor("c", Literal(1, "int"))
+    synthesizer = Synthesizer(component_specifications)
+    target = Constructor("c", Literal(1))
     solution_space = synthesizer.construct_solution_space(target)
     assert {tree.interpret() for tree in solution_space.enumerate_trees(target)} == {
         "C 1 2",
@@ -86,7 +100,7 @@ def test_multi_values2() -> None:
 
 def test_infinite_values() -> None:
     # the number of values for a literal variable can be infinite
-    class Nat(Container):
+    class Nat(Group):
         # represents the set of (arbitrary large) natural numbers
         def __contains__(self, value: object) -> bool:
             return isinstance(value, int) and value >= 0
@@ -94,18 +108,17 @@ def test_infinite_values() -> None:
     def c(x: int, _y: int, b: str) -> str:
         return f"C {x} ({b})"
 
-    parameter_space = {"nat": Nat()}
-    target = "c" @ Literal(3, "nat")
+    target = "c" @ Literal(3)
 
     component_specifications = {
         c: DSL()
-        .parameter("a", "nat")  # a in [0, 1, 2, ...]
-        .parameter("b", "nat", lambda vs: [vs["a"] - 1])  # b in [a-1]
+        .parameter("a", Nat())  # a in [0, 1, 2, ...]
+        .parameter("b", Nat(), lambda vs: [vs["a"] - 1])  # b in [a-1]
         .suffix(("c" @ Var("b")) ** ("c" @ Var("a"))),  # c(b) -> c(a)
-        "ZERO": "c" @ Literal(0, "nat"),  # c(0)
+        "ZERO": "c" @ Literal(0),  # c(0)
     }
 
-    synthesizer = Synthesizer(component_specifications, parameter_space)
+    synthesizer = Synthesizer(component_specifications)
     solution_space = synthesizer.construct_solution_space(target)
 
     assert [tree.interpret() for tree in solution_space.enumerate_trees(target)] == ["C 3 (C 2 (C 1 (ZERO)))"]

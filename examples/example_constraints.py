@@ -4,11 +4,10 @@ Demonstrates constraints in CoSy.
 """
 
 import re
-from collections.abc import Container
 
 from cosy import CoSy
 from cosy.dsl import DSL
-from cosy.types import Constructor, Literal, Type, Var
+from cosy.types import Constructor, Group, Literal, Type, Var
 
 
 def empty() -> str:
@@ -55,30 +54,30 @@ def is_heavy(s: str) -> bool:
 
 
 def main():
+    # regular expressions
+    class RegularExpression(Group):
+        name = "regex"
+
+        def __contains__(self, value: object) -> bool:
+            return isinstance(value, str)
+
     component_specifications = {
         empty: DSL().suffix(Constructor("str")),
         zero: DSL().argument("s", Constructor("str")).suffix(Constructor("str")),
         one: DSL().argument("s", Constructor("str")).suffix(Constructor("str")),
         fin: DSL()
-        .parameter("r", "regular_expression")
+        .parameter("r", RegularExpression())
         .argument("s", Constructor("str"))
         # parameter constraint to ensure that s matches the regular expression r
         .constraint(lambda vs: re.fullmatch(vs["r"], vs["s"].interpret()))
         .suffix(Constructor("matches", Var("r"))),
     }
 
-    # regular expressions
-    class RegularExpression(Container):
-        def __contains__(self, value: object) -> bool:
-            return isinstance(value, str)
-
-    parameter_space = {"regular_expression": RegularExpression()}
-
     # CoSy instance with the component specifications and parameter space
-    cosy = CoSy(component_specifications, parameter_space)
+    cosy = CoSy(component_specifications)
 
     # query for heavy strings
-    query: Type = Constructor("matches", Literal("01+0", "regular_expression"))
+    query: Type = Constructor("matches", Literal("01+0"))
 
     # solve the query and print the solutions
     for solution in cosy.solve(query):

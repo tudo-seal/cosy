@@ -21,7 +21,6 @@ G = TypeVar("G", bound=Hashable)  # type of constants
 class ConstantArgument(Generic[T, G]):
     name: str
     value: T
-    origin: G
 
 
 @dataclass(frozen=True)
