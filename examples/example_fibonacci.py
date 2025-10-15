@@ -5,7 +5,7 @@ Overall description of this example goes here.
 
 from cosy import CoSy
 from cosy.dsl import DSL
-from cosy.types import Constructor, Group, Literal, Type, Var
+from cosy.types import Constructor, DataGroup, Literal, Type, Var
 
 
 def fib_zero() -> int:
@@ -43,19 +43,15 @@ def fib_next(_z: int, _y: int, _x: int, f1: int, f2: int) -> int:
 
 def main():
     # range of relevant indices for Fibonacci numbers
-    class Int(Group):
-        name = "int"
-
-        def __iter__(self):
-            yield from range(20)
+    bound = 20
 
     component_specifications = {
         fib_zero: DSL().suffix(Constructor("fib") & Constructor("at", Literal(0))),
         fib_one: DSL().suffix(Constructor("fib") & Constructor("at", Literal(1))),
         fib_next: DSL()
-        .parameter("z", Int())
-        .parameter("y", Int(), lambda vs: [vs["z"] - 1])
-        .parameter("x", Int(), lambda vs: [vs["z"] - 2])
+        .parameter("z", DataGroup("int", range(bound)))
+        .parameter("y", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 1])
+        .parameter("x", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 2])
         .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
         .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
         .suffix(Constructor("fib") & Constructor("at", Var("z"))),

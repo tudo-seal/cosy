@@ -78,8 +78,11 @@ class Type(ABC):
 
 
 @dataclass(frozen=True)
-class Group:
-    name: str = field(init=False)
+class Group(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable name of the group."""
 
     def __iter__(self):
         # enumeration logic
@@ -91,6 +94,23 @@ class Group:
 
     def __str__(self) -> str:
         return f"{self.name}"
+
+
+class DataGroup(Group):
+    # Group definition based on given data (e.g. a list, range, set, ...)
+    def __init__(self, name: str, data: Any):
+        self._data = data
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __contains__(self, x):
+        return x in self._data
 
 
 @dataclass(frozen=True)
