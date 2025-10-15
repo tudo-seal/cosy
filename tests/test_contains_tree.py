@@ -5,7 +5,7 @@ import pytest
 from cosy.dsl import DSL
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
-from cosy.types import Group, Literal, Var
+from cosy.types import DataGroup, Literal, Var
 
 
 def leaf() -> str:
@@ -16,21 +16,14 @@ def branch(depth: int, _new_depth: int, left: str, right: str) -> str:
     return f"(B {depth} {left} {right})"
 
 
-class Int(Group):
-    name = "int"
-
-    def __iter__(self):
-        yield from [0, 1, 2, 3]
-
-
 @pytest.fixture
 def component_specifications():
     return {
         # recursive unproductive specification
         leaf: DSL().suffix(Literal(0)),
         branch: DSL()
-        .parameter("depth", Int())
-        .parameter("new_depth", Int(), lambda vs: [vs["depth"] - 1])
+        .parameter("depth", DataGroup("int", [0, 1, 2, 3]))
+        .parameter("new_depth", DataGroup("int", [0, 1, 2, 3]), lambda vs: [vs["depth"] - 1])
         .argument("left", Var("new_depth"))
         .argument("right", Var("new_depth"))
         .constraint(lambda vs: vs["left"] == vs["right"])

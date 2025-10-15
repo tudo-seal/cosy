@@ -4,7 +4,7 @@ from itertools import product
 import pytest
 from cosy.dsl import DSL
 from cosy.synthesizer import Specification, Synthesizer
-from cosy.types import Constructor, Group, Literal, Type, Var
+from cosy.types import Constructor, DataGroup, Literal, Type, Var
 
 
 def is_free(pos: tuple[int, int]) -> bool:
@@ -37,17 +37,7 @@ def component_specifications() -> (
     def pos(ab: str) -> Type:
         return Constructor("pos", Var(ab))
 
-    class Int2(Group):
-        name = "int2"
-        _positions = frozenset(filter(is_free, product(range(SIZE), range(SIZE))))
-
-        def __contains__(self, x):
-            return x in self._positions
-
-        def __iter__(self):
-            yield from self._positions
-
-    int2 = Int2()
+    int2 = DataGroup("int2", frozenset(filter(is_free, product(range(SIZE), range(SIZE)))))
 
     return {
         up: DSL()
