@@ -68,7 +68,6 @@ class MultiArrow:
 class CombinatorInfo:
     # container for auxiliary information about a combinator
     prefix: list[LiteralParameter | TermParameter | Predicate]
-    groups: dict[str, Group]
     term_predicates: tuple[Callable[[dict[str, Any]], bool], ...]
     instantiations: deque[dict[str, Any]] | None
     type: list[list[MultiArrow]]
@@ -102,7 +101,7 @@ class Synthesizer(Generic[C]):
 
         prefix: list[LiteralParameter | TermParameter | Predicate] = []
         variables: set[str] = set()
-        groups: dict[str, Group] = {}
+        literal_variables: set[str] = set()
         while not isinstance(parameterized_type, Type):
             if isinstance(parameterized_type, Abstraction):
                 param = parameterized_type.parameter
@@ -113,11 +112,11 @@ class Synthesizer(Generic[C]):
                 variables.add(param.name)
                 if isinstance(param, LiteralParameter):
                     prefix.append(param)
-                    groups[param.name] = param.group
+                    literal_variables.add(param.name)
                 elif isinstance(param, TermParameter):
                     prefix.append(param)
                     for free_var in param.group.free_vars:
-                        if free_var not in groups:
+                        if free_var not in literal_variables:
                             # check if each parameter variable is abstracted
                             msg = f"Parameter {free_var} is not abstracted."
                             raise ValueError(msg)
@@ -127,7 +126,7 @@ class Synthesizer(Generic[C]):
                 parameterized_type = parameterized_type.body
 
         for free_var in parameterized_type.free_vars:
-            if free_var not in groups:
+            if free_var not in literal_variables:
                 # check if each parameter variable is abstracted
                 msg = f"Parameter {free_var} is not abstracted."
                 raise ValueError(msg)
@@ -146,7 +145,7 @@ class Synthesizer(Generic[C]):
         term_predicates: tuple[Callable[[dict[str, Any]], bool], ...] = tuple(
             p.constraint for p in prefix if isinstance(p, Predicate) and not p.only_literals
         )
-        return CombinatorInfo(prefix, groups, term_predicates, None, multiarrows)
+        return CombinatorInfo(prefix, term_predicates, None, multiarrows)
 
     def _enumerate_substitutions(
         self,
