@@ -338,6 +338,7 @@ class Synthesizer(Generic[C]):
                                         ConstantArgument(
                                             param.name,
                                             instantiation[param.name],
+                                            param.group,
                                         )
                                         if isinstance(param, LiteralParameter)
                                         else NonTerminalArgument(
@@ -362,7 +363,7 @@ class Synthesizer(Generic[C]):
                                 )
                                 yield (
                                     current_target,
-                                    RHSRule[Type, Any, str](
+                                    RHSRule[Type, Any, Group](
                                         (*named_arguments, *anonymous_arguments),
                                         combinator_info.term_predicates,
                                         combinator,
@@ -370,10 +371,10 @@ class Synthesizer(Generic[C]):
                                 )
                                 stack.extendleft((q.origin, None) for q in anonymous_arguments)
 
-    def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, str]:
+    def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, Group]:
         """Constructs a logic program in the current environment for the given target types."""
 
-        solution_space: SolutionSpace[Type, C, str] = SolutionSpace()
+        solution_space: SolutionSpace[Type, C, Group] = SolutionSpace()
         for nt, rule in self.construct_solution_space_rules(*targets):
             solution_space.add_rule(nt, rule.terminal, rule.arguments, rule.predicates)
 

@@ -101,6 +101,8 @@ def test_multi_values2() -> None:
 def test_infinite_values() -> None:
     # the number of values for a literal variable can be infinite
     class Nat(Group):
+        name = "nat"
+
         # represents the set of (arbitrary large) natural numbers
         def __contains__(self, value: object) -> bool:
             return isinstance(value, int) and value >= 0
