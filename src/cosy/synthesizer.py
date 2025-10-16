@@ -108,7 +108,7 @@ class Synthesizer(Generic[C]):
                 param = parameterized_type.parameter
                 if param.name in variables:
                     # check if parameter names are unique
-                    msg = f"Duplicate name {param.name} in specification of combinator {str(combinator)}."
+                    msg = f"Duplicate name {param.name} in specification of combinator {combinator!s}."
                     raise ValueError(msg)
                 variables.add(param.name)
                 if isinstance(param, LiteralParameter):
@@ -119,7 +119,9 @@ class Synthesizer(Generic[C]):
                     for free_var in param.group.free_vars:
                         if free_var not in literal_variables:
                             # check if each parameter variable is abstracted
-                            msg = f"Parameter {free_var} is not abstracted in specification of combinator {str(combinator)}."
+                            msg = (
+                                f"Parameter {free_var} is not abstracted in specification of combinator {combinator!s}."
+                            )
                             raise ValueError(msg)
                 parameterized_type = parameterized_type.body
             elif isinstance(parameterized_type, Implication):
@@ -129,7 +131,7 @@ class Synthesizer(Generic[C]):
         for free_var in parameterized_type.free_vars:
             if free_var not in literal_variables:
                 # check if each parameter variable is abstracted
-                msg = f"Parameter {free_var} is not abstracted in specification of combinator {str(combinator)}."
+                msg = f"Parameter {free_var} is not abstracted in specification of combinator {combinator!s}."
                 raise ValueError(msg)
 
         current: list[MultiArrow] = [MultiArrow((), parameterized_type)]
