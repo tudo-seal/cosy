@@ -77,7 +77,6 @@ class Type(ABC):
         return Constructor(name, self)
 
 
-@dataclass(frozen=True)
 class Group(ABC):
     name: str = field(init=False)
 
