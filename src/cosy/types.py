@@ -97,12 +97,8 @@ class Group(ABC):
 class DataGroup(Group):
     # Group definition based on given data (e.g. a list, range, set, ...)
     def __init__(self, name: str, data: Any):
+        self.name = name
         self._data = data
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        return self._name
 
     def __iter__(self):
         return iter(self._data)
