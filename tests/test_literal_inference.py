@@ -1,11 +1,13 @@
 # test for corrrect literal inference in the presence of multiple parameters
 
 from collections.abc import Callable
+
 import pytest
 from cosy.dsl import DSL
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
 from cosy.types import Arrow, Constructor, Group, Intersection, Literal, Var
+
 
 def leaf_nat(x: int) -> str:
     return str(x)
@@ -63,7 +65,9 @@ def query_nat():
 def query_bools():
     return Constructor("q", Literal((True, True, False, True)))
 
+
 T = int | Callable | None | tuple
+
 
 def test_literal_inference_nat(query_nat, component_specifications) -> None:
     solution_space = Synthesizer(component_specifications).construct_solution_space(query_nat)
