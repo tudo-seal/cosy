@@ -14,6 +14,9 @@ def test_candidates() -> None:
     class Bool(Group):
         name = "bool"
 
+        def __contains__(self, x):
+            return super().__contains__(x)
+
         def __iter__(self):
             yield from [True, False]
 
@@ -55,6 +58,9 @@ def test_multi_values1() -> None:
     class Int(Group):
         name = "int"
 
+        def __contains__(self, x):
+            return super().__contains__(x)
+
         def __iter__(self):
             yield from [0, 1, 2, 3]
 
@@ -78,6 +84,9 @@ def test_multi_values2() -> None:
 
     class Int(Group):
         name = "int"
+
+        def __contains__(self, x):
+            return super().__contains__(x)
 
         def __iter__(self):
             yield from [0, 1, 2, 3]

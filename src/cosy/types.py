@@ -86,6 +86,7 @@ class Group(ABC):
         # enumeration logic
         pass
 
+    @abstractmethod
     def __contains__(self, x):
         # default membership logic
         return x in self.__iter__()
