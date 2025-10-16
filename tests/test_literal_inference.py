@@ -1,11 +1,11 @@
 # test for corrrect literal inference in the presence of multiple parameters
 
+from collections.abc import Callable
 import pytest
 from cosy.dsl import DSL
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
 from cosy.types import Arrow, Constructor, Group, Intersection, Literal, Var
-
 
 def leaf_nat(x: int) -> str:
     return str(x)
@@ -63,16 +63,17 @@ def query_nat():
 def query_bools():
     return Constructor("q", Literal((True, True, False, True)))
 
+T = int | Callable | None | tuple
 
 def test_literal_inference_nat(query_nat, component_specifications) -> None:
     solution_space = Synthesizer(component_specifications).construct_solution_space(query_nat)
 
-    result = Tree(
+    result = Tree[T](
         node,
         [
-            Tree(100),
-            Tree(None),
-            Tree(leaf_nat, [Tree(100)]),
+            Tree[T](100),
+            Tree[T](None),
+            Tree[T](leaf_nat, [Tree[T](100)]),
         ],
     )
 
@@ -82,12 +83,12 @@ def test_literal_inference_nat(query_nat, component_specifications) -> None:
 def test_literal_inference_bools(query_bools, component_specifications) -> None:
     solution_space = Synthesizer(component_specifications).construct_solution_space(query_bools)
 
-    result = Tree(
+    result = Tree[T](
         node,
         [
-            Tree(None),
-            Tree((True, True, False, True)),
-            Tree(leaf_bools, [Tree((True, True, False, True))]),
+            Tree[T](None),
+            Tree[T]((True, True, False, True)),
+            Tree[T](leaf_bools, [Tree[T]((True, True, False, True))]),
         ],
     )
 
