@@ -80,12 +80,13 @@ class Synthesizer(Generic[C]):
         taxonomy: Taxonomy | None = None,
     ):
         self.repository: tuple[tuple[C, CombinatorInfo], ...] = tuple(
-            (c, Synthesizer._function_types(ty)) for c, ty in component_specifications.items()
+            (c, Synthesizer._function_types(c, ty)) for c, ty in component_specifications.items()
         )
         self.subtypes = Subtypes(taxonomy if taxonomy is not None else {})
 
     @staticmethod
     def _function_types(
+        combinator: C,
         parameterized_type: Specification,
     ) -> CombinatorInfo:
         """Presents a type as a list of 0-ary, 1-ary, ..., n-ary function types."""
@@ -107,7 +108,7 @@ class Synthesizer(Generic[C]):
                 param = parameterized_type.parameter
                 if param.name in variables:
                     # check if parameter names are unique
-                    msg = f"Duplicate name: {param.name}"
+                    msg = f"Duplicate name {param.name} in specification of combinator {str(combinator)}."
                     raise ValueError(msg)
                 variables.add(param.name)
                 if isinstance(param, LiteralParameter):
@@ -118,7 +119,7 @@ class Synthesizer(Generic[C]):
                     for free_var in param.group.free_vars:
                         if free_var not in literal_variables:
                             # check if each parameter variable is abstracted
-                            msg = f"Parameter {free_var} is not abstracted."
+                            msg = f"Parameter {free_var} is not abstracted in specification of combinator {str(combinator)}."
                             raise ValueError(msg)
                 parameterized_type = parameterized_type.body
             elif isinstance(parameterized_type, Implication):
@@ -128,7 +129,7 @@ class Synthesizer(Generic[C]):
         for free_var in parameterized_type.free_vars:
             if free_var not in literal_variables:
                 # check if each parameter variable is abstracted
-                msg = f"Parameter {free_var} is not abstracted."
+                msg = f"Parameter {free_var} is not abstracted in specification of combinator {str(combinator)}."
                 raise ValueError(msg)
 
         current: list[MultiArrow] = [MultiArrow((), parameterized_type)]
