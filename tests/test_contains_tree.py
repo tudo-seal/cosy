@@ -5,7 +5,7 @@ import pytest
 from cosy.dsl import DSL
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
-from cosy.types import Literal, Var
+from cosy.types import DataGroup, Literal, Var
 
 
 def leaf() -> str:
@@ -20,10 +20,10 @@ def branch(depth: int, _new_depth: int, left: str, right: str) -> str:
 def component_specifications():
     return {
         # recursive unproductive specification
-        leaf: DSL().suffix(Literal(0, "int")),
+        leaf: DSL().suffix(Literal(0)),
         branch: DSL()
-        .parameter("depth", "int")
-        .parameter("new_depth", "int", lambda vs: [vs["depth"] - 1])
+        .parameter("depth", DataGroup("int", [0, 1, 2, 3]))
+        .parameter("new_depth", DataGroup("int", [0, 1, 2, 3]), lambda vs: [vs["depth"] - 1])
         .argument("left", Var("new_depth"))
         .argument("right", Var("new_depth"))
         .constraint(lambda vs: vs["left"] == vs["right"])
@@ -33,15 +33,14 @@ def component_specifications():
 
 @pytest.fixture
 def query():
-    return Literal(2, "int")
+    return Literal(2)
 
 
 T = int | Callable
 
 
 def test_contains_tree(query, component_specifications) -> None:
-    parameter_space = {"int": [0, 1, 2, 3]}
-    solution_space = Synthesizer(component_specifications, parameter_space).construct_solution_space(query)
+    solution_space = Synthesizer(component_specifications).construct_solution_space(query)
 
     tree_correct = Tree[T](
         branch,

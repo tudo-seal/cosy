@@ -17,6 +17,7 @@ from typing import Any
 
 from cosy.types import (
     Abstraction,
+    Group,
     Implication,
     LiteralParameter,
     Predicate,
@@ -57,13 +58,13 @@ class DSL:
     def parameter(  #
         self,
         name: str,
-        group: str,
+        group: Group,
         candidates: Callable[[dict[str, Any]], Sequence[Any]] | None = None,
     ) -> DSL:
         """
         Introduce a new parameter variable.
 
-        `group` is a string, and an instance of this specification will be generated
+        `group` is a Group, and an instance of this specification will be generated
         for each valid literal in the corresponding literal group.
         You can use this variable as Var(name) in all `Type`s, after the introduction
         and in all predicates.
@@ -75,7 +76,7 @@ class DSL:
         :param name: The name of the new variable.
         :type name: str
         :param group: The group of the variable.
-        :type group: str
+        :type group: Group
         :param candidates: Parameterized sequence of candidate values, that will be used to generate the literals.
         :type candidates: Callable[[dict[str, Any]], Sequence[Any]] | None
         :return: The DSL object.

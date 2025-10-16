@@ -8,7 +8,6 @@ It constructs a logic program via `constructSolutionSpace` from the following in
 from collections import deque
 from collections.abc import (
     Callable,
-    Container,
     Generator,
     Hashable,
     Iterable,
@@ -36,6 +35,7 @@ from cosy.subtypes import Subtypes, Taxonomy
 from cosy.types import (
     Abstraction,
     Arrow,
+    Group,
     Implication,
     Intersection,
     LiteralParameter,
@@ -50,9 +50,6 @@ C = TypeVar("C", bound=Hashable)
 
 # type of component specifications
 Specification = Abstraction | Implication | Type
-
-# type of parameter space
-ParameterSpace = Mapping[str, Iterable | Container]
 
 
 @dataclass(frozen=True)
@@ -71,7 +68,6 @@ class MultiArrow:
 class CombinatorInfo:
     # container for auxiliary information about a combinator
     prefix: list[LiteralParameter | TermParameter | Predicate]
-    groups: dict[str, str]
     term_predicates: tuple[Callable[[dict[str, Any]], bool], ...]
     instantiations: deque[dict[str, Any]] | None
     type: list[list[MultiArrow]]
@@ -81,18 +77,16 @@ class Synthesizer(Generic[C]):
     def __init__(
         self,
         component_specifications: Mapping[C, Specification],
-        parameter_space: ParameterSpace | None = None,
         taxonomy: Taxonomy | None = None,
     ):
-        self.literals: ParameterSpace = {} if parameter_space is None else dict(parameter_space.items())
         self.repository: tuple[tuple[C, CombinatorInfo], ...] = tuple(
-            (c, Synthesizer._function_types(self.literals, ty)) for c, ty in component_specifications.items()
+            (c, Synthesizer._function_types(c, ty)) for c, ty in component_specifications.items()
         )
         self.subtypes = Subtypes(taxonomy if taxonomy is not None else {})
 
     @staticmethod
     def _function_types(
-        literals: ParameterSpace,
+        combinator: C,
         parameterized_type: Specification,
     ) -> CombinatorInfo:
         """Presents a type as a list of 0-ary, 1-ary, ..., n-ary function types."""
@@ -108,28 +102,26 @@ class Synthesizer(Generic[C]):
 
         prefix: list[LiteralParameter | TermParameter | Predicate] = []
         variables: set[str] = set()
-        groups: dict[str, str] = {}
+        literal_variables: set[str] = set()
         while not isinstance(parameterized_type, Type):
             if isinstance(parameterized_type, Abstraction):
                 param = parameterized_type.parameter
                 if param.name in variables:
                     # check if parameter names are unique
-                    msg = f"Duplicate name: {param.name}"
+                    msg = f"Duplicate name {param.name} in specification of combinator {combinator!s}."
                     raise ValueError(msg)
                 variables.add(param.name)
                 if isinstance(param, LiteralParameter):
                     prefix.append(param)
-                    groups[param.name] = param.group
-                    # check if group is defined in the parameter space
-                    if param.group not in literals:
-                        msg = f"Group {param.group} is not defined in the parameter space."
-                        raise ValueError(msg)
+                    literal_variables.add(param.name)
                 elif isinstance(param, TermParameter):
                     prefix.append(param)
                     for free_var in param.group.free_vars:
-                        if free_var not in groups:
+                        if free_var not in literal_variables:
                             # check if each parameter variable is abstracted
-                            msg = f"Parameter {free_var} is not abstracted."
+                            msg = (
+                                f"Parameter {free_var} is not abstracted in specification of combinator {combinator!s}."
+                            )
                             raise ValueError(msg)
                 parameterized_type = parameterized_type.body
             elif isinstance(parameterized_type, Implication):
@@ -137,9 +129,9 @@ class Synthesizer(Generic[C]):
                 parameterized_type = parameterized_type.body
 
         for free_var in parameterized_type.free_vars:
-            if free_var not in groups:
+            if free_var not in literal_variables:
                 # check if each parameter variable is abstracted
-                msg = f"Parameter {free_var} is not abstracted."
+                msg = f"Parameter {free_var} is not abstracted in specification of combinator {combinator!s}."
                 raise ValueError(msg)
 
         current: list[MultiArrow] = [MultiArrow((), parameterized_type)]
@@ -156,7 +148,7 @@ class Synthesizer(Generic[C]):
         term_predicates: tuple[Callable[[dict[str, Any]], bool], ...] = tuple(
             p.constraint for p in prefix if isinstance(p, Predicate) and not p.only_literals
         )
-        return CombinatorInfo(prefix, groups, term_predicates, None, multiarrows)
+        return CombinatorInfo(prefix, term_predicates, None, multiarrows)
 
     def _enumerate_substitutions(
         self,
@@ -182,25 +174,25 @@ class Synthesizer(Generic[C]):
                         if parameter.values is not None and value not in parameter.values(substitution):
                             # the inferred value is not in the set of values
                             continue
-                        if value not in self.literals[parameter.group]:
+                        if value not in parameter.group:
                             # the inferred value is not in the group
                             continue
                         stack.appendleft((substitution, index + 1, None))
                     elif parameter.values is not None:
                         stack.appendleft((substitution, index, iter(parameter.values(substitution))))
                     else:
-                        concrete_values = self.literals[parameter.group]
-                        if not isinstance(concrete_values, Iterable):
-                            msg = f"The value of {parameter.name} could not be inferred."
-                            raise RuntimeError(msg)
-                        else:
-                            stack.appendleft((substitution, index, iter(concrete_values)))
+                        try:
+                            # consider all individual values of a group
+                            stack.appendleft((substitution, index, iter(parameter.group)))
+                        except TypeError as e:
+                            msg = f"Group {parameter.group.name} is not iterable."
+                            raise ValueError(msg) from e
                 else:
                     try:
                         value = next(generator)
                     except StopIteration:
                         continue
-                    if value in self.literals[parameter.group]:
+                    if value in parameter.group:
                         stack.appendleft(({**substitution, parameter.name: value}, index + 1, None))
                     stack.appendleft((substitution, index, generator))
 
@@ -215,12 +207,11 @@ class Synthesizer(Generic[C]):
         self,
         nary_types: list[MultiArrow],
         paths: Iterable[Type],
-        groups: dict[str, str],
         substitution: dict[str, Any],
     ) -> Sequence[list[Type]]:
         # does the target of a multi-arrow contain a given type?
         def target_contains(m: MultiArrow, t: Type) -> bool:
-            return self.subtypes.check_subtype(m.target, t, groups, substitution)
+            return self.subtypes.check_subtype(m.target, t, substitution)
 
         # cover target using targets of multi-arrows in nary_types
         covers = minimal_covers(nary_types, paths, target_contains)
@@ -237,7 +228,7 @@ class Synthesizer(Generic[C]):
         def compare_args(args1, args2) -> bool:
             return all(
                 map(
-                    lambda a, b: self.subtypes.check_subtype(a, b, groups, substitution),
+                    lambda a, b: self.subtypes.check_subtype(a, b, substitution),
                     args1,
                     args2,
                 )
@@ -249,7 +240,6 @@ class Synthesizer(Generic[C]):
         self,
         paths: Iterable[Type],
         combinator_type: list[list[MultiArrow]],
-        groups: dict[str, str],
     ) -> dict[str, Any] | None:
         """
         Computes a substitution that needs to be part of every substitution S such that
@@ -266,7 +256,7 @@ class Synthesizer(Generic[C]):
 
             for nary_types in combinator_type:
                 for ty in nary_types:
-                    substitution = self.subtypes.infer_substitution(ty.target, path, groups)
+                    substitution = self.subtypes.infer_substitution(ty.target, path)
                     if substitution is None:
                         continue
                     if unique_substitution is None:
@@ -318,7 +308,6 @@ class Synthesizer(Generic[C]):
                         substitution = self._necessary_substitution(
                             current_target.organized,
                             combinator_info.type,
-                            combinator_info.groups,
                         )
 
                         # If there cannot be a suitable substitution, ignore this combinator
@@ -349,7 +338,6 @@ class Synthesizer(Generic[C]):
                             for subquery in self._subqueries(
                                 nary_types,
                                 current_target.organized,
-                                combinator_info.groups,
                                 instantiation,
                             ):
                                 if named_arguments is None:  # do this only once for each instantiation
@@ -357,15 +345,12 @@ class Synthesizer(Generic[C]):
                                         ConstantArgument(
                                             param.name,
                                             instantiation[param.name],
-                                            combinator_info.groups[param.name],
+                                            param.group,
                                         )
                                         if isinstance(param, LiteralParameter)
                                         else NonTerminalArgument(
                                             param.name,
-                                            param.group.subst(
-                                                combinator_info.groups,
-                                                instantiation,
-                                            ),
+                                            param.group.subst(instantiation),
                                         )
                                         for param in combinator_info.prefix
                                         if isinstance(param, Parameter)
@@ -376,16 +361,16 @@ class Synthesizer(Generic[C]):
                                         if isinstance(argument, NonTerminalArgument)
                                     )
 
-                                anonymous_arguments: tuple[Argument, ...] = tuple(
+                                anonymous_arguments: tuple[NonTerminalArgument, ...] = tuple(
                                     NonTerminalArgument(
                                         None,
-                                        ty.subst(combinator_info.groups, instantiation),
+                                        ty.subst(instantiation),
                                     )
                                     for ty in subquery
                                 )
                                 yield (
                                     current_target,
-                                    RHSRule[Type, Any, str](
+                                    RHSRule[Type, Any, Group](
                                         (*named_arguments, *anonymous_arguments),
                                         combinator_info.term_predicates,
                                         combinator,
@@ -393,10 +378,10 @@ class Synthesizer(Generic[C]):
                                 )
                                 stack.extendleft((q.origin, None) for q in anonymous_arguments)
 
-    def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, str]:
+    def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, Group]:
         """Constructs a logic program in the current environment for the given target types."""
 
-        solution_space: SolutionSpace[Type, C, str] = SolutionSpace()
+        solution_space: SolutionSpace[Type, C, Group] = SolutionSpace()
         for nt, rule in self.construct_solution_space_rules(*targets):
             solution_space.add_rule(nt, rule.terminal, rule.arguments, rule.predicates)
 

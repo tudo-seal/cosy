@@ -63,7 +63,7 @@ class RegularExpression(Container): # (1)!
 
 parameter_space = {"regular_expression": RegularExpression()}
 cosy = CoSy(component_specifications, parameter_space) # (2)!
-query: Type = Constructor("matches", Literal("01+0", "regular_expression")) # (3)!
+query: Type = Constructor("matches", Literal("01+0")) # (3)!
  
 for solution in cosy.solve(query): # (4)!
     print(solution)

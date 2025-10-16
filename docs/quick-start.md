@@ -8,7 +8,7 @@ Using domain-specific language provided by the `DSL` class define a mapping of c
 
 - The component `fib_zero` is specified by `Constructor("fib") & Constructor("at", Literal(0, "int"))`, which combines two properties.
   + `Constructor("fib")` means that `fib_zero` it is a Fibonacci number.
-  + `Constructor("at", Literal(0, "int"))` means that `fib_zero` is associated with index `0`.
+  + `Constructor("at", Literal(0))` means that `fib_zero` is associated with index `0`.
 - The component `fib_one`, similarly to `fib_zero`, is a Fibonacci number and is associated with index `1`.
 - The component `fib_next` has three parameters associated with the group `int`
   + `z` index of the constructed Fibonacci number
@@ -33,10 +33,10 @@ def fib_next(_z: int, _y: int, _x: int, f1 : int, f2: int) -> int:
 
 component_specifications = {
     fib_zero: DSL()
-          .suffix(Constructor("fib") & Constructor("at", Literal(0, "int"))),
+          .suffix(Constructor("fib") & Constructor("at", Literal(0))),
 
     fib_one: DSL()
-          .suffix(Constructor("fib") & Constructor("at", Literal(1, "int"))),
+          .suffix(Constructor("fib") & Constructor("at", Literal(1))),
 
     fib_next: DSL()
               .parameter("z", "int")
@@ -90,11 +90,11 @@ for solution in cosy.solve(query):
 ### Fibonacci numbers at Specific Indices
 
 The specification allows us to query Fibonacci numbers at specific indices.
-For an index `i` the query `Constructor("fib") & Constructor("at", Literal(i, "int"))` describes the Fibonacci number at index `i`.
+For an index `i` the query `Constructor("fib") & Constructor("at", Literal(i))` describes the Fibonacci number at index `i`.
 Using the `solve` method, construct and display this Fibonacci number.
 
 ```
 for i in range(20):
-    query = Constructor("fib") & Constructor("at", Literal(i, "int"))
+    query = Constructor("fib") & Constructor("at", Literal(i))
     print(i, next(iter(cosy.solve(query))))
 ```

@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,7 +41,7 @@ class Type(ABC):
         pass
 
     @abstractmethod
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
+    def subst(self, substitution: dict[str, Any]) -> Type:
         pass
 
     @staticmethod
@@ -77,6 +77,36 @@ class Type(ABC):
         return Constructor(name, self)
 
 
+class Group(ABC):
+    name: str = field(init=False)
+
+    @abstractmethod
+    def __iter__(self):
+        # enumeration logic
+        pass
+
+    @abstractmethod
+    def __contains__(self, x):
+        # default membership logic
+        return x in self.__iter__()
+
+    def __str__(self) -> str:
+        return f"{self.name}"
+
+
+class DataGroup(Group):
+    # Group definition based on given data (e.g. a list, range, set, ...)
+    def __init__(self, name: str, data: Iterable):
+        self.name = name
+        self._data = data
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __contains__(self, x):
+        return x in self._data
+
+
 @dataclass(frozen=True)
 class Omega(Type):
     is_omega: bool = field(init=False, compare=False)
@@ -107,7 +137,7 @@ class Omega(Type):
     def _free_vars(self) -> set[str]:
         return set()
 
-    def subst(self, _groups: Mapping[str, str], _substitution: dict[str, Any]) -> Type:
+    def subst(self, _substitution: dict[str, Any]) -> Type:
         return self
 
 
@@ -147,10 +177,10 @@ class Constructor(Type):
             return str(self.name)
         return f"{self.name!s}({self.arg!s})"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
+    def subst(self, substitution: dict[str, Any]) -> Type:
         if not any(var in substitution for var in self.free_vars):
             return self
-        return Constructor(self.name, self.arg.subst(groups, substitution))
+        return Constructor(self.name, self.arg.subst(substitution))
 
 
 @dataclass(frozen=True)
@@ -189,12 +219,12 @@ class Arrow(Type):
     def __str__(self) -> str:
         return f"{self.source} -> {self.target}"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
+    def subst(self, substitution: dict[str, Any]) -> Type:
         if not any(var in substitution for var in self.free_vars):
             return self
         return Arrow(
-            self.source.subst(groups, substitution),
-            self.target.subst(groups, substitution),
+            self.source.subst(substitution),
+            self.target.subst(substitution),
         )
 
 
@@ -230,19 +260,18 @@ class Intersection(Type):
     def __str__(self) -> str:
         return f"{self.left} & {self.right}"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
+    def subst(self, substitution: dict[str, Any]) -> Type:
         if not any(var in substitution for var in self.free_vars):
             return self
         return Intersection(
-            self.left.subst(groups, substitution),
-            self.right.subst(groups, substitution),
+            self.left.subst(substitution),
+            self.right.subst(substitution),
         )
 
 
 @dataclass(frozen=True)
 class Literal(Type):
     value: Any  # has to be Hashable
-    group: str
     is_omega: bool = field(init=False, compare=False)
     size: int = field(init=False, compare=False)
     organized: set[Type] = field(init=False, compare=False)
@@ -269,9 +298,9 @@ class Literal(Type):
         return set()
 
     def __str__(self) -> str:
-        return f"[{self.value!s}, {self.group}]"
+        return f"[{self.value!s}]"
 
-    def subst(self, _groups: Mapping[str, str], _substitution: dict[str, Any]) -> Type:
+    def subst(self, _substitution: dict[str, Any]) -> Type:
         return self
 
 
@@ -306,9 +335,9 @@ class Var(Type):
     def __str__(self) -> str:
         return f"<{self.name!s}>"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
+    def subst(self, substitution: dict[str, Any]) -> Type:
         if self.name in substitution:
-            return Literal(substitution[self.name], groups[self.name])
+            return Literal(substitution[self.name])
         return self
 
 
@@ -317,7 +346,7 @@ class Parameter(ABC):
     """Abstract base class for parameter specification."""
 
     name: str
-    group: str | Type
+    group: Group | Type
 
     def __str__(self) -> str:
         return f"<{self.name}, {self.group}>"
@@ -327,7 +356,7 @@ class Parameter(ABC):
 class LiteralParameter(Parameter):
     """Specification of a literal parameter."""
 
-    group: str
+    group: Group
     #  Specification of literal assignment from a collection
     values: Callable[[dict[str, Any]], Sequence[Any]] | None = field(default=None)
 
