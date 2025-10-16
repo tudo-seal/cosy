@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -96,7 +96,7 @@ class Group(ABC):
 
 class DataGroup(Group):
     # Group definition based on given data (e.g. a list, range, set, ...)
-    def __init__(self, name: str, data: Any):
+    def __init__(self, name: str, data: Iterable):
         self.name = name
         self._data = data
 
