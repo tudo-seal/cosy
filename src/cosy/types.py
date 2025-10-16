@@ -79,11 +79,9 @@ class Type(ABC):
 
 @dataclass(frozen=True)
 class Group(ABC):
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Human-readable name of the group."""
+    name: str = field(init=False)
 
+    @abstractmethod
     def __iter__(self):
         # enumeration logic
         pass

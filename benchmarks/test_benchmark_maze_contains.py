@@ -50,6 +50,9 @@ def component_specifications() -> (
                     return True
             return False
 
+        def __iter__(self):
+            pass
+
     int2 = Int2()
 
     return {

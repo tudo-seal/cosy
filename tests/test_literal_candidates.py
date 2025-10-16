@@ -107,6 +107,9 @@ def test_infinite_values() -> None:
         def __contains__(self, value: object) -> bool:
             return isinstance(value, int) and value >= 0
 
+        def __iter__(self):
+            pass
+
     def c(x: int, _y: int, b: str) -> str:
         return f"C {x} ({b})"
 

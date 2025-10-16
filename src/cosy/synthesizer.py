@@ -178,7 +178,12 @@ class Synthesizer(Generic[C]):
                     elif parameter.values is not None:
                         stack.appendleft((substitution, index, iter(parameter.values(substitution))))
                     else:
-                        stack.appendleft((substitution, index, iter(parameter.group)))
+                        try:
+                            # consider all individual values of a group
+                            stack.appendleft((substitution, index, iter(parameter.group)))
+                        except TypeError as e:
+                            msg = f"Group {parameter.group.name} is not iterable."
+                            raise ValueError(msg) from e
                 else:
                     try:
                         value = next(generator)

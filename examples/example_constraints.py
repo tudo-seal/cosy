@@ -61,6 +61,9 @@ def main():
         def __contains__(self, value: object) -> bool:
             return isinstance(value, str)
 
+        def __iter__(self):
+            pass
+
     component_specifications = {
         empty: DSL().suffix(Constructor("str")),
         zero: DSL().argument("s", Constructor("str")).suffix(Constructor("str")),

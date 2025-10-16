@@ -1,0 +1,94 @@
+# test for corrrect literal inference in the presence of multiple parameters
+
+import pytest
+from cosy.dsl import DSL
+from cosy.synthesizer import Synthesizer
+from cosy.tree import Tree
+from cosy.types import Arrow, Constructor, Group, Intersection, Literal, Var
+
+
+def leaf_nat(x: int) -> str:
+    return str(x)
+
+
+def leaf_bools(y: tuple[bool]) -> str:
+    return str(y)
+
+
+def node(_x: int, _y: tuple[bool], argument: str) -> str:
+    return f"(Node {argument})"
+
+
+@pytest.fixture
+def component_specifications():
+    class Nat(Group):
+        name = "nat"
+
+        def __contains__(self, x):
+            return x is None or (isinstance(x, int) and x >= 0)
+
+        def __iter__(self):
+            yield None  # default value, do not enumerate all natural numbers
+
+    class Bools(Group):
+        name = "bools"
+
+        def __contains__(self, x):
+            return x is None or (isinstance(x, tuple) and all(isinstance(b, bool) for b in x))
+
+        def __iter__(self):
+            yield None  # default value, do not enumerate all boolean tuples
+
+    return {
+        leaf_nat: DSL().parameter("x", Nat()).suffix(Constructor("a", Var("x"))),
+        leaf_bools: DSL().parameter("y", Bools()).suffix(Constructor("b", Var("y"))),
+        node: DSL()
+        .parameter("x", Nat())
+        .parameter("y", Bools())
+        .suffix(
+            Intersection(
+                Arrow(Constructor("a", Var("x")), Constructor("p", Var("x"))),
+                Arrow(Constructor("b", Var("y")), Constructor("q", Var("y"))),
+            )
+        ),
+    }
+
+
+@pytest.fixture
+def query_nat():
+    return Constructor("p", Literal(100))
+
+
+@pytest.fixture
+def query_bools():
+    return Constructor("q", Literal((True, True, False, True)))
+
+
+def test_literal_inference_nat(query_nat, component_specifications) -> None:
+    solution_space = Synthesizer(component_specifications).construct_solution_space(query_nat)
+
+    result = Tree(
+        node,
+        [
+            Tree(100),
+            Tree(None),
+            Tree(leaf_nat, [Tree(100)]),
+        ],
+    )
+
+    assert solution_space.contains_tree(query_nat, result)
+
+
+def test_literal_inference_bools(query_bools, component_specifications) -> None:
+    solution_space = Synthesizer(component_specifications).construct_solution_space(query_bools)
+
+    result = Tree(
+        node,
+        [
+            Tree(None),
+            Tree((True, True, False, True)),
+            Tree(leaf_bools, [Tree((True, True, False, True))]),
+        ],
+    )
+
+    assert solution_space.contains_tree(query_bools, result)
