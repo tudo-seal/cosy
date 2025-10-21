@@ -39,18 +39,17 @@ def one(s: str) -> str:
     return s + "1"
 
 
-def fin(_b: bool, s: str) -> str:
+def fin(_r: str, s: str) -> str:
+    """
+    Return the input string. The input regular expression is not used in this function as it does not contribute to
+    the resulting string interpretation of synthesized results. However, it can not be omitted, as the type of the
+    combinator specifies its presence.
+
+    :param _r: The input regular expression.
+    :param s: The input string.
+    :return: The unmodified input string.
+    """
     return s
-
-
-def is_heavy(s: str) -> bool:
-    """
-    Check if the number of '1's in the string is greater than the number of '0's.
-
-    :param s: A string containing '0's and '1's.
-    :return: True if the number of '1's is greater than the number of '0's, False otherwise.
-    """
-    return s.count("0") < s.count("1")
 
 
 def main():
