@@ -3,14 +3,14 @@ from dataclasses import FrozenInstanceError, dataclass
 from functools import update_wrapper
 from typing import Any, Generic, TypeVar
 
-from cosy.dsl import DSL
 from cosy.solution_space import SolutionSpace
+from cosy.specification_builder import SpecificationBuilder
 from cosy.subtypes import Subtypes, Taxonomy
 from cosy.synthesizer import Specification, Synthesizer
 from cosy.types import Arrow, Constructor, Intersection, Literal, Omega, Type, Var
 
 __all__ = [
-    "DSL",
+    "SpecificationBuilder",
     "Literal",
     "Var",
     "Subtypes",
@@ -27,7 +27,7 @@ T = TypeVar("T", bound=Hashable)
 
 
 @dataclass(unsafe_hash=True)
-class Component(Callable):
+class Component:
     name: str
     interpretation: Callable
 

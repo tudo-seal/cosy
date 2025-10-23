@@ -3,8 +3,8 @@
 Overall description of this example goes here.
 """
 
-from cosy import CoSy
-from cosy.dsl import DSL
+from cosy import Component, CoSy
+from cosy.specification_builder import SpecificationBuilder
 from cosy.types import Constructor, DataGroup, Literal, Type, Var
 
 
@@ -46,9 +46,14 @@ def main():
     bound = 20
 
     component_specifications = {
-        fib_zero: DSL().suffix(Constructor("fib") & Constructor("at", Literal(0))),
-        fib_one: DSL().suffix(Constructor("fib") & Constructor("at", Literal(1))),
-        fib_next: DSL()
+        Component(name="fibonacci_zero", interpretation=fib_zero):  #
+        SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(0))),
+        #
+        Component(name="fibonacci_one", interpretation=fib_one):  #
+        SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(1))),
+        #
+        Component(name="next_fibonacci_number", interpretation=fib_next):  #
+        SpecificationBuilder()
         .parameter("z", DataGroup("int", range(bound)))
         .parameter("y", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 1])
         .parameter("x", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 2])

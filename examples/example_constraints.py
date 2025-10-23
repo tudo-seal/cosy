@@ -5,8 +5,8 @@ Demonstrates constraints in CoSy.
 
 import re
 
-from cosy import CoSy
-from cosy.dsl import DSL
+from cosy import Component, CoSy
+from cosy.specification_builder import SpecificationBuilder
 from cosy.types import Constructor, Group, Literal, Type, Var
 
 
@@ -64,14 +64,22 @@ def main():
             pass
 
     component_specifications = {
-        empty: DSL().suffix(Constructor("str")),
-        zero: DSL().argument("s", Constructor("str")).suffix(Constructor("str")),
-        one: DSL().argument("s", Constructor("str")).suffix(Constructor("str")),
-        fin: DSL()
+        Component(name="empty", interpretation=empty):  #
+        SpecificationBuilder().suffix(Constructor("str")),
+        #
+        Component(name="zero", interpretation=zero):  #
+        SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
+        #
+        Component(name="one", interpretation=one):  #
+        SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
+        #
+        Component(name="fin", interpretation=fin):  #
+        SpecificationBuilder()
         .parameter("r", RegularExpression())
         .argument("s", Constructor("str"))
-        # parameter constraint to ensure that s matches the regular expression r
-        .constraint(lambda vs: re.fullmatch(vs["r"], vs["s"].interpret()))
+        .constraint(
+            lambda vs: bool(re.fullmatch(vs["r"], vs["s"].interpret()))  # ensure s matches regular expression r
+        )
         .suffix(Constructor("matches", Var("r"))),
     }
 

@@ -3,8 +3,8 @@
 from collections.abc import Iterator
 
 import pytest
-from cosy.dsl import DSL
 from cosy.solution_space import SolutionSpace
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
 from cosy.types import Constructor, Group, Var
@@ -38,15 +38,15 @@ def test_infinite_enumeration() -> None:
             return isinstance(value, int) and value >= 0
 
     component_specifications = {
-        c: DSL()
+        c: SpecificationBuilder()
         .parameter("x", Nat())
         .parameter("y", Nat())
         .argument("t1", Var("x"))
         .argument("t2", Var("y"))
         .suffix(Constructor("a") ** Constructor("a")),
-        d: DSL().parameter("x", Nat()).suffix(Var("x")),
-        e: DSL().parameter("y", Nat()).suffix(Var("y")),
-        f: DSL().suffix(Constructor("a")),
+        d: SpecificationBuilder().parameter("x", Nat()).suffix(Var("x")),
+        e: SpecificationBuilder().parameter("y", Nat()).suffix(Var("y")),
+        f: SpecificationBuilder().suffix(Constructor("a")),
     }
 
     synthesizer = Synthesizer(component_specifications)
