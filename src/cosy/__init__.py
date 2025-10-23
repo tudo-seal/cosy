@@ -1,4 +1,6 @@
-from collections.abc import Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
+from dataclasses import FrozenInstanceError, dataclass
+from functools import update_wrapper
 from typing import Any, Generic, TypeVar
 
 from cosy.dsl import DSL
@@ -24,14 +26,33 @@ __all__ = [
 T = TypeVar("T", bound=Hashable)
 
 
+@dataclass(unsafe_hash=True)
+class Component(Callable):
+    name: str
+    interpretation: Callable
+
+    def __post_init__(self):
+        update_wrapper(self, self.interpretation)
+        self._frozen = True
+
+    def __call__(self, *args, **kwargs):
+        return self.interpretation(*args, **kwargs)
+
+    def __setattr__(self, attr, value):
+        if getattr(self, "_frozen", None):
+            msg = f"cannot assign to field '{attr}'"
+            raise FrozenInstanceError(msg)
+        return super().__setattr__(attr, value)
+
+
 class CoSy(Generic[T]):
-    component_specifications: Mapping[T, Specification]
+    component_specifications: Mapping[Component, Specification]
     taxonomy: Taxonomy | None = None
     _synthesizer: Synthesizer
 
     def __init__(
         self,
-        component_specifications: Mapping[T, Specification],
+        component_specifications: Mapping[Component, Specification],
         taxonomy: Taxonomy | None = None,
     ) -> None:
         self.component_specifications = component_specifications
@@ -49,8 +70,8 @@ class CoSy(Generic[T]):
         if not isinstance(query, Type):
             msg = "Query must be of type Type"
             raise TypeError(msg)
-        solution_space = self._synthesizer.construct_solution_space(query).prune()
+        _solution_space = self._synthesizer.construct_solution_space(query).prune()
 
-        trees = solution_space.enumerate_trees(query, max_count=max_count)
+        trees = _solution_space.enumerate_trees(query, max_count=max_count)
         for tree in trees:
             yield tree.interpret()
