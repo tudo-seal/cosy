@@ -1,0 +1,31 @@
+name: 'Check PR Rules for Develop'
+
+on:
+  pull_request_target:
+    types: [ opened ]
+    branches:
+      - develop
+
+jobs:
+  pr-rules-main:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      pull-requests: write
+    steps:
+      - name: Close Pull Request and Comment if Violating
+        uses: superbrothers/close-pull-request@v3
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/')}}
+        with:
+          comment: |
+            :warning: You can only merge to develop from a feature or a bugfix branch. :warning:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fail Job if Violating
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/')}}
+        run: |
+          echo "Reason: You can only merge to develop from a feature or a bugfix branch."
+          exit 1
+      - name: Succeed Job if not Violating
+        if: ${{ contains( github.head_ref, 'feature/') || contains( github.head_ref, 'bugfix/')}}
+        run: |
+          exit 0

@@ -10,17 +10,19 @@ from cosy.synthesizer import Specification, Synthesizer
 from cosy.types import Arrow, Constructor, Intersection, Literal, Omega, Type, Var
 
 __all__ = [
-    "SpecificationBuilder",
-    "Literal",
-    "Var",
-    "Subtypes",
-    "Type",
-    "Omega",
-    "Constructor",
     "Arrow",
+    "Component",
+    "Constructor",
+    "CoSy",
     "Intersection",
-    "Synthesizer",
+    "Literal",
+    "Omega",
     "SolutionSpace",
+    "Subtypes",
+    "Synthesizer",
+    "Type",
+    "Var",
+    "SpecificationBuilder",
 ]
 
 T = TypeVar("T", bound=Hashable)
