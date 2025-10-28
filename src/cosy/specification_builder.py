@@ -137,7 +137,7 @@ class SpecificationBuilder:
             The values of variables are passed by a dictionary, where the keys are the names of the
             variables and the values are the corresponding values.
         :type constraint: Callable[[Mapping[str, Any]], bool]
-        :return: The DSL object.
+        :return: The SpecificationBuilder object.
         :rtype: SpecificationBuilder
         """
 

@@ -34,6 +34,12 @@ class Component:
     interpretation: Callable
 
     def __post_init__(self):
+        """
+        Wrapping a Callable within a class makes the Python inspect module retrieve a wrong signature, statically
+        returning 2 arguments (*args,*kwargs). To fix this, update_wrapper() copies the signature of the
+        wrapped Callable to the Component class (which is itself a Callable).
+        """
+
         update_wrapper(self, self.interpretation)
         self._frozen = True
 
@@ -41,6 +47,15 @@ class Component:
         return self.interpretation(*args, **kwargs)
 
     def __setattr__(self, attr, value):
+        """
+        This dataclass can not be frozen, due to the modifications detailed in __post_init__. To emulate the behavior
+        of a frozen dataclass after __post_init__ is executed, this method prevents modification of attributes. This
+        also ensures that hashing this dataclass is safe, as if it were frozen.
+
+        :param attr: The attribute to set.
+        :param value: The value to be set.
+        """
+
         if getattr(self, "_frozen", None):
             msg = f"cannot assign to field '{attr}'"
             raise FrozenInstanceError(msg)
