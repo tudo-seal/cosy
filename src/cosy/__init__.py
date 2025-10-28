@@ -28,7 +28,7 @@ __all__ = [
 T = TypeVar("T", bound=Hashable)
 
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class Component:
     name: str
     interpretation: Callable
@@ -49,8 +49,7 @@ class Component:
     def __setattr__(self, attr, value):
         """
         This dataclass can not be frozen, due to the modifications detailed in __post_init__. To emulate the behavior
-        of a frozen dataclass after __post_init__ is executed, this method prevents modification of attributes. This
-        also ensures that hashing this dataclass is safe, as if it were frozen.
+        of a frozen dataclass after __post_init__ is executed, this method prevents modification of attributes.
 
         :param attr: The attribute to set.
         :param value: The value to be set.
@@ -60,6 +59,12 @@ class Component:
             msg = f"cannot assign to field '{attr}'"
             raise FrozenInstanceError(msg)
         return super().__setattr__(attr, value)
+
+    def __hash__(self):
+        hash(self.name)
+
+    def __str__(self):
+        return str(self.name)
 
 
 class CoSy(Generic[T]):
