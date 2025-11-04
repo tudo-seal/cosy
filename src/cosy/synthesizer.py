@@ -65,11 +65,10 @@ class MultiArrow:
 
 
 @dataclass()
-class CombinatorInfo:
-    # container for auxiliary information about a combinator
+class SpecificationInfo:
+    # container for auxiliary information about a specification
     prefix: list[LiteralParameter | TermParameter | Predicate]
     term_predicates: tuple[Callable[[dict[str, Any]], bool], ...]
-    instantiations: deque[dict[str, Any]] | None
     type: list[list[MultiArrow]]
 
 
@@ -79,7 +78,7 @@ class Synthesizer(Generic[C]):
         component_specifications: Mapping[C, Specification],
         taxonomy: Taxonomy | None = None,
     ):
-        self.repository: tuple[tuple[C, CombinatorInfo], ...] = tuple(
+        self.repository: tuple[tuple[C, SpecificationInfo], ...] = tuple(
             (c, Synthesizer._function_types(c, ty)) for c, ty in component_specifications.items()
         )
         self.subtypes = Subtypes(taxonomy if taxonomy is not None else {})
@@ -88,7 +87,7 @@ class Synthesizer(Generic[C]):
     def _function_types(
         combinator: C,
         parameterized_type: Specification,
-    ) -> CombinatorInfo:
+    ) -> SpecificationInfo:
         """Presents a type as a list of 0-ary, 1-ary, ..., n-ary function types."""
 
         def unary_function_types(ty: Type) -> Iterable[tuple[Type, Type]]:
@@ -148,7 +147,7 @@ class Synthesizer(Generic[C]):
         term_predicates: tuple[Callable[[dict[str, Any]], bool], ...] = tuple(
             p.constraint for p in prefix if isinstance(p, Predicate) and not p.only_literals
         )
-        return CombinatorInfo(prefix, term_predicates, None, multiarrows)
+        return SpecificationInfo(prefix, term_predicates, multiarrows)
 
     def _enumerate_substitutions(
         self,
@@ -286,7 +285,7 @@ class Synthesizer(Generic[C]):
         """Generate logic program rules for the given target types."""
 
         # current target types
-        stack: deque[tuple[Type, tuple[C, CombinatorInfo, Iterator] | None]] = deque(
+        stack: deque[tuple[Type, tuple[C, SpecificationInfo, Iterator] | None]] = deque(
             (target, None) for target in targets
         )
         seen: set[Type] = set()
@@ -303,11 +302,11 @@ class Synthesizer(Generic[C]):
                 if current_target_info is None:
                     seen.add(current_target)
                     # try each combinator
-                    for combinator, combinator_info in self.repository:
+                    for combinator, specification_info in self.repository:
                         # Compute necessary substitutions
                         substitution = self._necessary_substitution(
                             current_target.organized,
-                            combinator_info.type,
+                            specification_info.type,
                         )
 
                         # If there cannot be a suitable substitution, ignore this combinator
@@ -315,26 +314,26 @@ class Synthesizer(Generic[C]):
                             continue
 
                         # Keep necessary substitutions and enumerate the rest
-                        selected_instantiations = self._enumerate_substitutions(combinator_info.prefix, substitution)
+                        selected_instantiations = self._enumerate_substitutions(specification_info.prefix, substitution)
                         stack.appendleft(
                             (
                                 current_target,
                                 (
                                     combinator,
-                                    combinator_info,
+                                    specification_info,
                                     iter(selected_instantiations),
                                 ),
                             )
                         )
                 else:
-                    combinator, combinator_info, selected_instantiations = current_target_info
+                    combinator, specification_info, selected_instantiations = current_target_info
                     instantiation = next(selected_instantiations, None)
                     if instantiation is not None:
                         stack.appendleft((current_target, current_target_info))
                         named_arguments: tuple[Argument, ...] | None = None
 
                         # and every arity of the combinator type
-                        for nary_types in combinator_info.type:
+                        for nary_types in specification_info.type:
                             for subquery in self._subqueries(
                                 nary_types,
                                 current_target.organized,
@@ -352,7 +351,7 @@ class Synthesizer(Generic[C]):
                                             param.name,
                                             param.group.subst(instantiation),
                                         )
-                                        for param in combinator_info.prefix
+                                        for param in specification_info.prefix
                                         if isinstance(param, Parameter)
                                     )
                                     stack.extendleft(
@@ -372,7 +371,7 @@ class Synthesizer(Generic[C]):
                                     current_target,
                                     RHSRule[Type, Any, Group](
                                         (*named_arguments, *anonymous_arguments),
-                                        combinator_info.term_predicates,
+                                        specification_info.term_predicates,
                                         combinator,
                                     ),
                                 )
