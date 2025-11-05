@@ -45,20 +45,32 @@ def main():
     # range of relevant indices for Fibonacci numbers
     bound = 20
 
-    component_specifications = {
-        fib_zero: SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(0))),
-        fib_one: SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(1))),
-        fib_next: SpecificationBuilder()
-        .parameter("z", DataGroup("int", range(bound)))
-        .parameter("y", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 1])
-        .parameter("x", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 2])
-        .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
-        .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
-        .suffix(Constructor("fib") & Constructor("at", Var("z"))),
-    }
+    named_components_with_specifications = [
+        (  #
+            "fib_zero",
+            fib_zero,
+            SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(0))),
+        ),
+        (  #
+            "fib_one",
+            fib_one,
+            SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(1))),
+        ),
+        (  #
+            "fib_next",
+            fib_next,
+            SpecificationBuilder()
+            .parameter("z", DataGroup("int", range(bound)))
+            .parameter("y", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 1])
+            .parameter("x", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 2])
+            .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
+            .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
+            .suffix(Constructor("fib") & Constructor("at", Var("z"))),
+        ),
+    ]
 
     # CoSy instance with the component specifications and parameter space
-    cosy = CoSy(component_specifications)
+    cosy = CoSy(named_components_with_specifications)
 
     # query for Fibonacci numbers at relevant indices
     query: Type = Constructor("fib")

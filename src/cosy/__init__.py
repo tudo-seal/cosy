@@ -27,29 +27,29 @@ T = TypeVar("T", bound=Hashable)
 
 
 class CoSy(Generic[T]):
-    named_component_with_specifications: Sequence[tuple[T, Callable, Specification]]
+    named_components_with_specifications: Sequence[tuple[T, Callable, Specification]]
     taxonomy: Taxonomy | None = None
     _synthesizer: Synthesizer
 
     def __init__(
         self,
-        named_component_with_specifications: Sequence[tuple[T, Callable, Specification]],
+        named_components_with_specifications: Sequence[tuple[T, Callable, Specification]],
         taxonomy: Taxonomy | None = None,
     ) -> None:
-        if len(list(groupby(named_component_with_specifications, key=lambda x: x[0]))) != len(
-            named_component_with_specifications
+        if len(list(groupby(named_components_with_specifications, key=lambda x: x[0]))) != len(
+            named_components_with_specifications
         ):
             msg = "Duplicate names: component's names should be unique"
             raise ValueError(msg)
 
-        self.named_component_with_specifications = named_component_with_specifications
+        self.named_components_with_specifications = named_components_with_specifications
         self.taxonomy = taxonomy if taxonomy is not None else {}
 
         self.component_specifications = {
-            name: specification for name, _, specification in self.named_component_with_specifications
+            name: specification for name, _, specification in self.named_components_with_specifications
         }
         self.component_interpretations = {
-            name: interpretation for name, interpretation, _ in self.named_component_with_specifications
+            name: interpretation for name, interpretation, _ in self.named_components_with_specifications
         }
 
         self._synthesizer = Synthesizer(self.component_specifications, self.taxonomy)
@@ -67,6 +67,8 @@ class CoSy(Generic[T]):
             raise TypeError(msg)
         _solution_space = self._synthesizer.construct_solution_space(query).prune()
 
-        trees = _solution_space.enumerate_trees(query, max_count=max_count, interpretation=self.component_interpretations)
+        trees = _solution_space.enumerate_trees(
+            query, max_count=max_count, interpretation=self.component_interpretations
+        )
         for tree in trees:
             yield tree.interpret(interpretation=self.component_interpretations)
