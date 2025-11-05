@@ -86,7 +86,7 @@ class Subtypes:
         return self._check_subtype_rec(deque((subtype,)), supertype, substitutions)
 
     def infer_substitution(self, subtype: Type, path: Type) -> dict[str, Any] | None:
-        """Infers a unique substitution S such that S(subtype) <= path where path is closed. Returns None or Ambiguous is no solution exists or multiple solutions exist respectively. Does not respect groups."""
+        """Infers a unique substitution S such that S(subtype) <= path where path is closed. Returns None is no solution exists or multiple solutions exist. Does not respect groups."""
 
         if subtype.is_omega:
             return None

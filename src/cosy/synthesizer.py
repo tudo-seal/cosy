@@ -113,6 +113,9 @@ class Synthesizer(Generic[C]):
                 if isinstance(param, LiteralParameter):
                     prefix.append(param)
                     literal_variables.add(param.name)
+                    if not isinstance(param.group.name, str):
+                        msg = f"Group of literal parameter {param.name} in specification of combinator {combinator!s} has no name."
+                        raise TypeError(msg)
                 elif isinstance(param, TermParameter):
                     prefix.append(param)
                     for free_var in param.group.free_vars:
