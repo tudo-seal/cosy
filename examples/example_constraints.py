@@ -63,17 +63,32 @@ def main():
         def __iter__(self):
             pass
 
-    component_specifications = {
-        empty: SpecificationBuilder().suffix(Constructor("str")),
-        zero: SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
-        one: SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
-        fin: SpecificationBuilder()
-        .parameter("r", RegularExpression())
-        .argument("s", Constructor("str"))
-        # parameter constraint to ensure that s matches the regular expression r
-        .constraint(lambda vs: re.fullmatch(vs["r"], vs["s"].interpret()))
-        .suffix(Constructor("matches", Var("r"))),
-    }
+    component_specifications = [
+        (  #
+            "empty",
+            empty,
+            SpecificationBuilder().suffix(Constructor("str")),
+        ),
+        (  #
+            "zero",
+            zero,
+            SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
+        ),
+        (  #
+            "one",
+            one,
+            SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
+        ),
+        (  #
+            "fin",
+            fin,
+            SpecificationBuilder()
+            .parameter("r", RegularExpression())
+            .argument("s", Constructor("str"))
+            .constraint(lambda vs: re.fullmatch(vs["r"], vs["s"]))
+            .suffix(Constructor("matches", Var("r"))),
+        ),
+    ]
 
     # CoSy instance with the component specifications and parameter space
     cosy = CoSy(component_specifications)
