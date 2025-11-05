@@ -4,7 +4,7 @@ Overall description of this example goes here.
 """
 
 from cosy import CoSy
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.types import Constructor, Group, Literal, Var
 
 
@@ -53,12 +53,12 @@ def main():
             yield from frozenset(range(self._bound))
 
     component_specifications = {
-        fst: DSL()
+        fst: SpecificationBuilder()
         .parameter("x", Int())
         .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
         .suffix(Constructor("fib") & Constructor("at", Var("x"))),
-        fib_zero_one: DSL().suffix(Constructor("fibs") & Constructor("at", Literal(0))),
-        fib_next: DSL()
+        fib_zero_one: SpecificationBuilder().suffix(Constructor("fibs") & Constructor("at", Literal(0))),
+        fib_next: SpecificationBuilder()
         .parameter("y", Int())
         .parameter("x", Int(), lambda vs: [vs["y"] - 1])
         .argument("f", Constructor("fibs") & Constructor("at", Var("x")))

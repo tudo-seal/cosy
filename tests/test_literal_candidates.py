@@ -1,7 +1,7 @@
 # test for candidate generation for assigning values to literal variables
 
 
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Synthesizer
 from cosy.types import Constructor, Group, Literal, Omega, Type, Var
 
@@ -21,7 +21,7 @@ def test_candidates() -> None:
             yield from [True, False]
 
     component_specifications = {
-        c: DSL()
+        c: SpecificationBuilder()
         .parameter("x", Bool())
         .parameter_constraint(lambda vs: vs["x"])  # x is True
         .parameter("y", Bool(), lambda _vs: [False])  # y is False
@@ -65,7 +65,7 @@ def test_multi_values1() -> None:
             yield from [0, 1, 2, 3]
 
     component_specifications = {
-        c: DSL()
+        c: SpecificationBuilder()
         .parameter("a", Int())  # a in [0, 1, 2, 3]
         .parameter("b", Int(), lambda vs: [vs["a"] - 1, vs["a"] + 1])  # b in [a-1, a+1]
         .suffix(Constructor("c", Var("a")))
@@ -92,7 +92,7 @@ def test_multi_values2() -> None:
             yield from [0, 1, 2, 3]
 
     component_specifications = {
-        c: DSL()
+        c: SpecificationBuilder()
         .parameter("a", Int())
         .parameter("b", Int(), lambda vs: [vs["a"] - 1, vs["a"] + 1])
         .suffix(Constructor("c", Var("a")))
@@ -125,7 +125,7 @@ def test_infinite_values() -> None:
     target = "c" @ Literal(3)
 
     component_specifications = {
-        c: DSL()
+        c: SpecificationBuilder()
         .parameter("a", Nat())  # a in [0, 1, 2, ...]
         .parameter("b", Nat(), lambda vs: [vs["a"] - 1])  # b in [a-1]
         .suffix(("c" @ Var("b")) ** ("c" @ Var("a"))),  # c(b) -> c(a)

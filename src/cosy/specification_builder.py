@@ -1,6 +1,6 @@
 # pylint: disable=invalid-name
 """
-This module provides a `DSL` class, which allows users to define specifications
+This module provides a `SpecificationBuilder` class, which allows users to define specifications
 in a declarative manner using a fluent interface.
 """
 
@@ -26,15 +26,15 @@ from cosy.types import (
 )
 
 
-class DSL:
+class SpecificationBuilder:
     """
-    A domain-specific language (DSL) to define component specifications.
+    A domain-specific language (SpecificationBuilder) to define component specifications.
 
     This class provides a interface for defining specifications in a declarative manner. It allows
     users to specify the name and group of each parameter, as well as filter.
 
     Examples:
-        DSL()
+        SpecificationBuilder()
             .Parameter("x", int)
             .Parameter("y", int, lambda vars: vars["x"] + 1)
             .Parameter("z", str)
@@ -50,7 +50,7 @@ class DSL:
 
     def __init__(self) -> None:
         """
-        Initialize the DSL object
+        Initialize the SpecificationBuilder object
         """
 
         self._result: Callable[[Specification], Specification] = lambda suffix: suffix
@@ -60,7 +60,7 @@ class DSL:
         name: str,
         group: Group,
         candidates: Callable[[dict[str, Any]], Sequence[Any]] | None = None,
-    ) -> DSL:
+    ) -> SpecificationBuilder:
         """
         Introduce a new parameter variable.
 
@@ -79,8 +79,8 @@ class DSL:
         :type group: Group
         :param candidates: Parameterized sequence of candidate values, that will be used to generate the literals.
         :type candidates: Callable[[dict[str, Any]], Sequence[Any]] | None
-        :return: The DSL object.
-        :rtype: DSL
+        :return: The SpecificationBuilder object.
+        :rtype: SpecificationBuilder
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:
@@ -89,7 +89,7 @@ class DSL:
         self._result = new_result
         return self
 
-    def argument(self, name: str, specification: Type) -> DSL:
+    def argument(self, name: str, specification: Type) -> SpecificationBuilder:
         """
         Introduce a new variable.
 
@@ -101,8 +101,8 @@ class DSL:
         :type name: str
         :param specification: The type of the variable.
         :type specification: Type
-        :return: The DSL object.
-        :rtype: DSL
+        :return: The SpecificationBuilder object.
+        :rtype: SpecificationBuilder
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:
@@ -111,7 +111,7 @@ class DSL:
         self._result = new_result
         return self
 
-    def parameter_constraint(self, constraint: Callable[[Mapping[str, Any]], bool]) -> DSL:
+    def parameter_constraint(self, constraint: Callable[[Mapping[str, Any]], bool]) -> SpecificationBuilder:
         """
         Constraint on the previously defined parameter variables.
 
@@ -119,8 +119,8 @@ class DSL:
             The values of variables are passed by a dictionary, where the keys are the names of the
             parameter variables and the values are the corresponding values.
         :type constraint: Callable[[Mapping[str, Any]], bool]
-        :return: The DSL object.
-        :rtype: DSL
+        :return: The SpecificationBuilder object.
+        :rtype: SpecificationBuilder
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:
@@ -129,7 +129,7 @@ class DSL:
         self._result = new_result
         return self
 
-    def constraint(self, constraint: Callable[[Mapping[str, Any]], bool]) -> DSL:
+    def constraint(self, constraint: Callable[[Mapping[str, Any]], bool]) -> SpecificationBuilder:
         """
         Constraint on the previously defined parameter variables and argument variables.
 
@@ -137,8 +137,8 @@ class DSL:
             The values of variables are passed by a dictionary, where the keys are the names of the
             variables and the values are the corresponding values.
         :type constraint: Callable[[Mapping[str, Any]], bool]
-        :return: The DSL object.
-        :rtype: DSL
+        :return: The SpecificationBuilder object.
+        :rtype: SpecificationBuilder
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:

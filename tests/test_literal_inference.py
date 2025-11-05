@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 import pytest
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
 from cosy.types import Arrow, Constructor, Group, Intersection, Literal, Var
@@ -42,9 +42,9 @@ def component_specifications():
             yield None  # default value, do not enumerate all boolean tuples
 
     return {
-        leaf_nat: DSL().parameter("x", Nat()).suffix(Constructor("a", Var("x"))),
-        leaf_bools: DSL().parameter("y", Bools()).suffix(Constructor("b", Var("y"))),
-        node: DSL()
+        leaf_nat: SpecificationBuilder().parameter("x", Nat()).suffix(Constructor("a", Var("x"))),
+        leaf_bools: SpecificationBuilder().parameter("y", Bools()).suffix(Constructor("b", Var("y"))),
+        node: SpecificationBuilder()
         .parameter("x", Nat())
         .parameter("y", Bools())
         .suffix(

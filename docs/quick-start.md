@@ -4,7 +4,7 @@ The toy example shows the computation of Fibonacci numbers by means of compositi
 
 ## 1. Define Component Specifications
 
-Using domain-specific language provided by the `DSL` class define a mapping of components to respective specifications.
+Using domain-specific language provided by the `SpecificationBuilder` class define a mapping of components to respective specifications.
 
 - The component `fib_zero` is specified by `Constructor("fib") & Constructor("at", Literal(0, "int"))`, which combines two properties.
   + `Constructor("fib")` means that `fib_zero` it is a Fibonacci number.
@@ -32,13 +32,13 @@ def fib_next(_z: int, _y: int, _x: int, f1 : int, f2: int) -> int:
     return f1 + f2
 
 component_specifications = {
-    fib_zero: DSL()
+    fib_zero: SpecificationBuilder()
           .suffix(Constructor("fib") & Constructor("at", Literal(0))),
 
-    fib_one: DSL()
+    fib_one: SpecificationBuilder()
           .suffix(Constructor("fib") & Constructor("at", Literal(1))),
 
-    fib_next: DSL()
+    fib_next: SpecificationBuilder()
               .parameter("z", "int")
               .parameter("y", "int", lambda vs: [vs["z"] - 1])
               .parameter("x", "int", lambda vs: [vs["z"] - 2])
