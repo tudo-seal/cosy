@@ -126,6 +126,11 @@ class Synthesizer(Generic[C]):
             elif isinstance(parameterized_type, Implication):
                 prefix.append(parameterized_type.predicate)
                 parameterized_type = parameterized_type.body
+            else:
+                msg = (
+                    f"Specification of combinator {combinator!s} is neither an Abstraction, an Implication, nor a Type."
+                )
+                raise TypeError(msg)
 
         for free_var in parameterized_type.free_vars:
             if free_var not in literal_variables:
