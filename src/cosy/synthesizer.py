@@ -94,7 +94,7 @@ class Synthesizer(Generic[C]):
             tys: deque[Type] = deque((ty,))
             while tys:
                 match tys.pop():
-                    case Arrow(src, tgt) if not tgt.is_omega:
+                    case Arrow(src, tgt) if tgt.organized:
                         yield (src, tgt)
                     case Intersection(sigma, tau):
                         tys.extend((sigma, tau))
@@ -301,7 +301,7 @@ class Synthesizer(Generic[C]):
         while stack:
             current_target, current_target_info = stack.pop()
             # if the target is omega, then the result is junk
-            if current_target.is_omega:
+            if not current_target.organized:
                 msg = f"Target type {current_target} is omega."
                 raise ValueError(msg)
 
