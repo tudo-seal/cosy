@@ -6,7 +6,7 @@ Demonstrates constraints in CoSy.
 import re
 
 from cosy import CoSy
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.types import Constructor, Group, Literal, Type, Var
 
 
@@ -64,10 +64,10 @@ def main():
             pass
 
     component_specifications = {
-        empty: DSL().suffix(Constructor("str")),
-        zero: DSL().argument("s", Constructor("str")).suffix(Constructor("str")),
-        one: DSL().argument("s", Constructor("str")).suffix(Constructor("str")),
-        fin: DSL()
+        empty: SpecificationBuilder().suffix(Constructor("str")),
+        zero: SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
+        one: SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
+        fin: SpecificationBuilder()
         .parameter("r", RegularExpression())
         .argument("s", Constructor("str"))
         # parameter constraint to ensure that s matches the regular expression r

@@ -2,7 +2,7 @@
 from collections.abc import Callable
 
 import pytest
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
 from cosy.types import DataGroup, Literal, Var
@@ -20,8 +20,8 @@ def branch(depth: int, _new_depth: int, left: str, right: str) -> str:
 def component_specifications():
     return {
         # recursive unproductive specification
-        leaf: DSL().suffix(Literal(0)),
-        branch: DSL()
+        leaf: SpecificationBuilder().suffix(Literal(0)),
+        branch: SpecificationBuilder()
         .parameter("depth", DataGroup("int", [0, 1, 2, 3]))
         .parameter("new_depth", DataGroup("int", [0, 1, 2, 3]), lambda vs: [vs["depth"] - 1])
         .argument("left", Var("new_depth"))

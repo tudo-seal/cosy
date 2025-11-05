@@ -1,7 +1,7 @@
 # test for missing iter implementation in a Group subclass
 
 import pytest
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Synthesizer
 from cosy.types import Constructor, Group
 
@@ -21,7 +21,7 @@ def test_infinite_enumeration() -> None:
             return True
 
     component_specifications = {
-        c: DSL().parameter("x", Contains()).suffix(Constructor("c")),
+        c: SpecificationBuilder().parameter("x", Contains()).suffix(Constructor("c")),
     }
 
     synthesizer = Synthesizer(component_specifications)

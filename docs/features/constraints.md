@@ -2,7 +2,7 @@
 There are certain aspects of specifications that are difficult to represent nominally.
 Such aspects range from simple relationships between numeric parameters to complex performance characteristics of solutions.
 
-The most general way to specify such aspects is via the `constraint` method provided by the `DSL`.
+The most general way to specify such aspects is via the `constraint` method provided by the `SpecificationBuilder`.
 
 In the following example, we construct binary sequences that match a given regular expression.
 
@@ -20,13 +20,13 @@ def one(s: str) -> str:
 ```
 with the following specifications: 
 ```
-empty: DSL().suffix(Constructor("str")),
+empty: SpecificationBuilder().suffix(Constructor("str")),
 
-zero: DSL()
+zero: SpecificationBuilder()
     .argument("s", Constructor("str"))
     .suffix(Constructor("str")),
 
-one: DSL()
+one: SpecificationBuilder()
     .argument("s", Constructor("str"))
     .suffix(Constructor("str")),
 ```
@@ -42,7 +42,7 @@ def fin(_b: bool, s: str) -> str:
 ```
 with specification: 
 ``` hl_lines="4"
-fin: DSL()
+fin: SpecificationBuilder()
     .parameter("r", "regular_expression")
     .argument("s", Constructor("str"))
     .constraint(lambda vs: re.fullmatch(vs["r"], vs["s"].interpret())) # (1)!
@@ -80,4 +80,4 @@ The above results in: `010`, `0110`, `01110`, `011110`, ...
 
 - In the above example, we are free to change the particular regular expression in the `query`.
 
-- The specialized `parameter_constraint` method provided by the `DSL` can speed up synthesis if the constraint *only* involves parameters (and not arguments).
+- The specialized `parameter_constraint` method provided by the `SpecificationBuilder` can speed up synthesis if the constraint *only* involves parameters (and not arguments).

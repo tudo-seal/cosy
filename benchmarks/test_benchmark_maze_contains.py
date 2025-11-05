@@ -1,7 +1,7 @@
 from collections.abc import Callable, Mapping
 
 import pytest
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Specification, Synthesizer
 from cosy.types import Constructor, Group, Literal, Type, Var
 
@@ -56,22 +56,22 @@ def component_specifications() -> (
     int2 = Int2()
 
     return {
-        up: DSL()
+        up: SpecificationBuilder()
         .parameter("b", int2)
         .parameter("a", int2, lambda vs: [(vs["b"][0], vs["b"][1] + 1)])
         .argument("pos", pos("a"))
         .suffix(pos("b")),
-        down: DSL()
+        down: SpecificationBuilder()
         .parameter("b", int2)
         .parameter("a", int2, lambda vs: [(vs["b"][0], vs["b"][1] - 1)])
         .argument("pos", pos("a"))
         .suffix(pos("b")),
-        left: DSL()
+        left: SpecificationBuilder()
         .parameter("b", int2)
         .parameter("a", int2, lambda vs: [(vs["b"][0] + 1, vs["b"][1])])
         .argument("pos", pos("a"))
         .suffix(pos("b")),
-        right: DSL()
+        right: SpecificationBuilder()
         .parameter("b", int2)
         .parameter("a", int2, lambda vs: [(vs["b"][0] - 1, vs["b"][1])])
         .argument("pos", pos("a"))
