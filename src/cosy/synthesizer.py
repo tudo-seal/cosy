@@ -226,7 +226,7 @@ class Synthesizer(Generic[C]):
 
         # intersect arguments of multi-arrows at same positions
         def intersect_args(arg_tuples: Iterable[tuple[Type, ...]]) -> list[Type]:
-            return [Type.intersect(arg_tuple) for arg_tuple in zip(*arg_tuples, strict=False)]
+            return [Type.intersect(arg_tuple) for arg_tuple in zip(*arg_tuples, strict=True)]
 
         intersected_args: Generator[list[Type]] = (intersect_args(m.args for m in ms) for ms in covers)
 
