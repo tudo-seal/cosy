@@ -28,14 +28,22 @@ class Type(ABC):
 
     @staticmethod
     def intersect(types: Sequence[Type]) -> Type:
-        if len(types) > 0:
-            rtypes = reversed(types)
-            result: Type = next(rtypes)
-            for ty in rtypes:
-                if ty.organized:
-                    result = Intersection(ty, result)
-            return result
-        return Omega()
+        result: Type = Omega()
+        for ty in reversed(types):
+            if not ty.organized:
+                continue
+            result = Intersection(ty, result) if result.organized else ty
+        return result
+
+    @staticmethod
+    def curry(sources: Sequence[Type], target: Type) -> Type:
+        if isinstance(target, Omega):
+            # if the target is omega, then the type is omega via subtyping
+            return target
+        result: Type = target
+        for src in reversed(sources):
+            result = Arrow(src, result)
+        return result
 
     def __pow__(self, other: Type) -> Type:
         return Arrow(self, other)
@@ -116,8 +124,6 @@ class Constructor(Type):
         return f"{self.name!s}({self.arg!s})"
 
     def subst(self, substitution: dict[str, Any]) -> Type:
-        if not any(var in substitution for var in self.free_vars):
-            return self
         return Constructor(self.name, self.arg.subst(substitution))
 
 
@@ -128,13 +134,11 @@ class Arrow(Type):
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
-    def __new__(cls, _source: Type, target: Type):
-        if isinstance(target, Omega):
-            # if the target is omega, then the type is omega via subtyping
-            return Omega()
-        return object.__new__(cls)
-
     def __post_init__(self) -> None:
+        if isinstance(self.target, Omega):
+            # if the target is omega, then the type is omega via subtyping
+            msg = "Arrow type with omega target should not be created. Use Type.curry for safe arrow creation."
+            raise TypeError(msg)
         super().__init__(
             organized={self}
             if len(self.target.organized) == 1
@@ -146,8 +150,6 @@ class Arrow(Type):
         return f"{self.source} -> {self.target}"
 
     def subst(self, substitution: dict[str, Any]) -> Type:
-        if not any(var in substitution for var in self.free_vars):
-            return self
         return Arrow(
             self.source.subst(substitution),
             self.target.subst(substitution),
@@ -161,28 +163,24 @@ class Intersection(Type):
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
-    def __new__(cls, left: Type, right: Type):
-        if isinstance(left, Omega):
-            return right
-        if isinstance(right, Omega):
-            return left
-
-        instance = object.__new__(cls)
-        object.__setattr__(instance, "left", left)
-        object.__setattr__(instance, "right", right)
-        object.__setattr__(instance, "organized", set.union(left.organized, right.organized))
-        object.__setattr__(instance, "free_vars", set.union(left.free_vars, right.free_vars))
-        return instance
-
-    def __init__(self, _left: Type, _right: Type):
-        pass
+    def __post_init__(self) -> None:
+        if isinstance(self.left, Omega):
+            # if the left is omega, then the type is right via subtyping
+            msg = "Intersection type with omega left should not be created. Use Type.intersect for safe intersection creation."
+            raise TypeError(msg)
+        if isinstance(self.right, Omega):
+            # if the right is omega, then the type is left via subtyping
+            msg = "Intersection type with omega right should not be created. Use Type.intersect for safe intersection creation."
+            raise TypeError(msg)
+        super().__init__(
+            organized=set.union(self.left.organized, self.right.organized),
+            free_vars=set.union(self.left.free_vars, self.right.free_vars),
+        )
 
     def __str__(self) -> str:
         return f"{self.left} & {self.right}"
 
     def subst(self, substitution: dict[str, Any]) -> Type:
-        if not any(var in substitution for var in self.free_vars):
-            return self
         return Intersection(
             self.left.subst(substitution),
             self.right.subst(substitution),
@@ -226,7 +224,8 @@ class Var(Type):
     def subst(self, substitution: dict[str, Any]) -> Type:
         if self.name in substitution:
             return Literal(substitution[self.name])
-        return self
+        msg = f"Variable {self.name} not found in substitution."
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True)

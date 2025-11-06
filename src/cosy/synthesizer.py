@@ -16,7 +16,6 @@ from collections.abc import (
     Sequence,
 )
 from dataclasses import dataclass
-from functools import reduce
 from typing import (
     Any,
     Generic,
@@ -225,11 +224,11 @@ class Synthesizer(Generic[C]):
         if len(covers) == 0:
             return []
 
-        # intersect corresponding arguments of multi-arrows in each cover
-        def intersect_args(args1: Iterable[Type], args2: Iterable[Type]) -> tuple[Type, ...]:
-            return tuple(Intersection(a, b) for a, b in zip(args1, args2, strict=False))
+        # intersect arguments of multi-arrows at same positions
+        def intersect_args(arg_tuples: Iterable[tuple[Type, ...]]) -> list[Type]:
+            return [Type.intersect(arg_tuple) for arg_tuple in zip(*arg_tuples, strict=False)]
 
-        intersected_args: Generator[list[Type]] = (list(reduce(intersect_args, (m.args for m in ms))) for ms in covers)
+        intersected_args: Generator[list[Type]] = (intersect_args(m.args for m in ms) for ms in covers)
 
         # consider only maximal argument vectors
         def compare_args(args1, args2) -> bool:
