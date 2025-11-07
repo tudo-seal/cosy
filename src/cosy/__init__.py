@@ -2,7 +2,6 @@ from collections.abc import Callable, Hashable, Iterable, Sequence
 from itertools import groupby
 from typing import Any, Generic, TypeVar
 
-from cosy.solution_space import SolutionSpace
 from cosy.specification_builder import SpecificationBuilder
 from cosy.subtypes import Subtypes, Taxonomy
 from cosy.synthesizer import Specification, Synthesizer
@@ -15,7 +14,6 @@ __all__ = [
     "Intersection",
     "Literal",
     "Omega",
-    "SolutionSpace",
     "SpecificationBuilder",
     "Subtypes",
     "Synthesizer",
@@ -36,10 +34,14 @@ class CoSy(Generic[T]):
         named_components_with_specifications: Sequence[tuple[T, Callable, Specification]],
         taxonomy: Taxonomy | None = None,
     ) -> None:
-        if len(list(groupby(named_components_with_specifications, key=lambda x: x[0]))) != len(
-            named_components_with_specifications
-        ):
-            msg = "Duplicate names: component's names should be unique"
+        duplicate_component_names = [key for key, group in groupby(named_components_with_specifications, key=lambda x: x[0]) if len(list(group)) > 1]
+        if len(duplicate_component_names) != 0:
+            msg = f"Component's names should be unique, but the following names are duplicated: {duplicate_component_names}"
+            raise ValueError(msg)
+
+        non_callable_interpretations_by_component_name = [name for name,interpretation,_ in named_components_with_specifications if not callable(interpretation)]
+        if len(non_callable_interpretations_by_component_name) != 0:
+            msg = f"Component's interpretations should be callable, but interpretations of components with the following names are not: {non_callable_interpretations_by_component_name}"
             raise ValueError(msg)
 
         self.named_components_with_specifications = named_components_with_specifications
@@ -65,9 +67,9 @@ class CoSy(Generic[T]):
         if not isinstance(query, Type):
             msg = "Query must be of type Type"
             raise TypeError(msg)
-        _solution_space = self._synthesizer.construct_solution_space(query).prune()
+        solution_space = self._synthesizer.construct_solution_space(query).prune()
 
-        trees = _solution_space.enumerate_trees(
+        trees = solution_space.enumerate_trees(
             query, max_count=max_count, interpretation=self.component_interpretations
         )
         for tree in trees:
