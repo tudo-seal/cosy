@@ -34,12 +34,18 @@ class CoSy(Generic[T]):
         named_components_with_specifications: Sequence[tuple[T, Callable, Specification]],
         taxonomy: Taxonomy | None = None,
     ) -> None:
-        duplicate_component_names = [key for key, group in groupby(named_components_with_specifications, key=lambda x: x[0]) if len(list(group)) > 1]
+        duplicate_component_names = [
+            key
+            for key, group in groupby(named_components_with_specifications, key=lambda x: x[0])
+            if len(list(group)) > 1
+        ]
         if len(duplicate_component_names) != 0:
             msg = f"Component's names should be unique, but the following names are duplicated: {duplicate_component_names}"
             raise ValueError(msg)
 
-        non_callable_interpretations_by_component_name = [name for name,interpretation,_ in named_components_with_specifications if not callable(interpretation)]
+        non_callable_interpretations_by_component_name = [
+            name for name, interpretation, _ in named_components_with_specifications if not callable(interpretation)
+        ]
         if len(non_callable_interpretations_by_component_name) != 0:
             msg = f"Component's interpretations should be callable, but interpretations of components with the following names are not: {non_callable_interpretations_by_component_name}"
             raise ValueError(msg)
