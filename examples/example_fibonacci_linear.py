@@ -52,18 +52,30 @@ def main():
         def __iter__(self):
             yield from frozenset(range(self._bound))
 
-    component_specifications = {
-        fst: SpecificationBuilder()
-        .parameter("x", Int())
-        .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
-        .suffix(Constructor("fib") & Constructor("at", Var("x"))),
-        fib_zero_one: SpecificationBuilder().suffix(Constructor("fibs") & Constructor("at", Literal(0))),
-        fib_next: SpecificationBuilder()
-        .parameter("y", Int())
-        .parameter("x", Int(), lambda vs: [vs["y"] - 1])
-        .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
-        .suffix(Constructor("fibs") & Constructor("at", Var("y"))),
-    }
+    component_specifications = [
+        (  #
+            "fst",
+            fst,
+            SpecificationBuilder()
+            .parameter("x", Int())
+            .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
+            .suffix(Constructor("fib") & Constructor("at", Var("x"))),
+        ),
+        (  #
+            "fib_zero_one",
+            fib_zero_one,
+            SpecificationBuilder().suffix(Constructor("fibs") & Constructor("at", Literal(0))),
+        ),
+        (  #
+            "fib_next",
+            fib_next,
+            SpecificationBuilder()
+            .parameter("y", Int())
+            .parameter("x", Int(), lambda vs: [vs["y"] - 1])
+            .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
+            .suffix(Constructor("fibs") & Constructor("at", Var("y"))),
+        ),
+    ]
 
     # CoSy instance with the component specifications and parameter space
     cosy = CoSy(component_specifications)
