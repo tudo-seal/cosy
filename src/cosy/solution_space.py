@@ -203,8 +203,12 @@ class SolutionSpace(Generic[NT, T, G]):
         ) -> Iterable[tuple[Tree[T] | None, ...]]:
             """Enumerate all valid parameters for the rule."""
             for parameters in self._enumerate_tree_vectors(named_non_terminals, existing_terms, nt_term):
-                substitution = specific_substitution(parameters)
-                if all(predicate(substitution) for predicate in rule.predicates):
+                if rule.predicates:
+                    # compute the specific substitution only if there are predicates
+                    substitution = specific_substitution(parameters)
+                    if all(predicate(substitution) for predicate in rule.predicates):
+                        yield parameters
+                else:
                     yield parameters
 
         for parameters in valid_parameters(nt_old_term):
