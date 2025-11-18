@@ -20,6 +20,7 @@ concurrency:
 env:
   PYTHONUNBUFFERED: "1"
   FORCE_COLOR: "1"
+  BRANCH_NAME: ${{ github.base_ref || github.ref_name }}
 
 jobs:
   test-lint-type-coverage:
