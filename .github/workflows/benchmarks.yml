@@ -80,7 +80,7 @@ jobs:
         alert-threshold: '300%'
         comment-on-alert: true
         fail-on-alert: true
-        comment-always: true
+        comment-always: ${{ !env.PUSH_TO_BENCHMARKS }}
         summary-always: true
         gh-repository: 'github.com/tudo-seal/cosy-benchmarks'
         benchmark-data-dir-path: '${{ env.BRANCH_NAME }}/benchmarks'
