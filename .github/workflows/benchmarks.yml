@@ -56,8 +56,6 @@ jobs:
         token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
 
-    - run: cd cosy-benchmarks
-
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
       with:
