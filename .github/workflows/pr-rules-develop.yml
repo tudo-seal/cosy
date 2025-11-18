@@ -6,6 +6,9 @@ on:
     branches:
       - develop
 
+env:
+  PR_NUMBER: ${{ github.event.number }}
+
 jobs:
   pr-rules-main:
     runs-on: ubuntu-latest
@@ -20,12 +23,12 @@ jobs:
           private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
 
       - name: Close Pull Request and Comment if Violating
-        uses: superbrothers/close-pull-request@v3
         if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
-        with:
-          comment: |
-            :warning: You can only merge to develop from a feature or a bugfix branch. :warning:
-          github_token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+        run: |
+          gh pr comment ${{ env.PR_NUMBER }} --body ":warning: You can only merge to develop from a feature or a bugfix branch. :warning:"
+          gh pr close ${{ env.PR_NUMBER }}
+        env:
+          GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Fail Job if Violating
         if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
