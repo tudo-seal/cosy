@@ -1,0 +1,49 @@
+name: Pre-release CoSy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+
+concurrency:
+  group: pre-release
+  cancel-in-progress: true
+
+jobs:
+  pre-release-checks:
+    if: github.ref == 'refs/heads/develop'
+    uses: ./.github/workflows/checks.yml
+
+  release-pypi:
+    if: github.ref == 'refs/heads/develop'
+    needs: [pre-release-checks]
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        # Full history for timestamps
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Hatch
+      uses: pypa/hatch@install
+
+    - name: Check for Dev
+      run: |
+        hatch_version = "$(hatch version)"
+        if [[ ! $hatch_version =~ "dev" ]]; then
+           exit 1
+        fi
+
+    - name: Build Package
+      run: hatch build
+
+    # Uses OpenID Connect
+    - name: Publish Package
+      uses: pypa/gh-action-pypi-publish@release/v1
