@@ -1,13 +1,14 @@
 name: Perform Benchmarks
 
-on: push
-   # branches:
-     # - main
-     # - develop
-  #pull_request:
-   # branches:
-   #   - main
-    #  - develop
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
 
 
 concurrency:
@@ -30,6 +31,9 @@ jobs:
       with:
         app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID}}
         private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
+        repositories: |
+          cosy
+          cosy-benchmarks
 
     - uses: actions/checkout@v4
       with:
@@ -56,6 +60,15 @@ jobs:
       run: hatch test benchmarks --benchmark-json benchmarks.json
       working-directory: 'cosy-nested'
 
+    - name: Config Git
+      run: |
+        git config user.name "tudo-seal-workflows[bot]"
+        git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
+
+    - name: Determine Push Or Not
+      # if: github.event_name != 'pull_request'
+      run: echo "PUSH_TO_BENCHMARKS=true" >> $GITHUB_ENV
+
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
       with:
@@ -63,22 +76,10 @@ jobs:
         tool: 'pytest'
         output-file-path: cosy-nested/benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
-        auto-push: true
+        auto-push: ${{ env.PUSH_TO_BENCHMARKS }}
         alert-threshold: '300%'
         comment-on-alert: true
         fail-on-alert: true
         comment-always: true
         gh-repository: 'github.com/tudo-seal/cosy-benchmarks'
         benchmark-data-dir-path: '${{ env.BRANCH_NAME }}/benchmarks'
-
-    - name: Push Benchmark Results
-      # if: github.event_name != 'pull_request'
-      run: |
-        git config user.name "tudo-seal-workflows[bot]"
-        git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
-        git remote show origin
-        git log -1
-        git commit --amend --reset-author --no-edit
-        git push 'https://tudo-seal-workflows[bot]:${{ steps.tudo-seal-workflow-token.outputs.token }}@github.com/tudo-seal/cosy-benchmarks.git' gh-pages:gh-pages
-      env:
-        GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
