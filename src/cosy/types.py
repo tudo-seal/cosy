@@ -136,8 +136,8 @@ class Arrow(Type):
 
     def __post_init__(self) -> None:
         if isinstance(self.target, Omega):
-            # if the target is omega, then the type is omega via subtyping
-            msg = "Arrow type with omega target should not be created. Use Type.curry for safe arrow creation."
+            # if the target is omega, then via subtyping the type is omega and not an Arrow type
+            msg = "Arrow type creation with omega target is unsafe. Use Type.curry for safe arrow creation which respects subtyping."
             raise TypeError(msg)
         super().__init__(
             organized={self}
@@ -165,12 +165,12 @@ class Intersection(Type):
 
     def __post_init__(self) -> None:
         if isinstance(self.left, Omega):
-            # if the left is omega, then the type is right via subtyping
-            msg = "Intersection type with omega left should not be created. Use Type.intersect for safe intersection creation."
+            # if the left is omega, then via subtyping the type is right and not necessarily an Intersection type
+            msg = "Intersection type creation with omega left is unsafe. Use Type.intersect for safe intersection creation which respects subtyping."
             raise TypeError(msg)
         if isinstance(self.right, Omega):
-            # if the right is omega, then the type is left via subtyping
-            msg = "Intersection type with omega right should not be created. Use Type.intersect for safe intersection creation."
+            # if the right is omega, then via subtyping the type is left and not necessarily an Intersection type
+            msg = "Intersection type creation with omega right is unsafe. Use Type.intersect for safe intersection creation which respects subtyping."
             raise TypeError(msg)
         super().__init__(
             organized=set.union(self.left.organized, self.right.organized),
