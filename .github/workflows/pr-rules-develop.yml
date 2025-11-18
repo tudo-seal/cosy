@@ -29,7 +29,7 @@ jobs:
           token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Close Pull Request and Comment if Violating
-        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/') && !contains( github.head_ref, 'main')}}
         run: |
           gh pr comment ${{ env.PR_NUMBER }} --body ":warning: You can only merge to develop from a feature or a bugfix branch. :warning:"
           gh pr close ${{ env.PR_NUMBER }}
@@ -37,12 +37,12 @@ jobs:
           GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Fail Job if Violating
-        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/') && !contains( github.head_ref, 'main')}}
         run: |
           echo "Reason: You can only merge to develop from a feature or a bugfix branch."
           exit 1
 
       - name: Succeed Job if not Violating
-        if: ${{ contains( github.head_ref, 'feature/') || contains( github.head_ref, 'bugfix/') || contains( github.head_ref, 'dependabot/github_actions/')}}
+        if: ${{ contains( github.head_ref, 'feature/') || contains( github.head_ref, 'bugfix/') || contains( github.head_ref, 'dependabot/github_actions/') && !contains( github.head_ref, 'main')}}
         run: |
           exit 0
