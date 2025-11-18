@@ -63,7 +63,7 @@ jobs:
       with:
         name: Python Benchmark with pytest-benchmark
         tool: 'pytest'
-        output-file-path: benchmarks.json
+        output-file-path: ../benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         auto-push: false
         alert-threshold: '300%'
