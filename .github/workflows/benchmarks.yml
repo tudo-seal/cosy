@@ -48,9 +48,6 @@ jobs:
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
 
-    - name: XDTesting Print Directory Structure
-      uses: FiorelaCiroku/XDTesting-Print-Directory-Structure@v1.0.2
-
     - uses: actions/checkout@v4
       with:
         repository: tudo-seal/cosy-benchmarks
@@ -63,7 +60,7 @@ jobs:
       with:
         name: Python Benchmark with pytest-benchmark
         tool: 'pytest'
-        output-file-path: ../benchmarks.json
+        output-file-path: benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         auto-push: false
         alert-threshold: '300%'
