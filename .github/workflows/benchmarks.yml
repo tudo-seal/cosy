@@ -36,6 +36,7 @@ jobs:
         # Full history for timestamps
         fetch-depth: 0
         token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+        path: 'cosy'
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -47,12 +48,13 @@ jobs:
 
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
+      working-directory: ./cosy
 
     - uses: actions/checkout@v4
       with:
         repository: tudo-seal/cosy-benchmarks
+        token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
-        path: 'cosy-benchmarks'
 
     - run: cd cosy-benchmarks
 
@@ -61,7 +63,7 @@ jobs:
       with:
         name: Python Benchmark with pytest-benchmark
         tool: 'pytest'
-        output-file-path: ../benchmarks.json
+        output-file-path: ./cosy/benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         auto-push: false
         alert-threshold: '300%'
