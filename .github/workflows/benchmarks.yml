@@ -63,7 +63,7 @@ jobs:
         tool: 'pytest'
         output-file-path: cosy-nested/benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
-        auto-push: false
+        auto-push: true
         alert-threshold: '300%'
         comment-on-alert: true
         fail-on-alert: true
