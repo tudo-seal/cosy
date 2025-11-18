@@ -1,0 +1,71 @@
+name: "Nightly Build"
+on:
+  schedule:
+  - cron: "0 0 * * *"
+  workflow_dispatch:
+
+env:
+  nightly_tag: "nightly"
+
+jobs:
+  build-nightly:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history for timestamps
+          fetch-depth: 0
+
+      - name: Date and Hash
+        run: |
+          echo "DATESTAMP=$(date +'%d.%m.%Y')" >> $GITHUB_ENV
+          echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Display Version
+        run: echo "NIGHTLY_VERSION=$(hatch version)" >> $GITHUB_ENV
+
+      - name: Build Package
+        run: hatch build
+
+      - name: Convert nightly to draft
+        run: gh release edit --draft "${{ env.nightly_tag }}" || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Move nightly tag to current HEAD
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -d ${{ env.nightly_tag }} || true
+          git push origin :refs/tags/${{ env.nightly_tag }} || true
+          git tag ${{ env.nightly_tag }}
+          git push origin ${{ env.nightly_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish nightly on GitHub
+        run: |
+          while IFS= read -r line; do
+              gh release delete-asset "${{ env.nightly_tag }}" "$line"
+          done <<< "$(gh release view "${{ env.nightly_tag }}" --json assets --jq .assets[].name)"
+          gh release edit \
+            --verify-tag \
+            --title "Nightly@${{ env.NIGHTLY_VERSION }}" \
+            --notes "Nightly build of ''develop'', currently at ${{ env.COMMIT_HASH }}, built on ${{ env.DATESTAMP }}." \
+            --draft=false \
+            "${{ env.nightly_tag }}"
+          gh release upload --clobber "${{ env.nightly_tag }}" $ARTIFACTS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARTIFACTS: >
+            dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.tar.gz
+            dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}-py3-none-any.whl
