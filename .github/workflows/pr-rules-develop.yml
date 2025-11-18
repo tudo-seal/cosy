@@ -22,6 +22,12 @@ jobs:
           app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID}}
           private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
 
+      - uses: actions/checkout@v4
+        with:
+          # Full history for timestamps
+          fetch-depth: 0
+          token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+
       - name: Close Pull Request and Comment if Violating
         if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
         run: |
