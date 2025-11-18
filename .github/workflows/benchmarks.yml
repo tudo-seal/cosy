@@ -21,6 +21,7 @@ env:
   FORCE_COLOR: "1"
   BRANCH_NAME: ${{ github.base_ref || github.ref_name }}
   PUSH_TO_BENCHMARKS: false
+  COMMENT_ALWAYS: true
 
 jobs:
   benchmark-then-upload:
@@ -67,7 +68,9 @@ jobs:
 
     - name: Determine Push Or Not
       if: github.event_name != 'pull_request'
-      run: echo "PUSH_TO_BENCHMARKS=true" >> $GITHUB_ENV
+      run: |
+        echo "PUSH_TO_BENCHMARKS=true" >> $GITHUB_ENV
+        echo "COMMENT_ALWAYS=false" >> $GITHUB_ENV
 
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
@@ -80,7 +83,7 @@ jobs:
         alert-threshold: '300%'
         comment-on-alert: true
         fail-on-alert: true
-        comment-always: true
+        comment-always: ${{ env.COMMENT_ALWAYS }}
         summary-always: true
         gh-repository: 'github.com/tudo-seal/cosy-benchmarks'
         benchmark-data-dir-path: '${{ env.BRANCH_NAME }}/benchmarks'
