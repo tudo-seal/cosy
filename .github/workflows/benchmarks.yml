@@ -66,7 +66,7 @@ jobs:
         git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
 
     - name: Determine Push Or Not
-      # if: github.event_name != 'pull_request'
+      if: github.event_name != 'pull_request'
       run: echo "PUSH_TO_BENCHMARKS=true" >> $GITHUB_ENV
 
     - name: Store Benchmark Result
