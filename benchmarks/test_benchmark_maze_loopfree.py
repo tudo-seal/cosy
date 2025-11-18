@@ -2,10 +2,10 @@ from collections.abc import Callable, Iterable, Mapping
 from itertools import product
 
 import pytest
-from cosy.dsl import DSL
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Specification, Synthesizer
 from cosy.tree import Tree
-from cosy.types import Constructor, Literal, Type, Var
+from cosy.types import Constructor, DataGroup, Literal, Type, Var
 
 
 def is_free(pos: tuple[int, int]) -> bool:
@@ -50,45 +50,42 @@ def component_specifications() -> (
         yield (0, 0)
         return
 
+    int2 = DataGroup("int2", frozenset(filter(is_free, product(range(SIZE), range(SIZE)))))
+
     return {
-        up: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0], vs["b"][1] + 1)])
+        up: SpecificationBuilder()
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0], vs["b"][1] + 1)])
         .argument("pos", pos("a"))
         .constraint(lambda vs: vs["b"] not in getpath(vs["pos"]))
         .suffix(pos("b")),
-        down: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0], vs["b"][1] - 1)])
+        down: SpecificationBuilder()
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0], vs["b"][1] - 1)])
         .argument("pos", pos("a"))
         .constraint(lambda vs: vs["b"] not in getpath(vs["pos"]))
         .suffix(pos("b")),
-        left: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0] + 1, vs["b"][1])])
+        left: SpecificationBuilder()
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0] + 1, vs["b"][1])])
         .argument("pos", pos("a"))
         .constraint(lambda vs: vs["b"] not in getpath(vs["pos"]))
         .suffix(pos("b")),
-        right: DSL()
-        .parameter("b", "int2")
-        .parameter("a", "int2", lambda vs: [(vs["b"][0] - 1, vs["b"][1])])
+        right: SpecificationBuilder()
+        .parameter("b", int2)
+        .parameter("a", int2, lambda vs: [(vs["b"][0] - 1, vs["b"][1])])
         .argument("pos", pos("a"))
         .constraint(lambda vs: vs["b"] not in getpath(vs["pos"]))
         .suffix(pos("b")),
-        "START": "pos" @ (Literal((0, 0), "int2")),
+        "START": "pos" @ (Literal((0, 0))),
     }
 
 
 SIZE = 50
 
 
-@pytest.fixture
-def literals():
-    return {"int2": frozenset(filter(is_free, product(range(SIZE), range(SIZE))))}
+def test_benchmark_maze(component_specifications, benchmark):
+    fin = "pos" @ (Literal((SIZE - 1, SIZE - 1)))
 
-
-def test_benchmark_maze(component_specifications, literals, benchmark):
-    fin = "pos" @ (Literal((SIZE - 1, SIZE - 1), "int2"))
-
-    synthesizer = Synthesizer(component_specifications, literals)
+    synthesizer = Synthesizer(component_specifications)
     benchmark(synthesizer.construct_solution_space, fin)

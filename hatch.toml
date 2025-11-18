@@ -7,6 +7,8 @@ dependencies = [
   "mkdocs-gen-files",
   "mkdocs-literate-nav",
   "mkdocs-git-revision-date-localized-plugin",
+  "mkdocs-bibtex",
+  "pypandoc_binary",
   "linkchecker",
   "pygments",
   "cosy_lexers @ git+https://github.com/tudo-seal/cosy-lexers"

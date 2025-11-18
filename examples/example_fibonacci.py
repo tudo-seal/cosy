@@ -4,8 +4,8 @@ Overall description of this example goes here.
 """
 
 from cosy import CoSy
-from cosy.dsl import DSL
-from cosy.types import Constructor, Literal, Type, Var
+from cosy.specification_builder import SpecificationBuilder
+from cosy.types import Constructor, DataGroup, Literal, Type, Var
 
 
 def fib_zero() -> int:
@@ -42,23 +42,35 @@ def fib_next(_z: int, _y: int, _x: int, f1: int, f2: int) -> int:
 
 
 def main():
-    component_specifications = {
-        fib_zero: DSL().suffix(Constructor("fib") & Constructor("at", Literal(0, "int"))),
-        fib_one: DSL().suffix(Constructor("fib") & Constructor("at", Literal(1, "int"))),
-        fib_next: DSL()
-        .parameter("z", "int")
-        .parameter("y", "int", lambda vs: [vs["z"] - 1])
-        .parameter("x", "int", lambda vs: [vs["z"] - 2])
-        .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
-        .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
-        .suffix(Constructor("fib") & Constructor("at", Var("z"))),
-    }
-
     # range of relevant indices for Fibonacci numbers
-    parameter_space = {"int": list(range(20))}
+    bound = 20
+
+    named_components_with_specifications = [
+        (  #
+            "fib_zero",
+            fib_zero,
+            SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(0))),
+        ),
+        (  #
+            "fib_one",
+            fib_one,
+            SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(1))),
+        ),
+        (  #
+            "fib_next",
+            fib_next,
+            SpecificationBuilder()
+            .parameter("z", DataGroup("int", range(bound)))
+            .parameter("y", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 1])
+            .parameter("x", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 2])
+            .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
+            .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
+            .suffix(Constructor("fib") & Constructor("at", Var("z"))),
+        ),
+    ]
 
     # CoSy instance with the component specifications and parameter space
-    cosy = CoSy(component_specifications, parameter_space)
+    cosy = CoSy(named_components_with_specifications)
 
     # query for Fibonacci numbers at relevant indices
     query: Type = Constructor("fib")
@@ -69,7 +81,7 @@ def main():
 
     for i in range(20):
         # query for Fibonacci numbers at index i
-        query = Constructor("fib") & Constructor("at", Literal(i, "int"))
+        query = Constructor("fib") & Constructor("at", Literal(i))
 
         # solve the query and print the only solution
         print(i, next(iter(cosy.solve(query))))

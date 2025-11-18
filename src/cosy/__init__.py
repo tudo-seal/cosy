@@ -1,45 +1,66 @@
-from collections.abc import Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Sequence
+from itertools import groupby
 from typing import Any, Generic, TypeVar
 
-from cosy.dsl import DSL
-from cosy.solution_space import SolutionSpace
+from cosy.specification_builder import SpecificationBuilder
 from cosy.subtypes import Subtypes, Taxonomy
-from cosy.synthesizer import ParameterSpace, Specification, Synthesizer
+from cosy.synthesizer import Specification, Synthesizer
 from cosy.types import Arrow, Constructor, Intersection, Literal, Omega, Type, Var
 
 __all__ = [
-    "DSL",
-    "Literal",
-    "Var",
-    "Subtypes",
-    "Type",
-    "Omega",
-    "Constructor",
     "Arrow",
+    "Constructor",
+    "CoSy",
     "Intersection",
+    "Literal",
+    "Omega",
+    "SpecificationBuilder",
+    "Subtypes",
     "Synthesizer",
-    "SolutionSpace",
+    "Type",
+    "Var",
 ]
 
 T = TypeVar("T", bound=Hashable)
 
 
 class CoSy(Generic[T]):
-    component_specifications: Mapping[T, Specification]
-    parameter_space: ParameterSpace | None = None
+    named_components_with_specifications: Sequence[tuple[T, Callable, Specification]]
     taxonomy: Taxonomy | None = None
     _synthesizer: Synthesizer
 
     def __init__(
         self,
-        component_specifications: Mapping[T, Specification],
-        parameter_space: ParameterSpace | None = None,
+        named_components_with_specifications: Sequence[tuple[T, Callable, Specification]],
         taxonomy: Taxonomy | None = None,
     ) -> None:
-        self.component_specifications = component_specifications
-        self.parameter_space = parameter_space
+        duplicate_component_names = [
+            key
+            for key, group in groupby(named_components_with_specifications, key=lambda x: x[0])
+            if len(list(group)) > 1
+        ]
+        if len(duplicate_component_names) != 0:
+            msg = f"Component's names should be unique, but the following names are duplicated: {duplicate_component_names}"
+            raise ValueError(msg)
+
+        non_callable_interpretations_by_component_name = [
+            name for name, interpretation, _ in named_components_with_specifications if not callable(interpretation)
+        ]
+        if len(non_callable_interpretations_by_component_name) != 0:
+            msg = f"Component's interpretations should be callable, but interpretations of components with the following names are not: {non_callable_interpretations_by_component_name}"
+            raise ValueError(msg)
+
+        self.named_components_with_specifications = named_components_with_specifications
         self.taxonomy = taxonomy if taxonomy is not None else {}
-        self._synthesizer = Synthesizer(component_specifications, parameter_space, self.taxonomy)
+
+        self.component_specifications = {
+            name: specification for name, _, specification in self.named_components_with_specifications
+        }
+        self.component_interpretations = {
+            name: interpretation for name, interpretation, _ in self.named_components_with_specifications
+        }
+
+        self._synthesizer = Synthesizer(self.component_specifications, self.taxonomy)
 
     def solve(self, query: Type, max_count: int = 100) -> Iterable[Any]:
         """
@@ -54,6 +75,8 @@ class CoSy(Generic[T]):
             raise TypeError(msg)
         solution_space = self._synthesizer.construct_solution_space(query).prune()
 
-        trees = solution_space.enumerate_trees(query, max_count=max_count)
+        trees = solution_space.enumerate_trees(
+            query, max_count=max_count, interpretation=self.component_interpretations
+        )
         for tree in trees:
-            yield tree.interpret()
+            yield tree.interpret(interpretation=self.component_interpretations)

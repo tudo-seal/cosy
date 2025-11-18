@@ -1,16 +1,16 @@
-name: 'Check PR Rules for Main'
+name: 'Check PR Rules for Develop'
 
 on:
   pull_request_target:
     types: [ opened, reopened ]
     branches:
-      - main
+      - develop
 
 env:
   PR_NUMBER: ${{ github.event.number }}
 
 jobs:
-  pr-rules-main:
+  pr-rules-develop:
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -29,20 +29,20 @@ jobs:
           token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Close Pull Request and Comment if Violating
-        if: ${{ !contains( github.head_ref, 'release/') && !contains( github.head_ref, 'hotfix/')}}
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/') && !contains( github.head_ref, 'main')}}
         run: |
-          gh pr comment ${{ env.PR_NUMBER }} --body ":warning: You can only merge to main from a release or a hotfix branch. :warning:"
+          gh pr comment ${{ env.PR_NUMBER }} --body ":warning: You can only merge to develop from a feature or a bugfix branch. :warning:"
           gh pr close ${{ env.PR_NUMBER }}
         env:
           GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Fail Job if Violating
-        if: ${{ !contains( github.head_ref, 'release/') && !contains( github.head_ref, 'hotfix/')}}
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/') && !contains( github.head_ref, 'main')}}
         run: |
-          echo "Reason: You can only merge to main from a release or a hotfix branch."
+          echo "Reason: You can only merge to develop from a feature or a bugfix branch."
           exit 1
 
       - name: Succeed Job if not Violating
-        if: ${{ contains( github.head_ref, 'release/') || contains( github.head_ref, 'hotfix/')}}
+        if: ${{ contains( github.head_ref, 'feature/') || contains( github.head_ref, 'bugfix/') || contains( github.head_ref, 'dependabot/github_actions/') && !contains( github.head_ref, 'main')}}
         run: |
           exit 0

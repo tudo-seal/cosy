@@ -9,11 +9,12 @@ from collections.abc import Hashable, Mapping
 from itertools import chain
 from typing import TypeVar
 
-from cosy.synthesizer import ParameterSpace, Specification, Taxonomy
+from cosy.synthesizer import Specification, Taxonomy
 from cosy.types import (
     Abstraction,
     Arrow,
     Constructor,
+    Group,
     Implication,
     Intersection,
     LiteralParameter,
@@ -62,7 +63,6 @@ class Inspector:
     def inspect(
         self,
         component_specifications: Mapping[C, Specification],
-        parameter_space: ParameterSpace | None = None,
         taxonomy: Taxonomy | None = None,
     ):
         """
@@ -80,19 +80,16 @@ class Inspector:
         - a concept in the taxonomy is not used in any component
         """
 
-        if parameter_space is None:
-            parameter_space = {}
-
         if taxonomy is None:
             taxonomy = {}
 
-        all_groups: set[tuple[str, str | Type]] = set()
+        all_groups: set[tuple[str, Group | Type]] = set()
         all_constructors: list[set[str]] = []
 
         for specification in component_specifications.values():
             prefix: list[LiteralParameter | TermParameter] = []
             # mapping from variable names to groups
-            groups: dict[str, str | Type] = {}
+            groups: dict[str, Group | Type] = {}
             # set of parameter names occurring in bodies
             parameter_names: set[str] = set()
             parameterized_type = specification
@@ -118,10 +115,6 @@ class Inspector:
                                     g,
                                 )
                         all_groups.add((param.name, param.group))
-                    if isinstance(param, LiteralParameter) and param.group not in parameter_space:
-                        # check if group is defined in the parameter space
-                        msg = f"Group {param.group} is not defined in the parameter space"
-                        raise ValueError(msg)
                     if isinstance(param, TermParameter):
                         parameter_names.update(param.group.free_vars)
                         constructors.update(Inspector._constructors(param.group))
@@ -142,13 +135,6 @@ class Inspector:
             for var, group in groups.items():
                 if isinstance(group, str) and var not in parameter_names:
                     self._logger.info("Variable %s is abstracted via a parameter but not used", var)
-
-        all_group_names = {g for n, g in all_groups if isinstance(g, str)}
-
-        # check if every group is used
-        for group in parameter_space:
-            if group not in all_group_names:
-                self._logger.info("Group %s is not used in any component", group)
 
         # check is some constructor is used only in one component
         for constructors in all_constructors:

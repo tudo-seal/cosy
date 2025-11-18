@@ -143,6 +143,7 @@ class SolutionSpace(Generic[NT, T, G]):
         self,
         rule: RHSRule[NT, T, G],
         existing_terms: Mapping[NT, set[Tree[T]]],
+        interpretation: dict[T, Any] | None = None,
         max_count: int | None = None,
         nt_old_term: tuple[NT, Tree[T]] | None = None,
     ) -> set[Tree[T]]:
@@ -190,11 +191,11 @@ class SolutionSpace(Generic[NT, T, G]):
                 tuple(interleave(parameters, literal_arguments, arguments)),
             )
 
-        def specific_substitution(parameters):
+        def specific_substitution(parameters: Sequence[Tree[T] | None]):
             return {
-                a.name: p
+                a.name: p if interpretation is None else p.interpret(interpretation)
                 for p, a in zip(parameters, rule.arguments, strict=True)
-                if isinstance(a, NonTerminalArgument) and a.name is not None
+                if isinstance(a, NonTerminalArgument) and a.name is not None and p is not None
             } | rule.literal_substitution
 
         def valid_parameters(
@@ -202,8 +203,12 @@ class SolutionSpace(Generic[NT, T, G]):
         ) -> Iterable[tuple[Tree[T] | None, ...]]:
             """Enumerate all valid parameters for the rule."""
             for parameters in self._enumerate_tree_vectors(named_non_terminals, existing_terms, nt_term):
-                substitution = specific_substitution(parameters)
-                if all(predicate(substitution) for predicate in rule.predicates):
+                if rule.predicates:
+                    # compute the specific substitution only if there are predicates
+                    substitution = specific_substitution(parameters)
+                    if all(predicate(substitution) for predicate in rule.predicates):
+                        yield parameters
+                else:
                     yield parameters
 
         for parameters in valid_parameters(nt_old_term):
@@ -227,6 +232,7 @@ class SolutionSpace(Generic[NT, T, G]):
         start: NT,
         max_count: int | None = None,
         max_bucket_size: int | None = None,
+        interpretation: dict[T, Any] | None = None,
     ) -> Iterable[Tree[T]]:
         """
         Enumerate terms as an iterator efficiently - all terms are enumerated, no guaranteed term order.
@@ -244,7 +250,7 @@ class SolutionSpace(Generic[NT, T, G]):
                 if all(m in self.nonterminals() for m in expr.non_terminals):
                     for m in expr.non_terminals:
                         inverse_grammar[m].append((n, expr))
-                    for new_term in self._generate_new_trees(expr, existing_terms):
+                    for new_term in self._generate_new_trees(expr, existing_terms, interpretation):
                         queues[n].put(new_term)
                         if n == start and new_term not in all_results:
                             if max_count is not None and len(all_results) >= max_count:
@@ -271,7 +277,9 @@ class SolutionSpace(Generic[NT, T, G]):
                         if len(existing_terms[m]) < current_bucket_size:
                             non_terminals.add(m)
                         if m == start:
-                            for new_term in self._generate_new_trees(expr, existing_terms, max_count, (n, term)):
+                            for new_term in self._generate_new_trees(
+                                expr, existing_terms, interpretation, max_count, (n, term)
+                            ):
                                 if new_term not in all_results:
                                     if max_count is not None and len(all_results) >= max_count:
                                         return
@@ -279,12 +287,14 @@ class SolutionSpace(Generic[NT, T, G]):
                                     all_results.add(new_term)
                                     queues[start].put(new_term)
                         else:
-                            for new_term in self._generate_new_trees(expr, existing_terms, max_bucket_size, (n, term)):
+                            for new_term in self._generate_new_trees(
+                                expr, existing_terms, interpretation, max_bucket_size, (n, term)
+                            ):
                                 queues[m].put(new_term)
             current_bucket_size += 1
         return
 
-    def contains_tree(self, start: NT, tree: Tree[T]) -> bool:
+    def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
         """Check if the solution space contains a given `tree` derivable from `start`."""
         if start not in self.nonterminals():
             return False
@@ -328,7 +338,9 @@ class SolutionSpace(Generic[NT, T, G]):
 
                 for rhs in relevant_rhss:
                     substitution = {
-                        argument.name: child.root if isinstance(argument, ConstantArgument) else child
+                        argument.name: child.root
+                        if isinstance(argument, ConstantArgument)
+                        else (child if interpretation is None else child.interpret(interpretation))
                         for argument, child in zip(rhs.arguments, tree.children, strict=True)
                         if argument.name is not None
                     }

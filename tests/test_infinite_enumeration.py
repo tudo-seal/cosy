@@ -1,13 +1,13 @@
-# test of the DSL for non-inferrable infinite parameter spaces
+# test of the SpecificationBuilder for non-inferrable infinite parameter spaces
 
-from collections.abc import Container, Iterable, Iterator
+from collections.abc import Iterator
 
 import pytest
-from cosy.dsl import DSL
 from cosy.solution_space import SolutionSpace
+from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Synthesizer
 from cosy.tree import Tree
-from cosy.types import Constructor, Var
+from cosy.types import Constructor, Group, Var
 
 
 def test_infinite_enumeration() -> None:
@@ -24,20 +24,10 @@ def test_infinite_enumeration() -> None:
     def f() -> str:
         return "F"
 
-    component_specifications = {
-        c: DSL()
-        .parameter("x", "nat")
-        .parameter("y", "nat")
-        .argument("t1", Var("x"))
-        .argument("t2", Var("y"))
-        .suffix(Constructor("a") ** Constructor("a")),
-        d: DSL().parameter("x", "nat").suffix(Var("x")),
-        e: DSL().parameter("y", "nat").suffix(Var("y")),
-        f: DSL().suffix(Constructor("a")),
-    }
-
     # infinite enumeration of natural numbers
-    class Nat(Iterable[int], Container):
+    class Nat(Group):
+        name = "nat"
+
         def __iter__(self) -> Iterator[int]:
             i: int = 0
             while True:
@@ -47,8 +37,19 @@ def test_infinite_enumeration() -> None:
         def __contains__(self, value: object) -> bool:
             return isinstance(value, int) and value >= 0
 
-    parameter_space = {"nat": Nat()}
-    synthesizer = Synthesizer(component_specifications, parameter_space)
+    component_specifications = {
+        c: SpecificationBuilder()
+        .parameter("x", Nat())
+        .parameter("y", Nat())
+        .argument("t1", Var("x"))
+        .argument("t2", Var("y"))
+        .suffix(Constructor("a") ** Constructor("a")),
+        d: SpecificationBuilder().parameter("x", Nat()).suffix(Var("x")),
+        e: SpecificationBuilder().parameter("y", Nat()).suffix(Var("y")),
+        f: SpecificationBuilder().suffix(Constructor("a")),
+    }
+
+    synthesizer = Synthesizer(component_specifications)
     target = Constructor("a")
 
     # intermediate solution space

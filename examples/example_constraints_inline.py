@@ -1,6 +1,6 @@
-##Constraints##
+##Constraints with Inlined Interpretations##
 """
-Demonstrates constraints in CoSy.
+Demonstrates constraints in CoSy, highlighting how the Component class can be used to inline the interpretation.
 """
 
 import re
@@ -8,48 +8,6 @@ import re
 from cosy import CoSy
 from cosy.specification_builder import SpecificationBuilder
 from cosy.types import Constructor, Group, Literal, Type, Var
-
-
-def empty() -> str:
-    """
-    Return an empty string.
-
-    :return: An empty string.
-    """
-    return ""
-
-
-def zero(s: str) -> str:
-    """
-    Append the string "0" to the input string.
-
-    :param s: The input string to which "0" will be appended.
-    :return: The input string with "0" appended.
-    """
-    return s + "0"
-
-
-def one(s: str) -> str:
-    """
-    Append the string "1" to the input string.
-
-    :param s: The input string to which "1" will be appended.
-    :return: The input string with "1" appended.
-    """
-    return s + "1"
-
-
-def fin(_r: str, s: str) -> str:
-    """
-    Return the input string. The input regular expression is not used in this function as it does not contribute to
-    the resulting string interpretation of synthesized results. However, it can not be omitted, as the type of the
-    combinator specifies its presence.
-
-    :param _r: The input regular expression.
-    :param s: The input string.
-    :return: The unmodified input string.
-    """
-    return s
 
 
 def main():
@@ -66,22 +24,22 @@ def main():
     named_components_with_specifications = [
         (  #
             "empty",
-            empty,
+            lambda: "",
             SpecificationBuilder().suffix(Constructor("str")),
         ),
         (  #
             "zero",
-            zero,
+            lambda s: s + "0",
             SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
         ),
         (  #
             "one",
-            one,
+            lambda s: s + "1",
             SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
         ),
         (  #
             "fin",
-            fin,
+            lambda _, s: s,
             SpecificationBuilder()
             .parameter("r", RegularExpression())
             .argument("s", Constructor("str"))

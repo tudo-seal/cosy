@@ -4,13 +4,13 @@ The toy example shows the computation of Fibonacci numbers by means of compositi
 
 ## 1. Define Component Specifications
 
-Using domain-specific language provided by the `DSL` class define a mapping of components to respective specifications.
+Using domain-specific language provided by the `SpecificationBuilder` class define a triple of named components and respective specifications `(name, interpretation, specification)`.
 
 - The component `fib_zero` is specified by `Constructor("fib") & Constructor("at", Literal(0, "int"))`, which combines two properties.
   + `Constructor("fib")` means that `fib_zero` it is a Fibonacci number.
-  + `Constructor("at", Literal(0, "int"))` means that `fib_zero` is associated with index `0`.
+  + `Constructor("at", Literal(0))` means that `fib_zero` is associated with index `0`.
 - The component `fib_one`, similarly to `fib_zero`, is a Fibonacci number and is associated with index `1`.
-- The component `fib_next` has three parameters associated with the group `int`
+- The component `fib_next` has three parameters associated with the DataGroup `int`. In the toy example, indices less than `20` are considered.
   + `z` index of the constructed Fibonacci number
   + `y` index of the previous Fibonacci number, which is `z - 1`
   + `x` index of the Fibonacci number two indices prior, which is `z - 2`
@@ -31,46 +31,45 @@ def fib_one() -> int:
 def fib_next(_z: int, _y: int, _x: int, f1 : int, f2: int) -> int:
     return f1 + f2
 
-component_specifications = {
-    fib_zero: DSL()
-          .suffix(Constructor("fib") & Constructor("at", Literal(0, "int"))),
-
-    fib_one: DSL()
-          .suffix(Constructor("fib") & Constructor("at", Literal(1, "int"))),
-
-    fib_next: DSL()
-              .parameter("z", "int")
-              .parameter("y", "int", lambda vs: [vs["z"] - 1])
-              .parameter("x", "int", lambda vs: [vs["z"] - 2])
-              .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
-              .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
-              .suffix(Constructor("fib") & Constructor("at", Var("z"))),
-}
+named_components_with_specifications = [
+        (  #
+            "fib_zero",
+            fib_zero,
+            SpecificationBuilder()
+            .suffix(Constructor("fib") & Constructor("at", Literal(0))),
+        ),
+        (  #
+            "fib_one",
+            fib_one,
+            SpecificationBuilder()
+            .suffix(Constructor("fib") & Constructor("at", Literal(1))),
+        ),
+        (  #
+            "fib_next",
+            fib_next,
+            SpecificationBuilder()
+            .parameter("z", DataGroup("int", range(bound)))
+            .parameter("y", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 1])
+            .parameter("x", DataGroup("int", range(bound)), lambda vs: [vs["z"] - 2])
+            .argument("f1", Constructor("fib") & Constructor("at", Var("y")))
+            .argument("f2", Constructor("fib") & Constructor("at", Var("x")))
+            .suffix(Constructor("fib") & Constructor("at", Var("z"))),
+        ),
+    ]
 ```
 
-## 2. Define Parameter Space
+## 2. Instantiate CoSy
 
-Define a mapping from parameter groups to parameter values.
-In the toy example, indices less than `20` are considered.
-
-```
-parameter_space = {
-    "int": list(range(0, 20))
-}
-```
-
-## 3. Instantiate CoSy
-
-Create an instance of `CoSy` by providing component specifications and the parameter space.
+Create an instance of `CoSy` by providing the named component with their specifications.
 
 ```
-cosy = CoSy(component_specifications, parameter_space)
+cosy = CoSy(component_specifications)
 ```
 
-## 4. Specify a Query and Construct Solutions
+## 3. Specify a Query and Construct Solutions
 
 Specify the query for which solutions should be found.
-Solutions are found by means of instantiation and composition of the given components in the given parameter space.
+Solutions are found by means of instantiation and composition of the given components in the given parameter space ().
 
 ### Arbitrary Fibonacci numbers
 
@@ -90,11 +89,11 @@ for solution in cosy.solve(query):
 ### Fibonacci numbers at Specific Indices
 
 The specification allows us to query Fibonacci numbers at specific indices.
-For an index `i` the query `Constructor("fib") & Constructor("at", Literal(i, "int"))` describes the Fibonacci number at index `i`.
+For an index `i` the query `Constructor("fib") & Constructor("at", Literal(i))` describes the Fibonacci number at index `i`.
 Using the `solve` method, construct and display this Fibonacci number.
 
 ```
 for i in range(20):
-    query = Constructor("fib") & Constructor("at", Literal(i, "int"))
+    query = Constructor("fib") & Constructor("at", Literal(i))
     print(i, next(iter(cosy.solve(query))))
 ```

@@ -8,15 +8,13 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 
 @dataclass(frozen=True)
 class Type(ABC):
-    is_omega: bool = field(init=True, kw_only=True, compare=False)
-    size: int = field(init=True, kw_only=True, compare=False)
     organized: set[Type] = field(init=True, kw_only=True, compare=False)
     free_vars: set[str] = field(init=True, kw_only=True, compare=False)
 
@@ -25,47 +23,27 @@ class Type(ABC):
         pass
 
     @abstractmethod
-    def _organized(self) -> set[Type]:
-        pass
-
-    @abstractmethod
-    def _size(self) -> int:
-        pass
-
-    @abstractmethod
-    def _is_omega(self) -> bool:
-        pass
-
-    @abstractmethod
-    def _free_vars(self) -> set[str]:
-        pass
-
-    @abstractmethod
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
+    def subst(self, substitution: dict[str, Any]) -> Type:
         pass
 
     @staticmethod
     def intersect(types: Sequence[Type]) -> Type:
-        if len(types) > 0:
-            rtypes = reversed(types)
-            result: Type = next(rtypes)
-            for ty in rtypes:
-                result = Intersection(ty, result)
-            return result
-        return Omega()
+        result: Type = Omega()
+        for ty in reversed(types):
+            if not ty.organized:
+                continue
+            result = Intersection(ty, result) if result.organized else ty
+        return result
 
-    def __getstate__(self) -> dict[str, Any]:
-        state = self.__dict__.copy()
-        del state["is_omega"]
-        del state["size"]
-        del state["organized"]
-        return state
-
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        self.__dict__.update(state)
-        self.__dict__["is_omega"] = self._is_omega()
-        self.__dict__["size"] = self._size()
-        self.__dict__["organized"] = self._organized()
+    @staticmethod
+    def curry(sources: Sequence[Type], target: Type) -> Type:
+        if isinstance(target, Omega):
+            # if the target is omega, then the type is omega via subtyping
+            return target
+        result: Type = target
+        for src in reversed(sources):
+            result = Arrow(src, result)
+        return result
 
     def __pow__(self, other: Type) -> Type:
         return Arrow(self, other)
@@ -77,37 +55,51 @@ class Type(ABC):
         return Constructor(name, self)
 
 
+class Group(ABC):
+    name: str = field(init=False)
+
+    @abstractmethod
+    def __iter__(self):
+        # enumeration logic
+        pass
+
+    @abstractmethod
+    def __contains__(self, x):
+        # default membership logic
+        return x in self.__iter__()
+
+    def __str__(self) -> str:
+        return f"{self.name}"
+
+
+class DataGroup(Group):
+    # Group definition based on given data (e.g. a list, range, set, ...)
+    def __init__(self, name: str, data: Iterable):
+        self.name = name
+        self._data = data
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __contains__(self, x):
+        return x in self._data
+
+
 @dataclass(frozen=True)
 class Omega(Type):
-    is_omega: bool = field(init=False, compare=False)
-    size: int = field(init=False, compare=False)
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
     def __post_init__(self) -> None:
         super().__init__(
-            is_omega=self._is_omega(),
-            size=self._size(),
-            organized=self._organized(),
-            free_vars=self._free_vars(),
+            organized=set(),
+            free_vars=set(),
         )
-
-    def _is_omega(self) -> bool:
-        return True
-
-    def _size(self) -> int:
-        return 1
-
-    def _organized(self) -> set[Type]:
-        return set()
 
     def __str__(self) -> str:
         return "omega"
 
-    def _free_vars(self) -> set[str]:
-        return set()
-
-    def subst(self, _groups: Mapping[str, str], _substitution: dict[str, Any]) -> Type:
+    def subst(self, _substitution: dict[str, Any]) -> Type:
         return self
 
 
@@ -115,86 +107,52 @@ class Omega(Type):
 class Constructor(Type):
     name: str = field(init=True)
     arg: Type = field(default=Omega(), init=True)
-    is_omega: bool = field(init=False, compare=False)
-    size: int = field(init=False, compare=False)
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
     def __post_init__(self) -> None:
         super().__init__(
-            is_omega=self._is_omega(),
-            size=self._size(),
-            organized=self._organized(),
-            free_vars=self._free_vars(),
+            organized={self}
+            if len(self.arg.organized) <= 1
+            else {Constructor(self.name, ap) for ap in self.arg.organized},
+            free_vars=self.arg.free_vars,
         )
-
-    def _is_omega(self) -> bool:
-        return False
-
-    def _size(self) -> int:
-        return 1 + self.arg.size
-
-    def _organized(self) -> set[Type]:
-        if len(self.arg.organized) <= 1:
-            return {self}
-        return {Constructor(self.name, ap) for ap in self.arg.organized}
-
-    def _free_vars(self) -> set[str]:
-        return self.arg.free_vars
 
     def __str__(self) -> str:
         if self.arg == Omega():
             return str(self.name)
         return f"{self.name!s}({self.arg!s})"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
-        if not any(var in substitution for var in self.free_vars):
-            return self
-        return Constructor(self.name, self.arg.subst(groups, substitution))
+    def subst(self, substitution: dict[str, Any]) -> Type:
+        return Constructor(self.name, self.arg.subst(substitution))
 
 
 @dataclass(frozen=True)
 class Arrow(Type):
     source: Type = field(init=True)
     target: Type = field(init=True)
-    is_omega: bool = field(init=False, compare=False)
-    size: int = field(init=False, compare=False)
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
     def __post_init__(self) -> None:
+        if isinstance(self.target, Omega):
+            # if the target is omega, then via subtyping the type is omega and not an Arrow type
+            msg = "Arrow type creation with omega target is unsafe. Use Type.curry for safe arrow creation which respects subtyping."
+            raise TypeError(msg)
         super().__init__(
-            is_omega=self._is_omega(),
-            size=self._size(),
-            organized=self._organized(),
-            free_vars=self._free_vars(),
+            organized={self}
+            if len(self.target.organized) == 1
+            else {Arrow(self.source, tp) for tp in self.target.organized},
+            free_vars=set.union(self.source.free_vars, self.target.free_vars),
         )
-
-    def _is_omega(self) -> bool:
-        return self.target.is_omega
-
-    def _size(self) -> int:
-        return 1 + self.source.size + self.target.size
-
-    def _organized(self) -> set[Type]:
-        if len(self.target.organized) == 0:
-            return set()
-        if len(self.target.organized) == 1:
-            return {self}
-        return {Arrow(self.source, tp) for tp in self.target.organized}
-
-    def _free_vars(self) -> set[str]:
-        return set.union(self.source.free_vars, self.target.free_vars)
 
     def __str__(self) -> str:
         return f"{self.source} -> {self.target}"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
-        if not any(var in substitution for var in self.free_vars):
-            return self
+    def subst(self, substitution: dict[str, Any]) -> Type:
         return Arrow(
-            self.source.subst(groups, substitution),
-            self.target.subst(groups, substitution),
+            self.source.subst(substitution),
+            self.target.subst(substitution),
         )
 
 
@@ -202,114 +160,72 @@ class Arrow(Type):
 class Intersection(Type):
     left: Type = field(init=True)
     right: Type = field(init=True)
-    is_omega: bool = field(init=False, compare=False)
-    size: int = field(init=False, compare=False)
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
     def __post_init__(self) -> None:
+        if isinstance(self.left, Omega):
+            # if the left is omega, then via subtyping the type is right and not necessarily an Intersection type
+            msg = "Intersection type creation with omega left is unsafe. Use Type.intersect for safe intersection creation which respects subtyping."
+            raise TypeError(msg)
+        if isinstance(self.right, Omega):
+            # if the right is omega, then via subtyping the type is left and not necessarily an Intersection type
+            msg = "Intersection type creation with omega right is unsafe. Use Type.intersect for safe intersection creation which respects subtyping."
+            raise TypeError(msg)
         super().__init__(
-            is_omega=self._is_omega(),
-            size=self._size(),
-            organized=self._organized(),
-            free_vars=self._free_vars(),
+            organized=set.union(self.left.organized, self.right.organized),
+            free_vars=set.union(self.left.free_vars, self.right.free_vars),
         )
-
-    def _is_omega(self) -> bool:
-        return self.left.is_omega and self.right.is_omega
-
-    def _size(self) -> int:
-        return 1 + self.left.size + self.right.size
-
-    def _organized(self) -> set[Type]:
-        return set.union(self.left.organized, self.right.organized)
-
-    def _free_vars(self) -> set[str]:
-        return set.union(self.left.free_vars, self.right.free_vars)
 
     def __str__(self) -> str:
         return f"{self.left} & {self.right}"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
-        if not any(var in substitution for var in self.free_vars):
-            return self
+    def subst(self, substitution: dict[str, Any]) -> Type:
         return Intersection(
-            self.left.subst(groups, substitution),
-            self.right.subst(groups, substitution),
+            self.left.subst(substitution),
+            self.right.subst(substitution),
         )
 
 
 @dataclass(frozen=True)
 class Literal(Type):
     value: Any  # has to be Hashable
-    group: str
-    is_omega: bool = field(init=False, compare=False)
-    size: int = field(init=False, compare=False)
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
     def __post_init__(self) -> None:
         super().__init__(
-            is_omega=self._is_omega(),
-            size=self._size(),
-            organized=self._organized(),
-            free_vars=self._free_vars(),
+            organized={self},
+            free_vars=set(),
         )
 
-    def _is_omega(self) -> bool:
-        return False
-
-    def _size(self) -> int:
-        return 1
-
-    def _organized(self) -> set[Type]:
-        return {self}
-
-    def _free_vars(self) -> set[str]:
-        return set()
-
     def __str__(self) -> str:
-        return f"[{self.value!s}, {self.group}]"
+        return f"[{self.value!s}]"
 
-    def subst(self, _groups: Mapping[str, str], _substitution: dict[str, Any]) -> Type:
+    def subst(self, _substitution: dict[str, Any]) -> Type:
         return self
 
 
 @dataclass(frozen=True)
 class Var(Type):
     name: str
-    is_omega: bool = field(init=False, compare=False)
-    size: int = field(init=False, compare=False)
     organized: set[Type] = field(init=False, compare=False)
     free_vars: set[str] = field(init=False, compare=False)
 
     def __post_init__(self) -> None:
         super().__init__(
-            is_omega=self._is_omega(),
-            size=self._size(),
-            organized=self._organized(),
-            free_vars=self._free_vars(),
+            organized={self},
+            free_vars={self.name},
         )
-
-    def _is_omega(self) -> bool:
-        return False
-
-    def _size(self) -> int:
-        return 1
-
-    def _organized(self) -> set[Type]:
-        return {self}
-
-    def _free_vars(self) -> set[str]:
-        return {self.name}
 
     def __str__(self) -> str:
         return f"<{self.name!s}>"
 
-    def subst(self, groups: Mapping[str, str], substitution: dict[str, Any]) -> Type:
+    def subst(self, substitution: dict[str, Any]) -> Type:
         if self.name in substitution:
-            return Literal(substitution[self.name], groups[self.name])
-        return self
+            return Literal(substitution[self.name])
+        msg = f"Variable {self.name} not found in substitution."
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -317,7 +233,7 @@ class Parameter(ABC):
     """Abstract base class for parameter specification."""
 
     name: str
-    group: str | Type
+    group: Group | Type
 
     def __str__(self) -> str:
         return f"<{self.name}, {self.group}>"
@@ -327,7 +243,7 @@ class Parameter(ABC):
 class LiteralParameter(Parameter):
     """Specification of a literal parameter."""
 
-    group: str
+    group: Group
     #  Specification of literal assignment from a collection
     values: Callable[[dict[str, Any]], Sequence[Any]] | None = field(default=None)
 
