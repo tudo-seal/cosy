@@ -15,17 +15,17 @@ jobs:
     steps:
       - name: Close Pull Request and Comment if Violating
         uses: superbrothers/close-pull-request@v3
-        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/')}}
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
         with:
           comment: |
             :warning: You can only merge to develop from a feature or a bugfix branch. :warning:
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Fail Job if Violating
-        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/')}}
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
         run: |
           echo "Reason: You can only merge to develop from a feature or a bugfix branch."
           exit 1
       - name: Succeed Job if not Violating
-        if: ${{ contains( github.head_ref, 'feature/') || contains( github.head_ref, 'bugfix/')}}
+        if: ${{ contains( github.head_ref, 'feature/') || contains( github.head_ref, 'bugfix/') || contains( github.head_ref, 'dependabot/github_actions/')}}
         run: |
           exit 0
