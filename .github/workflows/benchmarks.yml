@@ -1,14 +1,13 @@
 name: Perform Benchmarks
 
-on:
-  push:
-    branches:
-      - main
-      - develop
-  pull_request:
-    branches:
-      - main
-      - develop
+on: push
+   # branches:
+     # - main
+     # - develop
+  #pull_request:
+   # branches:
+   #   - main
+    #  - develop
 
 
 concurrency:
@@ -46,29 +45,38 @@ jobs:
     - name: Install Hatch
       uses: pypa/hatch@install
 
-    - name: Set Committer
-      run: |
-        git config user.name "tudo-seal-workflows[bot]"
-        git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
-
-    - name: Determine Push Or Not
-      # if: github.event_name != 'pull_request'
-      run: echo "PUSH_TO_BENCHMARKS=true" >> $GITHUB_ENV
-
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
+
+    - uses: actions/checkout@v4
+      with:
+        repository: tudo-seal/cosy-benchmarks
+        ref: 'gh-pages'
+        path: 'cosy-benchmarks'
+
+    - run: cd cosy-benchmarks
 
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
       with:
         name: Python Benchmark with pytest-benchmark
         tool: 'pytest'
-        output-file-path: benchmarks.json
+        output-file-path: ../benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
-        auto-push: ${{ env.PUSH_TO_BENCHMARKS }}
+        auto-push: false
         alert-threshold: '300%'
         comment-on-alert: true
         fail-on-alert: true
         comment-always: true
         gh-repository: 'github.com/tudo-seal/cosy-benchmarks'
         benchmark-data-dir-path: '${{ env.BRANCH_NAME }}/benchmarks'
+
+    - name: Push Benchmark Results
+      # if: github.event_name != 'pull_request'
+      run: |
+        git config user.name "tudo-seal-workflows[bot]"
+        git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
+        git commit --amend --reset-author --no-edit
+        git push 'https://tudo-seal-workflows[bot]:${{ steps.tudo-seal-workflow-token.outputs.token }}@github.com/tudo-seal/cosy-benchmarks.git' gh-pages:gh-pages
+      env:
+        GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
