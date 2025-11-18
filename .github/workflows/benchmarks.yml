@@ -69,5 +69,5 @@ jobs:
         benchmark-data-dir-path: '${{ env.BRANCH_NAME }}/benchmarks'
 
     - name: Push Benchmark Results
-      if: github.event_name != 'pull_request'
+      # if: github.event_name != 'pull_request'
       run: git push 'https://tudo-seal-workflows[bot]:${{ steps.tudo-seal-workflow-token.outputs.token }}@github.com/tudo-seal/cosy-benchmarks.git' gh-pages:gh-pages
