@@ -56,6 +56,8 @@ jobs:
         token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
 
+    - run: ls
+
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
       with:
