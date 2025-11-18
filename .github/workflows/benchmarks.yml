@@ -56,14 +56,14 @@ jobs:
         token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
 
-    - run: ls
+    - run: echo $(ls)
 
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
       with:
         name: Python Benchmark with pytest-benchmark
         tool: 'pytest'
-        output-file-path: ./cosy/benchmarks.json
+        output-file-path: ./benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         auto-push: false
         alert-threshold: '300%'
