@@ -5,9 +5,9 @@
 |                    |                                                                                                                                                                                                                                        |
 |--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Package            | [![PyPI - Version](https://img.shields.io/pypi/v/combinatory-synthesizer.svg?style=for-the-badge&logo=pypi&label=&labelColor=grey&logoColor=gold&pypiBaseUrl=https://test.pypi.org)](https://pypi.org/project/combinatory-synthesizer) |
-| License            | [![License](https://img.shields.io/github/license/tudo-seal/cosy-draft?style=for-the-badge&color=9E2165&logo=apache&label=&labelColor=grey)](https://opensource.org/licenses/Apache-2.0)                                               |
-| Coverage           | [![codecov](https://img.shields.io/codecov/c/github/tudo-seal/cosy-draft?style=for-the-badge&token=40E83ABJV4&logo=codecov&label=&labelColor=grey)](https://codecov.io/github/tudo-seal/cosy-draft)                                    |
-| Typed/Type-Checked | [![Checked with mypy](https://img.shields.io/badge/endpoint?style=for-the-badge&url=https://raw.githubusercontent.com/tudo-seal/cosy-draft/main/docs/assets/badges/mypy.json)](http://mypy-lang.org/)                                  |
+| License            | [![License](https://img.shields.io/github/license/tudo-seal/cosy?style=for-the-badge&color=9E2165&logo=apache&label=&labelColor=grey)](https://opensource.org/licenses/Apache-2.0)                                               |
+| Coverage           | [![codecov](https://img.shields.io/codecov/c/github/tudo-seal/cosy?style=for-the-badge&token=40E83ABJV4&logo=codecov&label=&labelColor=grey)](https://codecov.io/github/tudo-seal/cosy)                                    |
+| Typed/Type-Checked | [![Checked with mypy](https://img.shields.io/badge/endpoint?style=for-the-badge&url=https://raw.githubusercontent.com/tudo-seal/cosy/main/docs/assets/badges/mypy.json)](http://mypy-lang.org/)                                  |
 | Linted/Formatted   | [![Checked with Ruff](https://img.shields.io/endpoint?style=for-the-badge&url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&color=4051b5)](https://github.com/astral-sh/ruff)                             |
 | Managed with       | [![Hatch project](https://img.shields.io/badge/%F0%9F%A5%9A-Hatch-4051b5.svg?style=for-the-badge)](https://hatch.pypa.io/latest/)                                                                                                      |
 
@@ -30,7 +30,7 @@
 
     ---
 
-    Use the powerful constraint system of [`CoSy`](https://github.com/tudo-seal/cosy-draft) to generate 
+    Use the powerful constraint system of [`CoSy`](https://github.com/tudo-seal/cosy) to generate 
     only the most relevant solutions.  
 
     [:material-arrow-right-box: Constraints](features/constraints.md) 
@@ -40,7 +40,7 @@
     ---
 
     Learn how users familiar with combinatory logic synthesis can access 
-    [`CoSy`](https://github.com/tudo-seal/cosy-draft)'s internals to precisely control synthesis. 
+    [`CoSy`](https://github.com/tudo-seal/cosy)'s internals to precisely control synthesis. 
 
     [:material-arrow-right-box: Advanced](features/advanced.md)
 
@@ -57,7 +57,7 @@
     ---
 
     Understand how to model different types of problems to best capitalize on the performance enhancements of 
-    [`CoSy`](https://github.com/tudo-seal/cosy-draft). 
+    [`CoSy`](https://github.com/tudo-seal/cosy). 
 
     [:material-arrow-right-box: Best Practice](guidelines/best-practice.md)
 

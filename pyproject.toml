@@ -56,8 +56,8 @@ omit = [
 ]
 
 [tool.coverage.paths]
-cosy = ["src/cosy", "*/cosy-draft/src/cosy"]
-tests = ["tests", "*/cosy-draft/tests"]
+cosy = ["src/cosy", "*/cosy/src/cosy"]
+tests = ["tests", "*/cosy/tests"]
 
 [tool.coverage.report]
 exclude_lines = [
