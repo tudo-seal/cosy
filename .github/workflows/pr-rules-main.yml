@@ -2,9 +2,12 @@ name: 'Check PR Rules for Main'
 
 on:
   pull_request_target:
-    types: [ opened ]
+    types: [ opened, reopened ]
     branches:
       - main
+
+env:
+  PR_NUMBER: ${{ github.event.number }}
 
 jobs:
   pr-rules-main:
@@ -13,13 +16,26 @@ jobs:
       checks: write
       pull-requests: write
     steps:
-      - name: Close Pull Request and Comment if Violating
-        uses: superbrothers/close-pull-request@v3
-        if: ${{ !contains( github.head_ref, 'release/') && !contains( github.head_ref, 'hotfix/')}}
+      - uses: actions/create-github-app-token@v2
+        id: tudo-seal-workflow-token
         with:
-          comment: |
-            :warning: You can only merge to main from a release or a hotfix branch. :warning:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID}}
+          private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          # Full history for timestamps
+          fetch-depth: 0
+          token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+
+      - name: Close Pull Request and Comment if Violating
+        if: ${{ !contains( github.head_ref, 'feature/') && !contains( github.head_ref, 'bugfix/') && !contains( github.head_ref, 'dependabot/github_actions/')}}
+        run: |
+          gh pr comment ${{ env.PR_NUMBER }} --body ":warning: You can only merge to main from a release or a hotfix branch. :warning:"
+          gh pr close ${{ env.PR_NUMBER }}
+        env:
+          GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+
       - name: Fail Job if Violating
         if: ${{ !contains( github.head_ref, 'release/') && !contains( github.head_ref, 'hotfix/')}}
         run: |
