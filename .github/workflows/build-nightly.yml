@@ -50,8 +50,8 @@ jobs:
 
       - name: Move nightly tag to current HEAD
         run: |
-          git config user.name "tudo-seal-workflow[bot]"
-          git config user.email "244727884+tudo-seal-workflow[bot]@users.noreply.github.com"
+          git config user.name "tudo-seal-workflows[bot]"
+          git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
           git tag -d ${{ env.nightly_tag }} || true
           git push origin :refs/tags/${{ env.nightly_tag }} || true
           git tag ${{ env.nightly_tag }}
