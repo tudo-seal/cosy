@@ -75,6 +75,7 @@ jobs:
       run: |
         git config user.name "tudo-seal-workflows[bot]"
         git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
+        git remote show origin
         git commit --amend --reset-author --no-edit
         git push 'https://tudo-seal-workflows[bot]:${{ steps.tudo-seal-workflow-token.outputs.token }}@github.com/tudo-seal/cosy-benchmarks.git' gh-pages:gh-pages
       env:
