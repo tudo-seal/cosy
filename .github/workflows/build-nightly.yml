@@ -12,10 +12,17 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/develop'
     steps:
+      - uses: actions/create-github-app-token@v2
+        id: tudo-seal-workflow-token
+        with:
+          app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID}}
+          private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           # Full history for timestamps
           fetch-depth: 0
+          token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Date and Hash
         run: |
@@ -39,7 +46,7 @@ jobs:
       - name: Convert nightly to draft
         run: gh release edit --draft "${{ env.nightly_tag }}" || true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Move nightly tag to current HEAD
         run: |
@@ -50,7 +57,7 @@ jobs:
           git tag ${{ env.nightly_tag }}
           git push origin ${{ env.nightly_tag }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
       - name: Publish nightly on GitHub
         run: |
@@ -65,7 +72,7 @@ jobs:
             "${{ env.nightly_tag }}"
           gh release upload --clobber "${{ env.nightly_tag }}" $ARTIFACTS
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
           ARTIFACTS: >
             dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.tar.gz
             dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}-py3-none-any.whl
