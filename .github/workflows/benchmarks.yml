@@ -59,7 +59,7 @@ jobs:
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
       with:
-        name: Python Benchmark with pytest-benchmark
+        name: Benchmark CoSy
         tool: 'pytest'
         output-file-path: cosy-nested/benchmarks.json
         github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
@@ -77,6 +77,7 @@ jobs:
         git config user.name "tudo-seal-workflows[bot]"
         git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
         git remote show origin
+        git log -1
         git commit --amend --reset-author --no-edit
         git push 'https://tudo-seal-workflows[bot]:${{ steps.tudo-seal-workflow-token.outputs.token }}@github.com/tudo-seal/cosy-benchmarks.git' gh-pages:gh-pages
       env:
