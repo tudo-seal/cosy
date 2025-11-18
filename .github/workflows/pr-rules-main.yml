@@ -2,7 +2,7 @@ name: 'Check PR Rules for Main'
 
 on:
   pull_request_target:
-    types: [ opened ]
+    types: [ opened, reopened ]
     branches:
       - main
 
