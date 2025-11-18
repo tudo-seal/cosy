@@ -71,34 +71,3 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         files: ./coverage.xml
         flags: ${{ matrix.os }}-${{ matrix.python-version }}
-
-    - name: Run Benchmark Suite
-      run: hatch test benchmarks --benchmark-json benchmarks.json
-
-    - uses: actions/create-github-app-token@v2
-      id: tudo-seal-workflow-token
-      with:
-        app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID}}
-        private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
-
-    - name: Store Benchmark Result
-      uses: benchmark-action/github-action-benchmark@v1
-      with:
-        name: Python Benchmark with pytest-benchmark
-        tool: 'pytest'
-        output-file-path: benchmarks.json
-        github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
-        auto-push: false
-        alert-threshold: '300%'
-        comment-on-alert: true
-        fail-on-alert: true
-        comment-always: true
-        gh-repository: 'github.com/tudo-seal/cosy-benchmarks'
-        benchmark-data-dir-path: '${{ env.BRANCH_NAME }}/benchmarks'
-
-    - name: Push Benchmark Results
-      if: github.event_name != 'pull_request'
-      run: |
-        git config user.name "tudo-seal-workflows[bot]"
-        git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
-        git push 'https://you:${{ steps.tudo-seal-workflow-token.outputs.token }}@github.com/tudo-seal/cosy-benchmarks.git' gh-pages:gh-pages
