@@ -37,6 +37,14 @@ jobs:
         fetch-depth: 0
         token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
 
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install Hatch
+      uses: pypa/hatch@install
+
     - name: Set Committer
       run: |
         git config user.name "tudo-seal-workflows[bot]"
