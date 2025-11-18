@@ -47,7 +47,6 @@ jobs:
 
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
-      working-directory: ./cosy
 
     - name: XDTesting Print Directory Structure
       uses: FiorelaCiroku/XDTesting-Print-Directory-Structure@v1.0.2
