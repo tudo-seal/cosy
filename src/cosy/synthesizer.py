@@ -16,7 +16,6 @@ from collections.abc import (
     Sequence,
 )
 from dataclasses import dataclass
-from functools import reduce
 from typing import (
     Any,
     Generic,
@@ -94,7 +93,7 @@ class Synthesizer(Generic[C]):
             tys: deque[Type] = deque((ty,))
             while tys:
                 match tys.pop():
-                    case Arrow(src, tgt) if not tgt.is_omega:
+                    case Arrow(src, tgt) if tgt.organized:
                         yield (src, tgt)
                     case Intersection(sigma, tau):
                         tys.extend((sigma, tau))
@@ -225,11 +224,11 @@ class Synthesizer(Generic[C]):
         if len(covers) == 0:
             return []
 
-        # intersect corresponding arguments of multi-arrows in each cover
-        def intersect_args(args1: Iterable[Type], args2: Iterable[Type]) -> tuple[Type, ...]:
-            return tuple(Intersection(a, b) for a, b in zip(args1, args2, strict=False))
+        # intersect arguments of multi-arrows at same positions
+        def intersect_args(arg_tuples: Iterable[tuple[Type, ...]]) -> list[Type]:
+            return [Type.intersect(arg_tuple) for arg_tuple in zip(*arg_tuples, strict=True)]
 
-        intersected_args: Generator[list[Type]] = (list(reduce(intersect_args, (m.args for m in ms))) for ms in covers)
+        intersected_args: Generator[list[Type]] = (intersect_args(m.args for m in ms) for ms in covers)
 
         # consider only maximal argument vectors
         def compare_args(args1, args2) -> bool:
@@ -301,7 +300,7 @@ class Synthesizer(Generic[C]):
         while stack:
             current_target, current_target_info = stack.pop()
             # if the target is omega, then the result is junk
-            if current_target.is_omega:
+            if not current_target.organized:
                 msg = f"Target type {current_target} is omega."
                 raise ValueError(msg)
 

@@ -23,7 +23,7 @@ class Subtypes:
         supertype: Type,
         substitutions: Mapping[str, Literal],
     ) -> bool:
-        if supertype.is_omega:
+        if not supertype.organized:
             return True
         match supertype:
             case Literal(value2):
@@ -88,7 +88,7 @@ class Subtypes:
     def infer_substitution(self, subtype: Type, path: Type) -> dict[str, Any] | None:
         """Infers a unique substitution S such that S(subtype) <= path where path is closed. Returns None is no solution exists or multiple solutions exist. Does not respect groups."""
 
-        if subtype.is_omega:
+        if not subtype.organized:
             return None
 
         match subtype:
@@ -101,7 +101,7 @@ class Subtypes:
                 match path:
                     case Constructor(name2, arg2):
                         if name2 == name1 or name2 in self.taxonomy.get(name1, {}):
-                            if arg2.is_omega:
+                            if not arg2.organized:
                                 return {}
                             return self.infer_substitution(arg1, arg2)
             case Arrow(src1, tgt1):
