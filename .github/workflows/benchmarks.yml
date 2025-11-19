@@ -36,13 +36,13 @@ jobs:
           cosy
           cosy-benchmarks
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         repository: tudo-seal/cosy-benchmarks
         token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
       with:
         # Full history for timestamps
         fetch-depth: 0
