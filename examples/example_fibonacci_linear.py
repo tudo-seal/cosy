@@ -3,7 +3,7 @@
 Overall description of this example goes here.
 """
 
-from cosy import CoSy
+from cosy import Maestro
 from cosy.specification_builder import SpecificationBuilder
 from cosy.types import Constructor, Group, Literal, Var
 
@@ -77,14 +77,14 @@ def main():
         ),
     ]
 
-    # CoSy instance with the component specifications and parameter space
-    cosy = CoSy(component_specifications)
+    # Tell the Maestro about the component specifications
+    maestro = Maestro(component_specifications)
 
-    # query for the Fibonacci number at index 5000
-    query = Constructor("fib") & Constructor("at", Literal(5000))
+    # Target for the Fibonacci number at index 5000
+    target = Constructor("fib") & Constructor("at", Literal(5000))
 
-    # solve the query and print the only solution
-    print("5000th Fibonacci number:", next(iter(cosy.solve(query))))
+    # Query the Maestro with the target and print the only composition
+    print("5000th Fibonacci number:", next(iter(maestro.query(target))))
 
 
 if __name__ == "__main__":

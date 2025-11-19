@@ -88,10 +88,10 @@ Using the above specifications, we can construct sequences that match the specif
         def __iter__(self):
             pass
 
-cosy = CoSy(component_specifications) # (2)!
+maestro = Maestro(component_specifications) # (2)!
 query: Type = Constructor("matches", Literal("01+0")) # (3)!
  
-for solution in cosy.solve(query): # (4)!
+for solution in maestro.solve(query): # (4)!
     print(solution)
 ```
 

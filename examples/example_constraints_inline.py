@@ -5,7 +5,7 @@ Demonstrates constraints in CoSy, highlighting how the Component class can be us
 
 import re
 
-from cosy import CoSy
+from cosy import Maestro
 from cosy.specification_builder import SpecificationBuilder
 from cosy.types import Constructor, Group, Literal, Type, Var
 
@@ -48,15 +48,15 @@ def main():
         ),
     ]
 
-    # CoSy instance with the component specifications and parameter space
-    cosy = CoSy(named_components_with_specifications)
+    # Tell the Maestro about the component specifications
+    maestro = Maestro(named_components_with_specifications)
 
-    # query for heavy strings
-    query: Type = Constructor("matches", Literal("01+0"))
+    # Query for heavy strings
+    target: Type = Constructor("matches", Literal("01+0"))
 
-    # solve the query and print the solutions
-    for solution in cosy.solve(query):
-        print(solution)
+    # Query the Maestro with the target and print results
+    for result in maestro.query(target):
+        print(result)
 
 
 if __name__ == "__main__":
