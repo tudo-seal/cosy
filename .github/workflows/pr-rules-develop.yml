@@ -19,7 +19,7 @@ jobs:
       - uses: actions/create-github-app-token@v2
         id: tudo-seal-workflow-token
         with:
-          app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID}}
+          app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID }}
           private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
 
       - uses: actions/checkout@v5
