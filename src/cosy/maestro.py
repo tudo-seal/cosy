@@ -1,11 +1,13 @@
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from itertools import groupby
-from typing import Generic, Sequence, Callable, Iterable, Any, TypeVar, Hashable
+from typing import Any, Generic, TypeVar
 
 from cosy.subtypes import Taxonomy
 from cosy.synthesizer import Specification, Synthesizer
 from cosy.types import Type
 
 T = TypeVar("T", bound=Hashable)
+
 
 class Maestro(Generic[T]):
     named_components_with_specifications: Sequence[tuple[T, Callable, Specification]]
