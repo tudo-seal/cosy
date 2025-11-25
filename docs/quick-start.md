@@ -1,6 +1,6 @@
 # Quick Start
 Provides a guide and a toy example of how to create a repository and generate some results.
-The toy example shows the computation of Fibonacci numbers by means of composition of components `fib_zero`, `fib_one`, and `fib_next`.
+The toy example shows the computation of Fibonacci numbers by means of result of components `fib_zero`, `fib_one`, and `fib_next`.
 
 ## 1. Define Component Specifications
 
@@ -60,40 +60,40 @@ named_components_with_specifications = [
 
 ## 2. Instantiate CoSy
 
-Create an instance of `CoSy` by providing the named component with their specifications.
+Let the `Maestro` know what he is working with; by providing the named components with their specifications.
 
 ```
-cosy = CoSy(component_specifications)
+maestro = Maestro(component_specifications)
 ```
 
-## 3. Specify a Query and Construct Solutions
+## 3. Specify a Target and Construct Results
 
-Specify the query for which solutions should be found.
-Solutions are found by means of instantiation and composition of the given components in the given parameter space ().
+Specify the target for which results should be found.
+Results are found by means of instantiation and result of the given components in the given parameter space ().
 
 ### Arbitrary Fibonacci numbers
 
-The following query `Constructor("fib")` describes arbitrary Fibonacci numbers at indices in the given parameter space.
+The following target `Constructor("fib")` describes arbitrary Fibonacci numbers at indices in the given parameter space.
 
 ```
-query = Constructor("fib")
+target = Constructor("fib")
 ```
 
-Using the `solve` method, iterate over and display solutions for the given query.
+Using the `design` method, iterate over and display results for the given target.
 
 ```
-for solution in cosy.solve(query):
-    print(solution)
+for result in maestro.query(target):
+    print(result)
 ```
 
 ### Fibonacci numbers at Specific Indices
 
-The specification allows us to query Fibonacci numbers at specific indices.
-For an index `i` the query `Constructor("fib") & Constructor("at", Literal(i))` describes the Fibonacci number at index `i`.
-Using the `solve` method, construct and display this Fibonacci number.
+The specification allows us to target Fibonacci numbers at specific indices.
+For an index `i` the target `Constructor("fib") & Constructor("at", Literal(i))` describes the Fibonacci number at index `i`.
+Using the `design` method, construct and display this Fibonacci number.
 
 ```
 for i in range(20):
-    query = Constructor("fib") & Constructor("at", Literal(i))
-    print(i, next(iter(cosy.solve(query))))
+    target = Constructor("fib") & Constructor("at", Literal(i))
+    print(i, next(iter(maestro.solve(target))))
 ```

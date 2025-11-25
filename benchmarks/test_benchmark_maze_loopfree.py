@@ -84,7 +84,7 @@ def component_specifications() -> (
 SIZE = 50
 
 
-def test_benchmark_maze(component_specifications, benchmark):
+def test_benchmark_maze_loopfree(component_specifications, benchmark):
     fin = "pos" @ (Literal((SIZE - 1, SIZE - 1)))
 
     synthesizer = Synthesizer(component_specifications)

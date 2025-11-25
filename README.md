@@ -20,6 +20,27 @@
 It efficiently handles specification and constraints of these modular components, 
 describing how they connect and which performance criteria need to be satisfied.
 
+## APIs
+
+`CoSy` can be used in two different ways.
+
+- Using the `Synthesizer`. This enables using all features but is more complicated to use. 
+- Using the `Maestro`. This enables using less features, but is easy to use. 
+
+The `Synthesizer` is the recommended way for "power-users" to interact with `CoSy`. 
+Publications that primarily focus on type-theoretic aspects usually use it. 
+
+The `Maesto` is the cute creature playing with building blocks (modular components) on the logo. 
+This gifted architect is incredible at connecting these to satisfy any `target` a user may `query` for. 
+The `Maestro` API is intended to be easy to use, but the trade-off is lower flexibility. 
+
+For most technological applications of combinatory synthesis to other fields, e.g. synthesizing physical structures, 
+the `Maestro` is sufficient. 
+
+## Examples
+
+Examples currently all employ the `Maestro`. 
+
 - For a simple example for a theoretically minded computer scientist, see: [Fibonacci](https://tudo-seal.github.io/cosy/quick-start/)
 - For a simple example for a practically minded engineer, see: [Robot Arm (WIP)](#)
 
