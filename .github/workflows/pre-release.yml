@@ -36,7 +36,7 @@ jobs:
 
     - name: Check for Dev
       run: |
-        hatch_version = "$(hatch version)"
+        hatch_version="$(hatch version)"
         if [[ ! $hatch_version =~ "dev" ]]; then
            exit 1
         fi
