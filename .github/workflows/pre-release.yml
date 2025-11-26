@@ -15,7 +15,7 @@ jobs:
     if: github.ref == 'refs/heads/develop'
     uses: ./.github/workflows/checks.yml
 
-  release-pypi:
+  pre-release-pypi:
     if: github.ref == 'refs/heads/develop'
     needs: [pre-release-checks]
     environment: pre-release
