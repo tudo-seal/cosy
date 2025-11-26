@@ -2,6 +2,7 @@
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
+
 [project]
 name = "combinatory-synthesizer"
 dynamic = ["version"]
@@ -27,20 +28,27 @@ classifiers = [
 ]
 dependencies = []
 
+
 [project.urls]
 Documentation = "https://github.com/Jekannadar/cosy#readme"
 Issues = "https://github.com/Jekannadar/cosy/issues"
 Source = "https://github.com/Jekannadar/cosy"
 
+
 [tool.hatch.version]
 source = "vcs"
+
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/cosy/_version.py"
 
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/cosy"]
-
 
 
 [[tool.hatch.envs.hatch-test.matrix]]
@@ -55,9 +63,11 @@ omit = [
   "src/cosy/__about__.py",
 ]
 
+
 [tool.coverage.paths]
 cosy = ["src/cosy", "*/cosy/src/cosy"]
 tests = ["tests", "*/cosy/tests"]
+
 
 [tool.coverage.report]
 exclude_lines = [
@@ -67,6 +77,7 @@ exclude_lines = [
   "@abstractmethod",
   "@abc.abstractmethod"
 ]
+
 
 [tool.ruff.lint.extend-per-file-ignores]
 "**/tests/**/*" = [
