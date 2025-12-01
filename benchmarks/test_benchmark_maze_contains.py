@@ -1,6 +1,7 @@
 from collections.abc import Callable, Mapping
 
 import pytest
+
 from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Specification, Synthesizer
 from cosy.types import Constructor, Group, Literal, Type, Var
@@ -18,12 +19,10 @@ SIZE = 50
 
 
 @pytest.fixture
-def component_specifications() -> (
-    Mapping[
-        Callable[[tuple[int, int], tuple[int, int], str], str] | str,
-        Specification,
-    ]
-):
+def component_specifications() -> Mapping[
+    Callable[[tuple[int, int], tuple[int, int], str], str] | str,
+    Specification,
+]:
     def up(b: tuple[int, int], _a: tuple[int, int], p: str) -> str:
         return f"{p} => UP({b})"
 

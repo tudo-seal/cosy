@@ -55,7 +55,7 @@ class SpecificationBuilder:
 
         self._result: Callable[[Specification], Specification] = lambda suffix: suffix
 
-    def parameter(  #
+    def parameter(
         self,
         name: str,
         group: Group,

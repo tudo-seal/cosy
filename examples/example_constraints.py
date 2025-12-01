@@ -64,22 +64,22 @@ def main():
             pass
 
     named_components_with_specifications = [
-        (  #
+        (
             "empty",
             empty,
             SpecificationBuilder().suffix(Constructor("str")),
         ),
-        (  #
+        (
             "zero",
             zero,
             SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
         ),
-        (  #
+        (
             "one",
             one,
             SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
         ),
-        (  #
+        (
             "fin",
             fin,
             SpecificationBuilder()
