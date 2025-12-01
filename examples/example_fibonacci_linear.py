@@ -53,7 +53,7 @@ def main():
             yield from frozenset(range(self._bound))
 
     component_specifications = [
-        (  #
+        (
             "fst",
             fst,
             SpecificationBuilder()
@@ -61,12 +61,12 @@ def main():
             .argument("f", Constructor("fibs") & Constructor("at", Var("x")))
             .suffix(Constructor("fib") & Constructor("at", Var("x"))),
         ),
-        (  #
+        (
             "fib_zero_one",
             fib_zero_one,
             SpecificationBuilder().suffix(Constructor("fibs") & Constructor("at", Literal(0))),
         ),
-        (  #
+        (
             "fib_next",
             fib_next,
             SpecificationBuilder()

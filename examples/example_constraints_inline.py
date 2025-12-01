@@ -22,22 +22,22 @@ def main():
             pass
 
     named_components_with_specifications = [
-        (  #
+        (
             "empty",
             lambda: "",
             SpecificationBuilder().suffix(Constructor("str")),
         ),
-        (  #
+        (
             "zero",
             lambda s: s + "0",
             SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
         ),
-        (  #
+        (
             "one",
             lambda s: s + "1",
             SpecificationBuilder().argument("s", Constructor("str")).suffix(Constructor("str")),
         ),
-        (  #
+        (
             "fin",
             lambda _, s: s,
             SpecificationBuilder()

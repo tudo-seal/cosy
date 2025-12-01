@@ -46,17 +46,17 @@ def main():
     bound = 20
 
     named_components_with_specifications = [
-        (  #
+        (
             "fib_zero",
             fib_zero,
             SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(0))),
         ),
-        (  #
+        (
             "fib_one",
             fib_one,
             SpecificationBuilder().suffix(Constructor("fib") & Constructor("at", Literal(1))),
         ),
-        (  #
+        (
             "fib_next",
             fib_next,
             SpecificationBuilder()

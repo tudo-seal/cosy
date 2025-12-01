@@ -32,19 +32,19 @@ def fib_next(_z: int, _y: int, _x: int, f1 : int, f2: int) -> int:
     return f1 + f2
 
 named_components_with_specifications = [
-        (  #
+        (
             "fib_zero",
             fib_zero,
             SpecificationBuilder()
             .suffix(Constructor("fib") & Constructor("at", Literal(0))),
         ),
-        (  #
+        (
             "fib_one",
             fib_one,
             SpecificationBuilder()
             .suffix(Constructor("fib") & Constructor("at", Literal(1))),
         ),
-        (  #
+        (
             "fib_next",
             fib_next,
             SpecificationBuilder()

@@ -20,20 +20,20 @@ def one(s: str) -> str:
 ```
 These binary sequences are assigned names and specifications, forming a triple: 
 ```
-(  #
+(
     "empty",
     empty,
     SpecificationBuilder()
     .suffix(Constructor("str")),
 ),
-(  #
+(
     "zero",
     zero,
     SpecificationBuilder()
     .argument("s", Constructor("str"))
     .suffix(Constructor("str")),
 ),
-(  #
+(
     "one",
     one,
     SpecificationBuilder()
@@ -56,7 +56,7 @@ def fin(_b: bool, s: str) -> str:
 ```
 with triple: 
 ```
-(  #
+(
     "fin",
     fin,
     SpecificationBuilder()
