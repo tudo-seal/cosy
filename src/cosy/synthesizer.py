@@ -268,23 +268,25 @@ class Synthesizer(Generic[C]):
                     if unique_substitution is None:
                         unique_substitution = substitution
                     else:
-                        is_unique = False
-                        break
+                        unique_substitution = Subtypes.glb_substitutions(unique_substitution, substitution)
+                        if unique_substitution is None:
+                            is_unique = False
+                            break
+                        if not is_unique:
+                            break
                 if not is_unique:
                     break
 
+            if not is_unique:
+                continue  # substitution not unique substitution - skip
             if unique_substitution is None:
                 return None  # no substitution for this path
-            if not is_unique:
-                continue  # substitution not unique substitution — skip
 
             # merge consistent substitution
-            for k, v in unique_substitution.items():
-                if k in result:
-                    if result[k] != v:
-                        return None  # conflict in necessary substitution
-                else:
-                    result[k] = v
+            unique_substitution = Subtypes.lub_substitutions(result, unique_substitution)
+            if unique_substitution is None:
+                return None  # conflict in necessary substitution
+            result = unique_substitution
 
         return result
 
