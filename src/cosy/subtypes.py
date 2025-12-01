@@ -107,14 +107,13 @@ class Subtypes:
             case Arrow(src1, tgt1):
                 match path:
                     case Arrow(src2, tgt2):
-                        substitution = self.infer_substitution(tgt1, tgt2)
-                        if substitution is None:
+                        substitution1 = self.infer_substitution(tgt1, tgt2)
+                        if substitution1 is None:
                             return None
-                        if all(name in substitution for name in src1.free_vars):
-                            if self.check_subtype(src2, src1, substitution):
-                                return substitution
+                        substitution2 = self.infer_substitution(src2, src1)
+                        if substitution2 is None:
                             return None
-                        return {}  # there are actual non-Ambiguous cases (relevant in practice?)
+                        return Subtypes.lub_substitutions(substitution1, substitution2)
             case Intersection(l, r):
                 substitution1 = self.infer_substitution(l, path)
                 substitution2 = self.infer_substitution(r, path)
@@ -165,3 +164,35 @@ class Subtypes:
                     known_supertypes.update(to_add)
 
         return result
+
+    @staticmethod
+    def glb_substitutions(
+        subst1: dict[str, Any],
+        subst2: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Computes the greatest lower bound of two substitutions. Returns None if no glb exists."""
+        glb_subst: dict[str, Any] = {}
+        for key in subst1.keys() & subst2.keys():
+            if subst1[key] != subst2[key]:
+                return None
+            glb_subst[key] = subst1[key]
+        return glb_subst
+
+    @staticmethod
+    def lub_substitutions(
+        subst1: dict[str, Any],
+        subst2: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Computes the least upper bound of two substitutions."""
+        lub_subst: dict[str, Any] = {}
+        for key in subst1.keys() | subst2.keys():
+            if key in subst1:
+                if key in subst2:
+                    if subst1[key] != subst2[key]:
+                        return None
+                    lub_subst[key] = subst1[key]
+                else:
+                    lub_subst[key] = subst1[key]
+            elif key in subst2:
+                lub_subst[key] = subst2[key]
+        return lub_subst
