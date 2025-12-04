@@ -4,7 +4,7 @@ from random import Random
 
 import pytest
 
-from cosy.combinatorics import maximal_elements, minimal_covers
+from cosy.core.combinatorics import maximal_elements, minimal_covers
 
 
 @pytest.fixture

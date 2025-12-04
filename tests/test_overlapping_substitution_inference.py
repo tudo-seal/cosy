@@ -1,7 +1,7 @@
 # regression test for literal substitution inference on overlapping substitutions
 
-from cosy import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
-from cosy.types import Group
+from cosy.core import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
+from cosy.core.types import Group
 
 
 def test_param() -> None:

@@ -22,16 +22,16 @@ from typing import (
     TypeVar,
 )
 
-from cosy.combinatorics import maximal_elements, minimal_covers
-from cosy.solution_space import (
+from cosy.core.combinatorics import maximal_elements, minimal_covers
+from cosy.core.solution_space import (
     Argument,
     ConstantArgument,
     NonTerminalArgument,
     RHSRule,
     SolutionSpace,
 )
-from cosy.subtypes import Subtypes, Taxonomy
-from cosy.types import (
+from cosy.core.subtypes import Subtypes, Taxonomy
+from cosy.core.types import (
     Abstraction,
     Arrow,
     Group,

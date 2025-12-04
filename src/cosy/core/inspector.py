@@ -9,8 +9,8 @@ from collections.abc import Hashable, Mapping
 from itertools import chain
 from typing import TypeVar
 
-from cosy.synthesizer import Specification, Taxonomy
-from cosy.types import (
+from cosy.core.synthesizer import Specification, Taxonomy
+from cosy.core.types import (
     Abstraction,
     Arrow,
     Constructor,

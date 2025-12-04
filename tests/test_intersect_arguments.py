@@ -1,6 +1,6 @@
 # regression test for position-wise intersection of arguments
-from cosy.synthesizer import Synthesizer
-from cosy.types import Constructor, Type
+from cosy.core.synthesizer import Synthesizer
+from cosy.core.types import Constructor, Type
 
 
 def test_intersect_arguments() -> None:
