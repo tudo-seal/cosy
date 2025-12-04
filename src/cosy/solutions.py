@@ -1,10 +1,10 @@
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator, Hashable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
 from cosy.tree import Tree
 
-T: TypeVar = TypeVar("T")
+T = TypeVar("T", bound=Hashable)
 
 
 @dataclass
@@ -23,7 +23,7 @@ class SynthesizerSolutions(Solutions[T]):
 
 @dataclass
 class MaestroSolutions(Solutions[T]):
-    component_interpretations: dict[T, Callable[[...], Any]]
+    component_interpretations: dict[T, Callable[..., Any]]
 
     def __iter__(self) -> Generator[Any, None, None]:
         for tree in self.tree_generator:
