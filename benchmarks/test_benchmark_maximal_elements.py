@@ -3,7 +3,6 @@
 from random import Random
 
 import pytest
-
 from cosy.combinatorics import maximal_elements
 
 

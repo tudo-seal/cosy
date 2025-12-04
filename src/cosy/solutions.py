@@ -1,13 +1,17 @@
+from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass, field
-from typing import Generic, Iterable, Callable, Any, Generator, List, TypeVar
+from typing import Any, Generic, TypeVar
+
 from cosy.tree import Tree
 
 T: TypeVar = TypeVar("T")
 
+
 @dataclass
 class Solutions(Generic[T]):
     tree_generator: Iterable[Tree[T]]
-    generated_trees: List[Tree[T]] = field(init=False, default_factory=list)
+    generated_trees: list[Tree[T]] = field(init=False, default_factory=list)
+
 
 @dataclass
 class SynthesizerSolutions(Solutions[T]):
@@ -15,6 +19,7 @@ class SynthesizerSolutions(Solutions[T]):
         for tree in self.tree_generator:
             self.generated_trees.append(tree)
             yield tree
+
 
 @dataclass
 class MaestroSolutions(Solutions[T]):

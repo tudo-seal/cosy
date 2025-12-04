@@ -1,6 +1,6 @@
-from collections.abc import Callable, Hashable, Iterable, Sequence
+from collections.abc import Callable, Hashable, Sequence
 from itertools import groupby
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from cosy.solutions import MaestroSolutions
 from cosy.subtypes import Taxonomy
@@ -65,5 +65,3 @@ class Maestro(Generic[T]):
             target, max_count=max_count, interpretation=self.component_interpretations
         )
         return MaestroSolutions(trees, component_interpretations=self.component_interpretations)
-
-
