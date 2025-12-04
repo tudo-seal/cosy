@@ -10,6 +10,7 @@ from queue import PriorityQueue
 from types import FunctionType
 from typing import Any, Generic, TypeVar
 
+from cosy.solutions import SynthesizerSolutions
 from cosy.tree import Tree
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
@@ -227,7 +228,7 @@ class SolutionSpace(Generic[NT, T, G]):
                         return output_set
         return output_set
 
-    def enumerate_trees(
+    def _enumerate_trees(
         self,
         start: NT,
         max_count: int | None = None,
@@ -293,6 +294,15 @@ class SolutionSpace(Generic[NT, T, G]):
                                 queues[m].put(new_term)
             current_bucket_size += 1
         return
+
+    def enumerate_trees(
+        self,
+        start: NT,
+        max_count: int | None = None,
+        max_bucket_size: int | None = None,
+        interpretation: dict[T, Any] | None = None,
+    ) -> SynthesizerSolutions[T]:
+        return SynthesizerSolutions(self._enumerate_trees(start, max_count, max_bucket_size, interpretation))
 
     def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
         """Check if the solution space contains a given `tree` derivable from `start`."""
