@@ -15,7 +15,7 @@ class Solutions(Generic[T]):
 
 @dataclass
 class SynthesizerSolutions(Solutions[T]):
-    def __iter__(self):
+    def __iter__(self) -> Generator[Tree[T], None, None]:
         for tree in self.tree_generator:
             self.generated_trees.append(tree)
             yield tree
