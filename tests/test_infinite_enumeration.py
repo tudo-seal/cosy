@@ -3,7 +3,6 @@
 from collections.abc import Iterator
 
 import pytest
-
 from cosy.solution_space import SolutionSpace
 from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Synthesizer

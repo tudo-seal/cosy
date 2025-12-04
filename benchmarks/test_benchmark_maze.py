@@ -2,7 +2,6 @@ from collections.abc import Callable, Mapping
 from itertools import product
 
 import pytest
-
 from cosy.specification_builder import SpecificationBuilder
 from cosy.synthesizer import Specification, Synthesizer
 from cosy.types import Constructor, DataGroup, Literal, Type, Var
@@ -17,10 +16,12 @@ def is_free(pos: tuple[int, int]) -> bool:
 
 
 @pytest.fixture
-def component_specifications() -> Mapping[
-    Callable[[tuple[int, int], tuple[int, int], str], str] | str,
-    Specification,
-]:
+def component_specifications() -> (
+    Mapping[
+        Callable[[tuple[int, int], tuple[int, int], str], str] | str,
+        Specification,
+    ]
+):
     def up(b: tuple[int, int], _a: tuple[int, int], p: str) -> str:
         return f"{p} => UP({b})"
 
