@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Mapping
 from typing import Any
 
-from cosy.types import Arrow, Constructor, Intersection, Literal, Type, Var
+from cosy.core.types import Arrow, Constructor, Intersection, Literal, Type, Var
 
 # a mapping from a concept to the set it its subconcepts
 Taxonomy = Mapping[str, set[str]]

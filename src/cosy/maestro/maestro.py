@@ -2,10 +2,10 @@ from collections.abc import Callable, Hashable, Sequence
 from itertools import groupby
 from typing import Generic, TypeVar
 
-from cosy.solutions import MaestroSolutions
-from cosy.subtypes import Taxonomy
-from cosy.synthesizer import Specification, Synthesizer
-from cosy.types import Type
+from cosy.core.subtypes import Taxonomy
+from cosy.core.synthesizer import Specification, Synthesizer
+from cosy.core.types import Type
+from cosy.extensions.solutions import MaestroSolutions
 
 T = TypeVar("T", bound=Hashable)
 

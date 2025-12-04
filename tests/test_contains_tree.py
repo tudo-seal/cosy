@@ -3,10 +3,10 @@ from collections.abc import Callable
 
 import pytest
 
-from cosy.specification_builder import SpecificationBuilder
-from cosy.synthesizer import Synthesizer
-from cosy.tree import Tree
-from cosy.types import DataGroup, Literal, Var
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.synthesizer import Synthesizer
+from cosy.core.tree import Tree
+from cosy.core.types import DataGroup, Literal, Var
 
 
 def leaf() -> str:

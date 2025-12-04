@@ -4,8 +4,8 @@ Overall description of this example goes here.
 """
 
 from cosy import Maestro
-from cosy.specification_builder import SpecificationBuilder
-from cosy.types import Constructor, Group, Literal, Var
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.types import Constructor, Group, Literal, Var
 
 
 def fst(_x: int, f: tuple[int, int]) -> int:

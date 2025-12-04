@@ -4,8 +4,8 @@ Overall description of this example goes here.
 """
 
 from cosy import Maestro
-from cosy.specification_builder import SpecificationBuilder
-from cosy.types import Constructor, DataGroup, Literal, Type, Var
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.types import Constructor, DataGroup, Literal, Type, Var
 
 
 def fib_zero() -> int:

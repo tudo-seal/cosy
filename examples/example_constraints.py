@@ -6,8 +6,8 @@ Demonstrates constraints in CoSy.
 import re
 
 from cosy import Maestro
-from cosy.specification_builder import SpecificationBuilder
-from cosy.types import Constructor, Group, Literal, Type, Var
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.types import Constructor, Group, Literal, Type, Var
 
 
 def empty() -> str:

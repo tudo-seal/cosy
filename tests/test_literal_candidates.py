@@ -1,9 +1,9 @@
 # test for candidate generation for assigning values to literal variables
 
 
-from cosy.specification_builder import SpecificationBuilder
-from cosy.synthesizer import Synthesizer
-from cosy.types import Constructor, Group, Literal, Omega, Type, Var
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.synthesizer import Synthesizer
+from cosy.core.types import Constructor, Group, Literal, Omega, Type, Var
 
 
 def test_candidates() -> None:

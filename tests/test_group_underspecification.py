@@ -3,9 +3,9 @@ import re
 
 import pytest
 
-from cosy.specification_builder import SpecificationBuilder
-from cosy.synthesizer import Synthesizer
-from cosy.types import Constructor, Group
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.synthesizer import Synthesizer
+from cosy.core.types import Constructor, Group
 
 
 def test_infinite_enumeration() -> None:

@@ -1,9 +1,9 @@
 # regression test for literal substitution inference on overlapping substitutions
 
-from cosy import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
-from cosy.synthesizer import Specification
-from cosy.tree import Tree
-from cosy.types import Group
+from cosy.core import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
+from cosy.core.synthesizer import Specification
+from cosy.core.tree import Tree
+from cosy.core.types import Group
 
 T = int | str | None | bool
 
