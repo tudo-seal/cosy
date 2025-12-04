@@ -1,6 +1,6 @@
 from collections.abc import Callable, Generator, Hashable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar, Hashable
+from typing import Any, Generic, TypeVar
 
 from cosy.tree import Tree
 
