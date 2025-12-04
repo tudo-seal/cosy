@@ -1,5 +1,6 @@
 # regression test for recursive unproductive specification
 import pytest
+
 from cosy.synthesizer import Synthesizer
 from cosy.types import Arrow, Constructor
 
