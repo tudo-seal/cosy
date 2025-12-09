@@ -136,3 +136,6 @@ def test_infinite_values() -> None:
     solution_space = synthesizer.construct_solution_space(target)
 
     assert [tree.interpret() for tree in solution_space.enumerate_trees(target)] == ["C 3 (C 2 (C 1 (ZERO)))"]
+
+    for tree in solution_space.enumerate_trees(target):
+        assert solution_space.contains_tree(target, tree)
