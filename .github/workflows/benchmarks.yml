@@ -40,14 +40,14 @@ jobs:
     - uses: actions/checkout@v5
       with:
         repository: tudo-seal/cosy-benchmarks
-        token: ${{ (github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
+        token: ${{ (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
 
     - uses: actions/checkout@v5
       with:
         # Full history for timestamps
         fetch-depth: 0
-        token: ${{ (github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
+        token: ${{ (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
         path: 'cosy-nested'
 
     - name: Set up Python
@@ -79,7 +79,7 @@ jobs:
         name: Benchmark CoSy
         tool: 'pytest'
         output-file-path: cosy-nested/benchmarks.json
-        github-token: ${{ (github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
+        github-token: ${{ (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
         auto-push: ${{ env.PUSH_TO_BENCHMARKS }}
         alert-threshold: '300%'
         comment-on-alert: true
