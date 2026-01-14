@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/create-github-app-token@v2
-      if: ${{ ! github.event.pull_request.head.repo.fork }}
+      if: ${{ ! github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]' }}
       id: tudo-seal-workflow-token
       with:
         app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID }}
@@ -79,7 +79,7 @@ jobs:
         name: Benchmark CoSy
         tool: 'pytest'
         output-file-path: cosy-nested/benchmarks.json
-        github-token: ${{ github.event.pull_request.head.repo.fork && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
+        github-token: ${{ (github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
         auto-push: ${{ env.PUSH_TO_BENCHMARKS }}
         alert-threshold: '300%'
         comment-on-alert: true
