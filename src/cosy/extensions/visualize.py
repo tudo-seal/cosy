@@ -191,7 +191,7 @@ def visualize(
     trees: Iterable[Tree[T]],
     named_components_with_specifications: Sequence[tuple[T, Callable, Abstraction | Implication | Type]],
 ):
-    visualization_file_path = pathlib.Path(__file__).parent.parent.parent.parent / "visualization/results.json"
+    visualization_file_path = pathlib.Path(__file__).parent / "visualization/results.json"
     with open(visualization_file_path, "w", encoding="utf-8") as visualization_file:
         visualization_file.write("{\n")
         for i, tree in enumerate(trees):
@@ -202,7 +202,7 @@ def visualize(
                 component_specifications={n: (i, s) for n, i, s in named_components_with_specifications},
             )
             prefix = ",\n" if i != 0 else ""
-            visualization_file.write(f'{prefix}"{i}": {json.dumps(tree_dict, indent=2)}')
+            visualization_file.write(f'{prefix}"{i}": {json.dumps(tree_dict, indent=2, default=str)}')
         visualization_file.write("}")
     os.chdir(visualization_file_path.parent)
     server = MyServer()
