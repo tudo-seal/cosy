@@ -39,13 +39,13 @@ jobs:
           cosy
           cosy-benchmarks
 
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         repository: tudo-seal/cosy-benchmarks
         token: ${{ (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
 
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         # Full history for timestamps
         fetch-depth: 0
