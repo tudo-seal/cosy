@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - develop
-  pull_request:
+  pull_request_target:
     branches:
       - main
       - develop
@@ -26,8 +26,6 @@ env:
 jobs:
   benchmark-then-upload:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
     steps:
     - uses: actions/create-github-app-token@v2
       if: ${{ ! github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]' }}
@@ -37,19 +35,17 @@ jobs:
         private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
         repositories: |
           cosy
-          cosy-benchmarks
+          cosy-benchmarks    
 
     - uses: actions/checkout@v6
       with:
         repository: tudo-seal/cosy-benchmarks
-        token: ${{ (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
         ref: 'gh-pages'
 
     - uses: actions/checkout@v6
       with:
         # Full history for timestamps
         fetch-depth: 0
-        token: ${{ (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
         path: 'cosy-nested'
 
     - name: Set up Python
@@ -60,20 +56,15 @@ jobs:
     - name: Install Hatch
       uses: pypa/hatch@install
 
+    - name: Fetch PR branch from fork
+      run: gh pr checkout ${{ github.event.number }}
+      env:
+        GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+      working-directory: 'cosy-nested'
+
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
       working-directory: 'cosy-nested'
-
-    - name: Config Git
-      run: |
-        git config user.name "tudo-seal-workflows[bot]"
-        git config user.email "244727884+tudo-seal-workflows[bot]@users.noreply.github.com"
-
-    - name: Determine Push Or Not
-      if: github.event_name != 'pull_request'
-      run: |
-        echo "PUSH_TO_BENCHMARKS=true" >> $GITHUB_ENV
-        echo "COMMENT_ALWAYS=false" >> $GITHUB_ENV
 
     - name: Store Benchmark Result
       uses: benchmark-action/github-action-benchmark@v1
@@ -81,7 +72,7 @@ jobs:
         name: Benchmark CoSy
         tool: 'pytest'
         output-file-path: cosy-nested/benchmarks.json
-        github-token: ${{ (github.event.pull_request.head.repo.fork || github.actor == 'dependabot[bot]') && secrets.GITHUB_TOKEN  || steps.tudo-seal-workflow-token.outputs.token }}
+        github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
         auto-push: ${{ env.PUSH_TO_BENCHMARKS }}
         alert-threshold: '300%'
         comment-on-alert: true
