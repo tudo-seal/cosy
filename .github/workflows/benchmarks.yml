@@ -62,6 +62,10 @@ jobs:
         GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
       working-directory: 'cosy-nested'
 
+    - name: Print Branch Name
+      run: git rev-parse --abbrev-ref HEAD
+      working-directory: 'cosy-nested'
+
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
       working-directory: 'cosy-nested'
