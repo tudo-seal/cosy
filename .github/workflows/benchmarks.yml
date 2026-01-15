@@ -47,10 +47,9 @@ jobs:
       uses: pypa/hatch@install
 
     - name: Fetch PR branch from fork
+      run: gh pr checkout ${{ github.event.number }}
       env:
         GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
-      run: |
-        gh pr checkout ${{ github.event.number }}
       working-directory: 'cosy-nested'
 
     - name: Run Benchmark Suite
