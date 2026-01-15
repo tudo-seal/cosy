@@ -46,12 +46,29 @@ jobs:
     - name: Install Hatch
       uses: pypa/hatch@install
 
+    - name: Fetch PR branch from fork
+      run: |
+        gh pr checkout ${{ github.event.number }}
+      working-directory: 'cosy-nested'
+      env:
+        GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
       working-directory: 'cosy-nested'
 
-    - name: Upload Benchmarks
-      uses: actions/upload-artifact@v4
+    - name: Store Benchmark Result
+      uses: benchmark-action/github-action-benchmark@v1
       with:
-        name: benchmarks.json
-        path: cosy-nested/benchmarks.json
+        name: Benchmark CoSy
+        tool: 'pytest'
+        output-file-path: cosy-nested/benchmarks.json
+        github-token: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+        auto-push: ${{ env.PUSH_TO_BENCHMARKS }}
+        alert-threshold: '300%'
+        comment-on-alert: true
+        fail-on-alert: true
+        comment-always: ${{ env.COMMENT_ALWAYS }}
+        summary-always: true
+        gh-repository: 'github.com/tudo-seal/cosy-benchmarks'
+        benchmark-data-dir-path: '${{ env.BRANCH_NAME }}/benchmarks'
