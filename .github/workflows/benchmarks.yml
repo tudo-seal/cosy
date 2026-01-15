@@ -49,9 +49,9 @@ jobs:
     - name: Fetch PR branch from fork
       run: |
         gh pr checkout ${{ github.event.number }}
-      working-directory: 'cosy-nested'
       env:
         GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
+      working-directory: 'cosy-nested'
 
     - name: Run Benchmark Suite
       run: hatch test benchmarks --benchmark-json benchmarks.json
