@@ -4,10 +4,10 @@ from collections.abc import Callable
 
 import pytest
 
-from cosy.specification_builder import SpecificationBuilder
-from cosy.synthesizer import Synthesizer
-from cosy.tree import Tree
-from cosy.types import Arrow, Constructor, Group, Intersection, Literal, Var
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.synthesizer import Synthesizer
+from cosy.core.tree import Tree
+from cosy.core.types import Arrow, Constructor, Group, Intersection, Literal, Var
 
 
 def leaf_nat(x: int) -> str:

@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
-    from cosy.synthesizer import Specification
+    from cosy.core.synthesizer import Specification
 
 from typing import Any
 
-from cosy.types import (
+from cosy.core.types import (
     Abstraction,
     Group,
     Implication,

@@ -2,9 +2,9 @@ from collections.abc import Callable, Mapping
 
 import pytest
 
-from cosy.specification_builder import SpecificationBuilder
-from cosy.synthesizer import Specification, Synthesizer
-from cosy.types import Constructor, Group, Literal, Type, Var
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.synthesizer import Specification, Synthesizer
+from cosy.core.types import Constructor, Group, Literal, Type, Var
 
 
 def is_free(pos: tuple[int, int]) -> bool:

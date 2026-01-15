@@ -10,7 +10,7 @@ from queue import PriorityQueue
 from types import FunctionType
 from typing import Any, Generic, TypeVar
 
-from cosy.tree import Tree
+from cosy.core.tree import Tree
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals

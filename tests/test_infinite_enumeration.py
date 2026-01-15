@@ -4,11 +4,11 @@ from collections.abc import Iterator
 
 import pytest
 
-from cosy.solution_space import SolutionSpace
-from cosy.specification_builder import SpecificationBuilder
-from cosy.synthesizer import Synthesizer
-from cosy.tree import Tree
-from cosy.types import Constructor, Group, Var
+from cosy.core.solution_space import SolutionSpace
+from cosy.core.specification_builder import SpecificationBuilder
+from cosy.core.synthesizer import Synthesizer
+from cosy.core.tree import Tree
+from cosy.core.types import Constructor, Group, Var
 
 
 def test_infinite_enumeration() -> None:
