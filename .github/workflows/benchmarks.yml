@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - develop
-  pull_request:
+  pull_request_target:
     branches:
       - main
       - develop
@@ -60,10 +60,6 @@ jobs:
       run: gh pr checkout ${{ github.event.number }}
       env:
         GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
-      working-directory: 'cosy-nested'
-
-    - name: Print Branch Name
-      run: git rev-parse --abbrev-ref HEAD
       working-directory: 'cosy-nested'
 
     - name: Run Benchmark Suite
