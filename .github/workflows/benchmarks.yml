@@ -27,6 +27,16 @@ jobs:
   benchmark-then-upload:
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/create-github-app-token@v2
+      if: ${{ ! github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]' }}
+      id: tudo-seal-workflow-token
+      with:
+        app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID }}
+        private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
+        repositories: |
+          cosy
+          cosy-benchmarks    
+
     - uses: actions/checkout@v6
       with:
         repository: tudo-seal/cosy-benchmarks
