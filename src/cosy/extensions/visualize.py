@@ -32,8 +32,6 @@ Colour: TypeAlias = str
 # https://gist.github.com/ollieglass/f6ddd781eeae1d24e391265432297538
 # Kenneth Kelly: A Colour Alphabet and the Limits of Colour Coding
 KELLY_COLOURS: list[Colour] = [
-    "#F2F3F4",
-    "#222222",
     "#F3C300",
     "#875692",
     "#F38400",
@@ -54,6 +52,8 @@ KELLY_COLOURS: list[Colour] = [
     "#654522",
     "#E25822",
     "#2B3D26",
+    "#F2F3F4",
+    "#222222",
 ]
 
 ComponentSpecifications: TypeAlias = dict[T, tuple[Callable, (Abstraction | Implication | Type)]]
@@ -143,7 +143,8 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
         parameters: list[Parameter] | None
         colors: list[Colour]
         interpretations = {name: interpretation for name, (interpretation, spec) in component_specifications.items()}
-        if tree.root in component_specifications:
+        root_is_combinator = tree.root in component_specifications
+        if root_is_combinator:
             _interpretation, specification = component_specifications[tree.root]
             things = inspect_spec(specification)
             parameters: deque[Parameter] = things.parameters
@@ -165,13 +166,13 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
             for i, c in enumerate(tree.children)
         ]
         return {
-            "parent": "null" if parent is None else str(parent),
+            "parent": "" if parent is None else str(parent),
             "val": tree.interpret(interpretation=interpretations),
-            "parameter": "null" if param is None else str(param),
+            "parameter": "" if param is None else str(param),
             "combinator": "" if combinator is None else combinator,
-            "edge_name": "null",  # "null" if parent is None else tree.interpret(),
             "children": children,
             "colors": colors,
+            "is_combinator": root_is_combinator,
         }
 
     return rec_tree_to_dict(tree, component_specifications)
