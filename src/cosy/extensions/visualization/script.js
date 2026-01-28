@@ -56,7 +56,7 @@ const checkboxes = [
     { id: "showCombinatorNames", label: "Show Combinator Names", variable: "showCombinatorNames", initiallyChecked: true },
     { id: "showValues", label: "Show Values", variable: "showValues", initiallyChecked: true },
     { id: "showParameters", label: "Show Parameters", variable: "showParameters", initiallyChecked: true },
-    { id: "hideParameters", label: "Hide Parameter Nodes", variable: "hideParameters", initiallyChecked: false }
+    { id: "hideParameters", label: "Hide Parameter Nodes", variable: "hideParameters", initiallyChecked: false, reloadAll: true }
 ];
 
 checkboxes.forEach((checkbox) => {
@@ -72,7 +72,11 @@ checkboxes.forEach((checkbox) => {
     input.on("change", function() {
         checkboxState[checkbox.variable] = this.checked;
         console.log(checkbox.variable + " = " + checkboxState[checkbox.variable]);
-        loadResult(selectedResult);
+        if (checkbox.reloadAll) {
+            loadResult(selectedResult);
+        } else {
+            update(root);
+        }
     });
     
     checkboxGroup.append("text")
