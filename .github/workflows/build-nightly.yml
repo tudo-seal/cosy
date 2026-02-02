@@ -45,8 +45,7 @@ jobs:
 
       - name: Stable Url
         run: |
-          cp dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.tar.gz dist/combinatory_synthesizer-latest.tar.gz
-          cp dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}-py3-none-any.whl dist/combinatory_synthesizer-latest-py3-none-any.whl
+          cp dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.tar.gz dist/combinatory_synthesizer-nightly.tar.gz
 
       - name: Convert nightly to draft
         run: gh release edit --draft "${{ env.nightly_tag }}" || true
@@ -80,6 +79,5 @@ jobs:
           GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
           ARTIFACTS: >
             dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.tar.gz
-            dist/combinatory_synthesizer-latest.tar.gz
+            dist/combinatory_synthesizer-nightly.tar.gz
             dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}-py3-none-any.whl
-            dist/combinatory_synthesizer-latest-py3-none-any.whl
