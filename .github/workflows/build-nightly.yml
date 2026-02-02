@@ -43,6 +43,11 @@ jobs:
       - name: Build Package
         run: hatch build
 
+      - name: Stable Url
+        run: |
+          cp dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.tar.gz dist/combinatory_synthesizer.tar.gz
+          cp dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.whl dist/combinatory_synthesizer-py3-none-any.whl
+
       - name: Convert nightly to draft
         run: gh release edit --draft "${{ env.nightly_tag }}" || true
         env:
@@ -75,4 +80,6 @@ jobs:
           GH_TOKEN: ${{ steps.tudo-seal-workflow-token.outputs.token }}
           ARTIFACTS: >
             dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}.tar.gz
+            dist/combinatory_synthesizer.tar.gz
             dist/combinatory_synthesizer-${{ env.NIGHTLY_VERSION }}-py3-none-any.whl
+            dist/combinatory_synthesizer-py3-none-any.whl
