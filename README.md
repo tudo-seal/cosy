@@ -57,7 +57,7 @@ Since `CoSy` is still in pre-release state, `PyPi` distributions are likely to b
 If you want to stay up to date with a nightly build: 
 
 ```console
-pip install https://github.com/tudo-seal/cosy/releases/download/nightly/combinatory_synthesizer-py3-none-any.whl
+pip install https://github.com/tudo-seal/cosy/releases/download/nightly/combinatory_synthesizer-nightly.tar.gz
 ```
 
 `CoSy` itself has no dependencies at all, so it will play nice with any pre-existing projects.
