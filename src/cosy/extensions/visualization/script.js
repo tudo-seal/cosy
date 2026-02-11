@@ -301,11 +301,12 @@ function update(source) {
             // Emphasize labels on hovered node
             d3.select(this).selectAll("text")
                 .style("font-size", "16px")
-                .style("font-weight", "bold");
+                .style("font-weight", "bold")
+                .style("display", "inline");
             
             // Hide labels on all other nodes
             svg.selectAll("g.node:not(:hover)").selectAll("text")
-                .style("fill-opacity", 1e-6);
+                .style("display", "none");
         })
         .on("mouseout", function() {
             // Restore labels based on checkbox state
@@ -314,22 +315,22 @@ function update(source) {
                 .style("font-weight", "normal");
             
             svg.select("g.node:hover").selectAll("text")
-                .style("fill-opacity", (d, i) => {
-                    if (i === 0) return checkboxState.showValues ? 1 : 1e-6;
-                    if (i === 1) return checkboxState.showParameters ? 1 : 1e-6;
-                    if (i === 2) return checkboxState.showCombinatorNames ? 1 : 1e-6;
-                    return 1e-6;
+                .style("display", (d, i) => {
+                    if (i === 0) return checkboxState.showValues ? "inline" : "none";
+                    if (i === 1) return checkboxState.showParameters ? "inline" : "none";
+                    if (i === 2) return checkboxState.showCombinatorNames ? "inline" : "none";
+                    return "none";
                 });
             
             // Restore visibility for non-hovered nodes based on checkbox state
             svg.selectAll("g.node").each(function(d) {
                 if (this !== d3.event.target && d3.event.target !== d3.event.relatedTarget) {
                     d3.select(this).select("text.value-text")
-                        .style("fill-opacity", checkboxState.showValues ? 1 : 1e-6);
+                        .style("display", checkboxState.showValues ? "inline" : "none");
                     d3.select(this).select("text.parameter-text")
-                        .style("fill-opacity", checkboxState.showParameters ? 1 : 1e-6);
+                        .style("display", checkboxState.showParameters ? "inline" : "none");
                     d3.select(this).select("text.combinator-text")
-                        .style("fill-opacity", checkboxState.showCombinatorNames ? 1 : 1e-6);
+                        .style("display", checkboxState.showCombinatorNames ? "inline" : "none");
                 }
             });
         });
@@ -367,8 +368,7 @@ function update(source) {
         .attr("x", -1.1 * circle_radius)
         .attr("dy", ".35em")
         .attr("text-anchor", "end")
-        .text((d) => d.val)
-        .style("fill-opacity", 1e-6);
+        .text((d) => d.val);
     
     // Add parameter label (above node)
     newNodes.append("text")
@@ -377,7 +377,6 @@ function update(source) {
         .attr("dy", -1.1 * circle_radius)
         .attr("text-anchor", "middle")
         .text((d) => d.parameter)
-        .style("fill-opacity", 1e-6)
         .style("text-anchor", "middle");
     
     // Add combinator label (below node)
@@ -387,8 +386,6 @@ function update(source) {
         .attr("dy", 1.3 * circle_radius)
         .attr("text-anchor", "middle")
         .text((d) => d.combinator)
-        .style("fill-opacity", 1e-6)
-        .style("text-anchor", "middle");
 
     // Reset stripe counter and add default stripes
     makeStripes("myStripes", ["green", "red"]);
@@ -433,7 +430,7 @@ function update(source) {
         .attr("height", 0);
     
     hiddenNodes.selectAll("text")
-        .style("fill-opacity", 1e-6);
+        .style("display", "none");
 
     // Update the links
     const link = svg.selectAll("path.link")
