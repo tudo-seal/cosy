@@ -65,7 +65,7 @@ def collect_parameters(
     if isinstance(specification, Type):
         return []
     if isinstance(specification, Abstraction):
-        return [*specification.parameter, *collect_parameters(specification.body)]
+        return [specification.parameter, *collect_parameters(specification.body)]
     if isinstance(specification, Implication):
         return collect_parameters(specification.body)
     raise TypeError
@@ -131,24 +131,28 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
     else:
         # more than len(KELLY_COLOURS) different constructors. Defaulting them all to white
         color_map = dict.fromkeys(all_constructors, "#000000")
-    result = {}
+    result: dict = {}
     stack: list[tuple[Tree[T], dict, Parameter | None, T | None]] = [(tree, result, None, None)]
     while len(stack) > 0:
         current_tree, the_dict, param, parent = stack.pop()
-        parameters: list[Parameter] | None
+        parameters: deque[Parameter] | None
         colors: list[Colour]
         interpretations = {name: interpretation for name, (interpretation, spec) in component_specifications.items()}
         root_is_combinator = current_tree.root in component_specifications
         if root_is_combinator:
             _interpretation, specification = component_specifications[current_tree.root]
             things = inspect_spec(specification)
-            parameters: deque[Parameter] = things.parameters
+            parameters = things.parameters
             colors = [color_map[c] for c in things.constructors]
         else:
             parameters = None
             colors = ["#000000"]
         name = f"{param}: " if param is not None else ""
-        combinator: str | None = current_tree.root.__name__ if callable(current_tree.root) else str(current_tree.root)
+        combinator: str
+        if callable(current_tree.root):
+            combinator = current_tree.root.__name__ # type: ignore
+        else:
+            combinator = str(current_tree.root)
         if combinator is not None:
             name += combinator
 
@@ -158,10 +162,10 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
         the_dict["combinator"] = "" if (combinator is None or not root_is_combinator) else combinator
         the_dict["colors"] = colors
         the_dict["is_combinator"] = root_is_combinator
-        children = []
+        children: list[dict] = []
         the_dict["children"] = children
         for i, c in enumerate(current_tree.children):
-            child_dict = {}
+            child_dict: dict = {}
             children.append(child_dict)
             stack.append((c, child_dict, (parameters[i] if parameters is not None else None), tree.root))
     return {
