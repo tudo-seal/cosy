@@ -200,9 +200,9 @@ def visualize(
     os.chdir(visualization_file_path.parent)
     server = MyServer()
     server.start()
-    print(
+    print(  # noqa: T201
         'Visualization server started. Please open "http://localhost:8000/collapsible_tree.html" to see the visualization.'
-    )  # noqa: T201
+    )
     # webbrowser.open("http://localhost:8000/collapsible_tree.html", new=0, autoraise=True)
     input("Press enter to continue...")
     server.stop()
