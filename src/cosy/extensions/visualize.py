@@ -1,8 +1,8 @@
+import itertools
 import json
 import os
 import pathlib
 import threading
-import webbrowser
 from collections import deque
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
@@ -122,16 +122,14 @@ def inspect_specifications(
     return {name: inspect_spec(spec) for name, (interpretation, spec) in component_specifications.items()}
 
 
-def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecifications):
+def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecifications) -> dict:
     spec_info = inspect_specifications(component_specifications)
     all_constructors: set[ConstructorName] = set.union(*[i.constructors for i in spec_info.values()])
     color_map: dict[ConstructorName, Colour]
     if len(all_constructors) <= len(KELLY_COLOURS):
         color_map = dict(zip(all_constructors, KELLY_COLOURS, strict=False))
     else:
-        # print(
-        #     f"Encountered more than {len(KELLY_COLOURS)} different constructors. Defaulting them all to white!"
-        # )
+        # more than len(KELLY_COLOURS) different constructors. Defaulting them all to white
         color_map = dict.fromkeys(all_constructors, "#000000")
     result = dict()
     stack: list[tuple[Tree[T], dict, Parameter | None, T | None]] = [(tree, result, None, None)]
@@ -175,7 +173,10 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
         #     )
         #     for i, c in enumerate(current_tree.children)
         # ]
-    return result
+    return {
+        "tree": result,
+        "color_map": color_map,
+    }
     def rec_tree_to_dict(
         tree: Tree[T],
         component_specifications: ComponentSpecifications[T],
@@ -237,17 +238,24 @@ def visualize(
 ):
     visualization_file_path = pathlib.Path(__file__).parent / "visualization/results.json"
     with open(visualization_file_path, "w", encoding="utf-8") as visualization_file:
-        visualization_file.write("{\n")
-        for i, tree in enumerate(trees):
-            if i >= amount:
-                break
-            tree_dict = tree_to_dict(
+        visualization_file.write(json.dumps([
+            tree_to_dict(
                 tree,
                 component_specifications={n: (i, s) for n, i, s in named_components_with_specifications},
             )
-            prefix = ",\n" if i != 0 else ""
-            visualization_file.write(f'{prefix}"{i}": {json.dumps(tree_dict, indent=2, default=str)}')
-        visualization_file.write("}")
+            for tree in itertools.islice(trees, amount + 1)
+        ]))
+        # visualization_file.write("{\n")
+        # for i, tree in enumerate(trees):
+        #     if i >= amount:
+        #         break
+        #     tree_dict = tree_to_dict(
+        #         tree,
+        #         component_specifications={n: (i, s) for n, i, s in named_components_with_specifications},
+        #     )
+        #     prefix = ",\n" if i != 0 else ""
+        #     visualization_file.write(f'{prefix}"{i}": {json.dumps(tree_dict, indent=2, default=str)}')
+        # visualization_file.write("}")
     os.chdir(visualization_file_path.parent)
     server = MyServer()
     server.start()

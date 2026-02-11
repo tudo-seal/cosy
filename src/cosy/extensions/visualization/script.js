@@ -10,11 +10,12 @@ const transition_duration = 750;
 
 // ============ Global State ============
 let nodeIdCounter = 0;
-let treeData;
+let jsonData;
 let root;
 let selectedResult = 0;
 let stripeIdCounter = 0;
 let allStripeGradients = [];
+let colorMap = {};
 
 
 
@@ -49,7 +50,7 @@ resultSelector.append("button")
     .text("−")
     .style("margin-right", "5px")
     .on("click", () => {
-        if (selectedResult > 1) {
+        if (selectedResult > 0) {
             refreshSelectedResult(-1);
         }
     });
@@ -115,11 +116,49 @@ checkboxes.forEach((checkbox) => {
         .text(checkbox.label);
 });
 
+// Color map display
+const colorMapContainer = sidebar.append("div")
+    .style("margin-top", "20px");
+
+colorMapContainer.append("div")
+    .style("font-weight", "bold")
+    .style("margin-bottom", "10px")
+    .text("Constructor colors:");
+
+const colorMapDisplay = colorMapContainer.append("div")
+    .attr("id", "colorMapDisplay")
+    .style("font-size", "12px");
+
+function refreshColorMapDisplay() {
+    colorMapDisplay.selectAll("*").remove();
+    Object.entries(colorMap).forEach(([key, value]) => {
+        const entry = colorMapDisplay.append("div")
+            .style("margin-bottom", "8px")
+            .style("display", "flex")
+            .style("align-items", "center")
+            .style("gap", "8px");
+        
+        entry.append("div")
+            .style("width", "100%")
+            .style("height", "25px")
+            .style("background-color", value)
+            .style("border", "1px solid #ccc")
+            .style("display", "flex")
+            .style("align-items", "center")
+            .style("justify-content", "center")
+            .style("font-size", "10px")
+            .style("font-weight", "bold")
+            .style("color", "#000")
+            .text(key);
+    });
+}
+
 function refreshSelectedResult(change) {
     selectedResult += change;
     const successful = loadResult(selectedResult);
     if (successful) {
         selectedResultText.text(selectedResult);
+        refreshColorMapDisplay();
     } else {
         selectedResult -= change;
     }
@@ -144,8 +183,9 @@ const svg = realSvg.append("g")
 
 // Load visualization data
 d3.json("./results.json", (error, data) => {
-    treeData = data;
+    jsonData = data;
     loadResult(selectedResult);
+    refreshColorMapDisplay();
 });
 
 function filterParameterNodes(node) {
@@ -173,12 +213,13 @@ function filterParameterNodes(node) {
 }
 
 function loadResult(resultNum) {
-    let resultData = JSON.parse(JSON.stringify(treeData[resultNum]));
+    let resultData = JSON.parse(JSON.stringify(jsonData[resultNum]));
     if (resultData === undefined) {
         return false;
     }
-    
-    root = filterParameterNodes(resultData);
+    let treeData = resultData.tree;
+    colorMap = resultData.color_map;
+    root = filterParameterNodes(treeData);
     if (root === null) {
         return false;
     }
