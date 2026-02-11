@@ -84,7 +84,10 @@ def main():
     target = Constructor("fib") & Constructor("at", Literal(5000))
 
     # Query the Maestro with the target and print the only composition
-    print("5000th Fibonacci number:", next(iter(maestro.query(target))))
+    results = maestro.query(target)
+    print("5000th Fibonacci number:", next(iter(results)))
+    # Visualize that result
+    results.visualize()
 
 
 if __name__ == "__main__":

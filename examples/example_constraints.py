@@ -96,8 +96,11 @@ def main():
     # Query for heavy strings
     target: Type = Constructor("matches", Literal("01+0"))
 
-    # Query the Maestro with the target and print results
-    for result in maestro.query(target):
+    # Query the Maestro with the target, then visualize and print results
+    results = maestro.query(target)
+    results.visualize(amount=3)
+    print("Now printing all infinite results in order:")
+    for result in results:
         print(result)
 
 

@@ -64,4 +64,8 @@ class Maestro(Generic[T]):
         trees = solution_space.enumerate_trees(
             target, max_count=max_count, interpretation=self.component_interpretations
         )
-        return MaestroSolutions(trees, component_interpretations=self.component_interpretations)
+        return MaestroSolutions(
+            trees,
+            component_interpretations=self.component_interpretations,
+            named_components_with_specifications=self.named_components_with_specifications,
+        )
