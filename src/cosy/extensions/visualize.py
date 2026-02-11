@@ -148,9 +148,9 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
             parameters = None
             colors = ["#000000"]
         name = f"{param}: " if param is not None else ""
-        combinator: str
         if callable(current_tree.root):
-            combinator = current_tree.root.__name__ # type: ignore
+            combinator_name = current_tree.root.__name__  # type: ignore
+            combinator = combinator_name
         else:
             combinator = str(current_tree.root)
         if combinator is not None:
