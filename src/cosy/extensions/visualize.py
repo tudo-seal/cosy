@@ -133,7 +133,49 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
         #     f"Encountered more than {len(KELLY_COLOURS)} different constructors. Defaulting them all to white!"
         # )
         color_map = dict.fromkeys(all_constructors, "#000000")
+    result = dict()
+    stack: list[tuple[Tree[T], dict, Parameter | None, T | None]] = [(tree, result, None, None)]
+    while len(stack) > 0:
+        current_tree, the_dict, param, parent = stack.pop()
+        parameters: list[Parameter] | None
+        colors: list[Colour]
+        interpretations = {name: interpretation for name, (interpretation, spec) in component_specifications.items()}
+        root_is_combinator = current_tree.root in component_specifications
+        if root_is_combinator:
+            _interpretation, specification = component_specifications[current_tree.root]
+            things = inspect_spec(specification)
+            parameters: deque[Parameter] = things.parameters
+            colors = [color_map[c] for c in things.constructors]
+        else:
+            parameters = None
+            colors = ["#000000"]
+        name = f"{param}: " if param is not None else ""
+        combinator: str | None = current_tree.root.__name__ if callable(current_tree.root) else str(current_tree.root)
+        if combinator is not None:
+            name += combinator
 
+        the_dict["parent"] = "" if parent is None else str(parent)
+        the_dict["val"] = current_tree.interpret(interpretation=interpretations)
+        the_dict["parameter"] = "" if param is None else str(param)
+        the_dict["combinator"] = "" if (combinator is None or not root_is_combinator) else combinator
+        the_dict["colors"] = colors
+        the_dict["is_combinator"] = root_is_combinator
+        children = []
+        the_dict["children"] = children
+        for i, c in enumerate(current_tree.children):
+            child_dict = dict()
+            children.append(child_dict)
+            stack.append((c, child_dict, (parameters[i] if parameters is not None else None), tree.root))
+        # children = [
+        #     rec_tree_to_dict(
+        #         c,
+        #         component_specifications,
+        #         parent=current_tree.root,
+        #         param=parameters[i] if parameters is not None else None,
+        #     )
+        #     for i, c in enumerate(current_tree.children)
+        # ]
+    return result
     def rec_tree_to_dict(
         tree: Tree[T],
         component_specifications: ComponentSpecifications[T],
@@ -156,6 +198,7 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
         combinator: str | None = tree.root.__name__ if callable(tree.root) else str(tree.root)
         if combinator is not None:
             name += combinator
+
         children = [
             rec_tree_to_dict(
                 c,
