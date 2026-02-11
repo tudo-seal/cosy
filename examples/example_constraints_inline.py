@@ -56,7 +56,7 @@ def main():
 
     # Query the Maestro with the target, then visualize and print results
     results = maestro.query(target)
-    results.visualize(amount=10)
+    results.visualize(amount=3)
     print("Now printing all infinite results in order:")
     for result in results:
         print(result)
