@@ -75,9 +75,11 @@ def main():
     # Target describing Fibonacci numbers at relevant indices
     target: Type = Constructor("fib")
 
-    # Query the Maestro with the target and print the compositions
-    for result in maestro.query(target):
+    # Query the Maestro with the target, then visualize and print results
+    results = maestro.query(target)
+    for result in results:
         print(result)
+    results.visualize()
 
     for i in range(20):
         # Target for Fibonacci numbers at index i
