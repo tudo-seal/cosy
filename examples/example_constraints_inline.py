@@ -5,9 +5,9 @@ Demonstrates constraints in CoSy, highlighting how the Component class can be us
 
 import re
 
-from cosy import Maestro
 from cosy.core.specification_builder import SpecificationBuilder
 from cosy.core.types import Constructor, Group, Literal, Type, Var
+from cosy.maestro import Maestro
 
 
 def main():

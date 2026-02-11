@@ -49,7 +49,15 @@ Examples currently all employ the `Maestro`.
 Installation is as simple as running: 
 
 ```console
-pip install combinatory-synthesizer
+pip install --pre combinatory-synthesizer
+```
+
+Since `CoSy` is still in pre-release state, `PyPi` distributions are likely to be outdated most of the time. 
+
+If you want to stay up to date with a nightly build: 
+
+```console
+pip install https://github.com/tudo-seal/cosy/releases/download/nightly/combinatory_synthesizer-nightly.tar.gz
 ```
 
 `CoSy` itself has no dependencies at all, so it will play nice with any pre-existing projects.
