@@ -208,8 +208,9 @@ def visualize(
     os.chdir(visualization_file_path.parent)
     server = MyServer()
     server.start()
-    webbrowser.open("http://localhost:8000/collapsible_tree.html", new=0, autoraise=True)
-    input("Press enter to exit...")
+    print('Visualization server started. Please open "http://localhost:8000/collapsible_tree.html" to see the visualization.')
+    # webbrowser.open("http://localhost:8000/collapsible_tree.html", new=0, autoraise=True)
+    input("Press enter to continue...")
     server.stop()
 
     # httpd = HTTPServer(('localhost', 8000), SimpleHTTPRequestHandler)
