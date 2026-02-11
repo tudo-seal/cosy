@@ -18,10 +18,36 @@ let allStripeGradients = [];
 
 
 
-const resultSelector = d3.select("body").append("div");
+// Create sidebar container
+const sidebar = d3.select("body").append("div")
+    .style("position", "fixed")
+    .style("left", "0")
+    .style("top", "0")
+    .style("width", "200px")
+    .style("height", "100vh")
+    .style("background-color", "#f5f5f5")
+    .style("padding", "20px")
+    .style("box-sizing", "border-box")
+    .style("overflow-y", "auto")
+    .style("border-right", "1px solid #ddd");
+
+// Adjust body margin to account for sidebar
+d3.select("body")
+    .style("margin", "0")
+    .style("padding", "0");
+
+// Result selector
+const resultSelector = sidebar.append("div")
+    .style("margin-bottom", "20px");
+
+resultSelector.append("div")
+    .style("font-weight", "bold")
+    .style("margin-bottom", "10px")
+    .text("Result:");
 
 resultSelector.append("button")
     .text("−")
+    .style("margin-right", "5px")
     .on("click", () => {
         if (selectedResult > 1) {
             refreshSelectedResult(-1);
@@ -30,15 +56,17 @@ resultSelector.append("button")
 
 const selectedResultText = resultSelector.append("span")
     .attr("class", "counter")
+    .style("margin", "0 5px")
     .text(selectedResult);
 
 resultSelector.append("button")
     .text("+")
+    .style("margin-left", "5px")
     .on("click", () => {
         refreshSelectedResult(1);
     });
 
-// Add checkboxes
+// Checkboxes
 // ============ Checkbox State ============
 const checkboxState = {
     showCombinatorNames: true,
@@ -47,10 +75,12 @@ const checkboxState = {
     hideParameters: false
 };
 
-const checkboxContainer = d3.select("body")
-    .append("div")
-    .style("margin-top", "10px")
-    .style("margin-bottom", "10px");
+const checkboxContainer = sidebar.append("div");
+
+checkboxContainer.append("div")
+    .style("font-weight", "bold")
+    .style("margin-bottom", "10px")
+    .text("Display Options:");
 
 const checkboxes = [
     { id: "showCombinatorNames", label: "Show Combinator Names", variable: "showCombinatorNames", initiallyChecked: true },
@@ -61,13 +91,15 @@ const checkboxes = [
 
 checkboxes.forEach((checkbox) => {
     const checkboxGroup = checkboxContainer.append("label")
-        .style("margin-right", "20px")
+        .style("display", "block")
+        .style("margin-bottom", "8px")
         .style("cursor", "pointer");
     
     const input = checkboxGroup.append("input")
         .attr("type", "checkbox")
         .attr("id", checkbox.id)
-        .property("checked", checkbox.initiallyChecked);
+        .property("checked", checkbox.initiallyChecked)
+        .style("margin-right", "8px");
     
     input.on("change", function() {
         checkboxState[checkbox.variable] = this.checked;
@@ -80,8 +112,7 @@ checkboxes.forEach((checkbox) => {
     });
     
     checkboxGroup.append("text")
-        .text(checkbox.label)
-        .style("margin-left", "5px");
+        .text(checkbox.label);
 });
 
 function refreshSelectedResult(change) {
@@ -102,8 +133,10 @@ const diagonal = d3.svg.diagonal()
     .projection((d) => [d.y, d.x]);
 
 const realSvg = d3.select("body").append("svg")
-    .attr("width", canvas_width)
-    .attr("height", canvas_height);
+    .attr("width", "100%")
+    .attr("height", "100%")
+    .style("margin-left", "200px")
+    .style("background-color", "#f2f2f2");
 
 const svgDefs = realSvg.append("defs");
 const svg = realSvg.append("g")
