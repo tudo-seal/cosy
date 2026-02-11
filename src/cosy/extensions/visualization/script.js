@@ -336,13 +336,13 @@ function update(source) {
         .attr("height", 1.5 * circle_radius);
     
     movedNode.select("text.value-text")
-        .style("fill-opacity", checkboxState.showValues ? 1 : 1e-6);
+        .style("display", checkboxState.showValues ? "inline" : "None");
     
     movedNode.select("text.parameter-text")
-        .style("fill-opacity", checkboxState.showParameters ? 1 : 1e-6);
+        .style("display", checkboxState.showParameters ? "inline" : "None");
     
     movedNode.select("text.combinator-text")
-        .style("fill-opacity", checkboxState.showCombinatorNames ? 1 : 1e-6);
+        .style("display", checkboxState.showCombinatorNames ? "inline" : "None");
 
     // Transition exiting nodes to the parent's new position
     const hiddenNodes = node.exit().transition().duration(transition_duration)
