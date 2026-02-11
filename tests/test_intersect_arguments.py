@@ -23,5 +23,5 @@ def test_intersect_arguments() -> None:
     results = {tree.interpret() for tree in solution_space.enumerate_trees(query, max_count=3)}
     assert results == expected_results
 
-
-test_intersect_arguments()
+    for tree in solution_space.enumerate_trees(query, max_count=3):
+        assert solution_space.contains_tree(query, tree)

@@ -1,7 +1,11 @@
 # regression test for literal substitution inference on overlapping substitutions
 
-from cosy.core import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
-from cosy.core.types import Group
+from cosy import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
+from cosy.synthesizer import Specification
+from cosy.tree import Tree
+from cosy.types import Group
+
+T = int | str | None | bool
 
 
 def test_param() -> None:
@@ -22,7 +26,7 @@ def test_param() -> None:
 
         def __init__(self):
             super().__init__()
-            self.values = [True, False]
+            self.values = [True, False, None]
 
         def __iter__(self):
             yield from self.values
@@ -36,18 +40,25 @@ def test_param() -> None:
             raise ValueError
         return True
 
-    repo = {
+    # assert that m is not None
+    def assert_m(vs):
+        return vs["m"] is not None
+
+    repo: dict[T, Specification] = {
         "C": SpecificationBuilder()
         .parameter("n", Nat())
         .parameter("m", Bool())
         .parameter_constraint(assert_42)
+        .constraint(assert_m)
         .suffix(
             (((("a" @ Var("n")) & ("b" @ Var("m"))) ** Constructor("d")) ** Constructor("d"))
             & (((("a" @ Var("n")) & ("c" @ Var("m"))) ** Constructor("d")) ** Constructor("d"))
         ),
     }
 
-    synthesizer = Synthesizer(repo, {})
+    assert isinstance(repo["C"], Specification)
+
+    synthesizer: Synthesizer[T] = Synthesizer(repo, {})
 
     # n is constrained to 42, for m both Bools are possible
     target = (("a" @ Literal(42)) ** Constructor("d")) ** Constructor("d")
@@ -56,3 +67,17 @@ def test_param() -> None:
     terms = {str(t) for t in solution_space.enumerate_trees(target, 10)}
 
     assert terms == {"C 42 True", "C 42 False"}
+
+    for t in solution_space.enumerate_trees(target, 10):
+        assert solution_space.contains_tree(target, t)
+
+    # the tree "C 42 None" is not in the solution space because of assert_m
+    tree_none: Tree[T] = Tree[T](
+        "C",
+        [
+            Tree[T](42),
+            Tree[T](None),
+        ],
+    )
+
+    assert not solution_space.contains_tree(target, tree_none)

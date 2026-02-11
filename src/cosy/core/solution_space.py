@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Callable, Generator, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import product
 from queue import PriorityQueue
@@ -302,10 +302,8 @@ class SolutionSpace(Generic[NT, T, G]):
         stack: deque[tuple | Callable] = deque([(start, tree)])
         results: deque[bool] = deque()
 
-        def get_inputs(count: int) -> Generator[bool]:
-            for _ in range(count):
-                yield results.pop()
-            return
+        def get_inputs(count: int) -> list[bool]:
+            return [results.pop() for _ in range(count)]
 
         while stack:
             task = stack.pop()
@@ -322,13 +320,6 @@ class SolutionSpace(Generic[NT, T, G]):
                         if isinstance(argument, ConstantArgument)
                     )
                 ]
-
-                # if there is a relevant rule containing only TerminalArgument which are equal to the children of the tree
-                if any(
-                    all(isinstance(argument, ConstantArgument) for argument in rhs.arguments) for rhs in relevant_rhss
-                ):
-                    results.append(True)
-                    continue
 
                 # disjunction of the results for individual rules
                 def or_inputs(count: int = len(relevant_rhss)) -> None:
@@ -362,4 +353,9 @@ class SolutionSpace(Generic[NT, T, G]):
             elif isinstance(task, FunctionType):
                 # task is a function to execute
                 task()
+
+        if len(results) != 1:
+            msg: str = "Number of results in contains_tree is not 1"
+            raise ValueError(msg)
+
         return results.pop()
