@@ -353,12 +353,9 @@ function update(source) {
                 .attr("y", -0.75 * circle_radius)
                 .attr("width", 1.5 * circle_radius)
                 .attr("height", 1.5 * circle_radius)
-                .style("fill", () => {
-                    stripeIdCounter += 1;
-                    const stripeName = "stripe" + d.id + stripeIdCounter;
-                    makeStripes(stripeName, d.colors);
-                    return "url(#" + stripeName + ")";
-                });
+                .style("fill", "#a2a2a2")
+                .style("stroke", "#878787")
+                .style("stroke-width", 2);
         }
     });
 

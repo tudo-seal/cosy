@@ -144,9 +144,9 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
             things = inspect_spec(specification)
             parameters = things.parameters
             colors = [color_map[c] for c in things.constructors]
+            the_dict["colors"] = colors
         else:
             parameters = None
-            colors = ["#000000"]
         name = f"{param}: " if param is not None else ""
         if callable(current_tree.root):
             combinator_name = current_tree.root.__name__  # type: ignore
@@ -160,7 +160,6 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
         the_dict["val"] = current_tree.interpret(interpretation=interpretations)
         the_dict["parameter"] = "" if param is None else str(param)
         the_dict["combinator"] = "" if (combinator is None or not root_is_combinator) else combinator
-        the_dict["colors"] = colors
         the_dict["is_combinator"] = root_is_combinator
         children: list[dict] = []
         the_dict["children"] = children
