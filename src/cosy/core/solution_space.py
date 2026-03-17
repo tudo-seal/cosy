@@ -63,14 +63,21 @@ class Goal(Generic[NT, T, G]):
     If all positions are grounded and all constraints are satisfied, the goal is successful and
     the tree at the root position is a solution.
     """
+
     constructors: dict[Path, T]
     subgoals: dict[Path, NonTerminalArgument[NT]]
     grounded: dict[Path, tuple[str, Tree[T]]]
     constraints: dict[tuple[Path, ...], tuple[tuple[Callable[[dict[str, Any]], bool], ...], dict[str, T]]]
     success: bool
 
-    def __init__(self, root: dict[Path, T], subgoals: dict[Path, NonTerminalArgument[NT]], grounded: dict[Path, tuple[str, Tree[T]]],
-                 constraints: dict[tuple[Path, ...], tuple[tuple[Callable[[dict[str, Any]], bool], ...], dict[str, T]]], success):
+    def __init__(
+        self,
+        root: dict[Path, T],
+        subgoals: dict[Path, NonTerminalArgument[NT]],
+        grounded: dict[Path, tuple[str, Tree[T]]],
+        constraints: dict[tuple[Path, ...], tuple[tuple[Callable[[dict[str, Any]], bool], ...], dict[str, T]]],
+        success,
+    ):
         self.constructors = root
         self.subgoals = subgoals
         self.grounded = grounded
@@ -111,7 +118,6 @@ class Goal(Generic[NT, T, G]):
             return Goal(root, subgoals, grounded, constraints, success=True)
         return Goal(root, subgoals, grounded, constraints, success=False)
 
-
     def update(self, rhs: RHSRule[NT, T, G], position: Path) -> Goal[NT, T, G] | None:
         """
         Update the goal by applying the given rule at the given position.
@@ -144,7 +150,7 @@ class Goal(Generic[NT, T, G]):
         new_constructors[position] = rhs.terminal
         new_constraints = self.constraints.copy()
         if rhs.predicates and named:
-                new_constraints[named] = rhs.predicates, rhs.literal_substitution
+            new_constraints[named] = rhs.predicates, rhs.literal_substitution
 
         common_prefix = position[:-1]
 
@@ -223,8 +229,6 @@ class Goal(Generic[NT, T, G]):
         we return the updated goal.
         """
         return Goal(new_constructors, new_subgoals, new_grounded, new_constraints, success=False)
-
-
 
 
 class SolutionSpace(Generic[NT, T, G]):
@@ -473,12 +477,12 @@ class SolutionSpace(Generic[NT, T, G]):
         return
 
     def resolution(
-            self,
-            start: NT,
-            variance_strategy_push: Callable[[deque[Goal], Iterable[Goal]], deque[Goal]],
-            variance_strategy_pop: Callable[[deque[Goal]], tuple[deque[Goal], Goal]],
-            subgoal_selection_strategy: Callable[[Goal], tuple[Path, NonTerminalArgument[NT]]],
-            max_count: int | None = None,
+        self,
+        start: NT,
+        variance_strategy_push: Callable[[deque[Goal], Iterable[Goal]], deque[Goal]],
+        variance_strategy_pop: Callable[[deque[Goal]], tuple[deque[Goal], Goal]],
+        subgoal_selection_strategy: Callable[[Goal], tuple[Path, NonTerminalArgument[NT]]],
+        max_count: int | None = None,
     ) -> Iterable[Tree[T]]:
         """
         Enumerate terms implemented via SLD-Resolution.
@@ -579,10 +583,13 @@ class SolutionSpace(Generic[NT, T, G]):
             variance = variance_strategy_push(variance, new_goals)
         return
 
-    def depth_first_resolution(self,
-                               start: NT,
-                               max_count: int | None = None, ) -> Iterable[Tree[T]]:
+    def depth_first_resolution(
+        self,
+        start: NT,
+        max_count: int | None = None,
+    ) -> Iterable[Tree[T]]:
         """A simple implementation of SLD-Resolution with leftmost goal selection and depth-first search in the SLD-Derivation-Tree."""
+
         def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
             sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
             queue.extendleft(new_goals)  # depth-first search <~> LIFO
@@ -599,10 +606,13 @@ class SolutionSpace(Generic[NT, T, G]):
 
         return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy, max_count)
 
-    def breadth_first_resolution(self,
-            start: NT,
-            max_count: int | None = None,) -> Iterable[Tree[T]]:
+    def breadth_first_resolution(
+        self,
+        start: NT,
+        max_count: int | None = None,
+    ) -> Iterable[Tree[T]]:
         """A simple implementation of SLD-Resolution with leftmost goal selection and breadth-first search in the SLD-Derivation-Tree."""
+
         def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
             sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
             queue.extend(new_goals)  # breadth-first search <~> FIFO
@@ -618,7 +628,6 @@ class SolutionSpace(Generic[NT, T, G]):
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
         return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy, max_count)
-
 
     def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
         """Check if the solution space contains a given `tree` derivable from `start`."""
