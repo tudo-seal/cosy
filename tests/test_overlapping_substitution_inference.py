@@ -71,6 +71,16 @@ def test_param() -> None:
     for t in solution_space.enumerate_trees(target, 10):
         assert solution_space.contains_tree(target, t)
 
+    assert {str(t) for t in solution_space.depth_first_resolution(target, 10)} == {"C 42 True", "C 42 False"}
+
+    for t in solution_space.depth_first_resolution(target, 10):
+        assert solution_space.contains_tree(target, t)
+
+    assert {str(t) for t in solution_space.breadth_first_resolution(target, 10)} == {"C 42 True", "C 42 False"}
+
+    for t in solution_space.breadth_first_resolution(target, 10):
+        assert solution_space.contains_tree(target, t)
+
     # the tree "C 42 None" is not in the solution space because of assert_m
     tree_none: Tree[T] = Tree[T](
         "C",

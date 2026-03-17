@@ -488,6 +488,8 @@ class SolutionSpace(Generic[NT, T, G]):
         Enumerate terms implemented via SLD-Resolution.
         The NT start is the request/ first goal.
 
+        If the solution space is not pruned, resolution may lead to unexpected behavior.
+
         It is important to note, that a solution space differs from a logic program as follows:
         While the CLSP synthesizes a logic program of the following form:
 

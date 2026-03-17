@@ -22,6 +22,14 @@ def test_intersect_arguments() -> None:
     expected_results = {"b", "f(a, b)", "f(a, f(a, b))"}
     results = {tree.interpret() for tree in solution_space.enumerate_trees(query, max_count=3)}
     assert results == expected_results
+    results_2 = {tree.interpret() for tree in solution_space.depth_first_resolution(query, max_count=3)}
+    assert results_2 == expected_results
+    results_3 = {tree.interpret() for tree in solution_space.breadth_first_resolution(query, max_count=3)}
+    assert results_3 == expected_results
 
     for tree in solution_space.enumerate_trees(query, max_count=3):
+        assert solution_space.contains_tree(query, tree)
+    for tree in solution_space.depth_first_resolution(query, max_count=3):
+        assert solution_space.contains_tree(query, tree)
+    for tree in solution_space.breadth_first_resolution(query, max_count=3):
         assert solution_space.contains_tree(query, tree)
