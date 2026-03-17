@@ -78,7 +78,7 @@ class Goal(Generic[NT, T, G]):
         self.success = success
 
     @classmethod
-    def from_rhs_rule(self, rhs: RHSRule[NT, T, G]) -> Goal[NT, T, G]:
+    def from_rhs_rule(self, rhs: RHSRule[NT, T, G]) -> Goal[NT, T, G] | None:
         """
         Create a goal from an RHSRule.
         The terminal becomes the combinator applied at the root.
@@ -107,6 +107,9 @@ class Goal(Generic[NT, T, G]):
         else:
             constraints = {}
         if not subgoals:
+            substitution = dict(grounded.values()) | rhs.literal_substitution
+            if not all([c(substitution) for c in rhs.predicates]):
+                return None
             grounded[()] = "", Tree(rhs.terminal, tuple(grounded[p][1] for p in sorted(grounded.keys())))
             return Goal(root, subgoals, grounded, constraints, success=True)
         return Goal(root, subgoals, grounded, constraints)
@@ -540,15 +543,16 @@ class SolutionSpace(Generic[NT, T, G]):
         # yield all solutions for already successful initial goals
         non_successful_goals = []
         for goal in goals:
-            if goal.success:
-                new_term = goal.grounded[()][1]
-                if new_term not in all_results:
-                    yield new_term
-                    all_results.add(new_term)
-                    if max_count is not None and len(all_results) >= max_count:
-                        return
-            else:
-                non_successful_goals.append(goal)
+            if goal is not None:
+                if goal.success:
+                    new_term = goal.grounded[()][1]
+                    if new_term not in all_results:
+                        yield new_term
+                        all_results.add(new_term)
+                        if max_count is not None and len(all_results) >= max_count:
+                            return
+                else:
+                    non_successful_goals.append(goal)
         non_successful_goals.reverse()
         variance: deque[Goal] = variance_strategy_push(deque(), non_successful_goals)
 
