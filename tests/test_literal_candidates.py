@@ -48,6 +48,16 @@ def test_candidates() -> None:
                     assert len(result) == 0
                 else:
                     assert result == {"C True False True"}
+                result = {tree.interpret() for tree in solution_space.depth_first_resolution(target)}
+                if (x is not None and not x) or y or (z is not None and not z):
+                    assert len(result) == 0
+                else:
+                    assert result == {"C True False True"}
+                result = {tree.interpret() for tree in solution_space.breadth_first_resolution(target)}
+                if (x is not None and not x) or y or (z is not None and not z):
+                    assert len(result) == 0
+                else:
+                    assert result == {"C True False True"}
 
 
 def test_multi_values1() -> None:
@@ -75,6 +85,8 @@ def test_multi_values1() -> None:
     target = Constructor("c", Literal(0))
     solution_space = synthesizer.construct_solution_space(target)
     assert [tree.interpret() for tree in solution_space.enumerate_trees(target)] == ["C 0 1"]
+    assert [tree.interpret() for tree in solution_space.depth_first_resolution(target)] == ["C 0 1"]
+    assert [tree.interpret() for tree in solution_space.breadth_first_resolution(target)] == ["C 0 1"]
 
 
 def test_multi_values2() -> None:
@@ -102,6 +114,14 @@ def test_multi_values2() -> None:
     target = Constructor("c", Literal(1))
     solution_space = synthesizer.construct_solution_space(target)
     assert {tree.interpret() for tree in solution_space.enumerate_trees(target)} == {
+        "C 1 2",
+        "C 1 0",
+    }
+    assert {tree.interpret() for tree in solution_space.depth_first_resolution(target)} == {
+        "C 1 2",
+        "C 1 0",
+    }
+    assert {tree.interpret() for tree in solution_space.breadth_first_resolution(target)} == {
         "C 1 2",
         "C 1 0",
     }
@@ -136,6 +156,12 @@ def test_infinite_values() -> None:
     solution_space = synthesizer.construct_solution_space(target)
 
     assert [tree.interpret() for tree in solution_space.enumerate_trees(target)] == ["C 3 (C 2 (C 1 (ZERO)))"]
+    assert [tree.interpret() for tree in solution_space.depth_first_resolution(target)] == ["C 3 (C 2 (C 1 (ZERO)))"]
+    assert [tree.interpret() for tree in solution_space.breadth_first_resolution(target)] == ["C 3 (C 2 (C 1 (ZERO)))"]
 
     for tree in solution_space.enumerate_trees(target):
+        assert solution_space.contains_tree(target, tree)
+    for tree in solution_space.depth_first_resolution(target):
+        assert solution_space.contains_tree(target, tree)
+    for tree in solution_space.breadth_first_resolution(target):
         assert solution_space.contains_tree(target, tree)
