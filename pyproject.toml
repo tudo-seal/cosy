@@ -30,9 +30,9 @@ dependencies = []
 
 
 [project.urls]
-Documentation = "https://github.com/Jekannadar/cosy#readme"
-Issues = "https://github.com/Jekannadar/cosy/issues"
-Source = "https://github.com/Jekannadar/cosy"
+Documentation = "https://tudo-seal.github.io/cosy/"
+Issues = "https://github.com/tudo-seal/cosy/issues"
+Source = "https://github.com/tudo-seal/cosy"
 
 
 [tool.hatch.version]
