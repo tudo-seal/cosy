@@ -156,6 +156,7 @@ function refreshColorMapDisplay() {
 function refreshSelectedResult(change) {
     selectedResult += change;
     const successful = loadResult(selectedResult);
+    console.log("Selected result: " + selectedResult + " (change: " + change + ", successful: " + successful + ")");
     if (successful) {
         selectedResultText.text(selectedResult);
         refreshColorMapDisplay();
@@ -213,7 +214,12 @@ function filterParameterNodes(node) {
 }
 
 function loadResult(resultNum) {
-    let resultData = JSON.parse(JSON.stringify(jsonData[resultNum]));
+    let resultData;
+    try {
+        resultData = JSON.parse(JSON.stringify(jsonData[resultNum]));
+    } catch (e) {
+        return false;
+    }
     if (resultData === undefined) {
         return false;
     }
