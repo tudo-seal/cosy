@@ -94,7 +94,7 @@ plugins:
     strict: false
   bibtex:
     bib_dir: "docs/bibliographies"
-    csl_file: "https://raw.githubusercontent.com/citation-style-language/styles/refs/heads/master/modern-language-association.csl"
+    csl_file: "docs/bibliographies/modern-language-association.csl"
 
 markdown_extensions:
   - attr_list:
