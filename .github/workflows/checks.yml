@@ -57,7 +57,7 @@ jobs:
 
     - name: Upload Tests to Codecov
       if: ${{ !cancelled() && !contains( github.head_ref, 'hotfix/')}}
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@v6
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         files: ./report.xml
@@ -65,7 +65,7 @@ jobs:
         flags: ${{ matrix.os }}-${{ matrix.python-version }}
 
     - name: Upload Coverage to Codecov
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@v6
       if: ${{ !contains( github.head_ref, 'hotfix/') }}
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
