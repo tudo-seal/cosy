@@ -157,7 +157,7 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
             name += combinator
 
         the_dict["parent"] = "" if parent is None else str(parent)
-        the_dict["val"] = current_tree.interpret(interpretation=interpretations)
+        the_dict["val"] = str(current_tree.interpret(interpretation=interpretations))
         the_dict["parameter"] = "" if param is None else str(param)
         the_dict["combinator"] = "" if (combinator is None or not root_is_combinator) else combinator
         the_dict["is_combinator"] = root_is_combinator
