@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/develop'
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: tudo-seal-workflow-token
         with:
           app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID }}
