@@ -476,79 +476,95 @@ class SolutionSpace(Generic[NT, T, G]):
             current_bucket_size += 1
         return
 
+    # --- helpers for goal_from_tree / contains_tree ---------------------------------
+    def _rule_matches_subtree(self, rhs: RHSRule[NT, T, G], subtree: Tree[T]) -> bool:
+        """Return True if rhs can match the given subtree head (arity, terminal and constant leaf args)."""
+        if len(rhs.arguments) != len(subtree.children):
+            return False
+        if rhs.terminal != subtree.root:
+            return False
+        # all constant arguments must match a leaf child with the same root
+        for argument, child in zip(rhs.arguments, subtree.children, strict=True):
+            if isinstance(argument, ConstantArgument):
+                if not (len(child.children) == 0 and argument.value == child.root):
+                    return False
+        return True
+
+    def _initial_goals_for(self, start: NT, tree: Tree[T]) -> list[Goal[NT, T, G]]:
+        """Build initial goals from rules for `start` that match the root `tree`.
+
+        Filters out None results from Goal.from_rhs_rule.
+        """
+        goals: list[Goal[NT, T, G]] = []
+        for rhs in self._rules[start]:
+            if self._rule_matches_subtree(rhs, tree):
+                g = Goal.from_rhs_rule(rhs)
+                if g is not None:
+                    goals.append(g)
+        return goals
+
+    def _expand_goal_at(self, goal: Goal[NT, T, G], child_pos: Path, tree: Tree[T]) -> list[Goal[NT, T, G]]:
+        """Expand a single subgoal at `child_pos` of `goal` and return the list of resulting goals.
+
+        This calls `goal.update(...)` for every rule that matches the corresponding subtree and
+        filters out None results.
+        """
+        try:
+            subtree = tree.subtree_at(child_pos)
+        except IndexError:
+            return []
+        nt = goal.subgoals[child_pos].origin
+        results: list[Goal[NT, T, G]] = []
+        for rhs in self._rules[nt]:
+            if self._rule_matches_subtree(rhs, subtree):
+                new = goal.update(rhs, child_pos)
+                if new is not None:
+                    results.append(new)
+        return results
+
+    def _is_goal_for_position(self, goal: Goal[NT, T, G], pos: Path) -> bool:
+        """Return True if `goal` has exactly one open subgoal and it is at `pos`."""
+        return len(goal.subgoals) == 1 and pos in goal.subgoals
+
     def goal_from_tree(self, start: NT, tree: Tree[T], pos: Path) -> Iterable[Goal[NT, T, G]]:
         """
-        Constructs the goal
-        ?- Start(T(X))
-        where T(X) is the tree with variable X at position pos.
+        Constructs the goal ?- Start(T(X)) where T(X) is `tree` with variable X at position `pos`.
 
-        goal_from_tree returns all valid goals with exactly one subgoal at pos, which are the result of a resolution
-        from start. These goals describe the variance of subtrees at position pos,
-        which can be used to construct the language of trees which vary the subtree of the argument tree at this
-        position.
-
-        This function can be seen as a hybrid of resolution and contains_tree. In the context of logic programming
-        it would simply be resolution, but in CoSy our solution space doesn't consist of Horn clauses and unification
-        is more or less done by hand.
-
-        In contrast to resolution, the search rule is fixed to depth-first search, because the tree must be
-        finite and therefore depth-first search is complete and memory-efficient.
+        Yields all valid goals that result from resolving `start` to a goal that contains exactly one
+        open subgoal at `pos`. The algorithm performs a depth-first search.
         """
 
         if start not in self.nonterminals():
             return
 
-        if pos not in tree.positions():
+        # validate pos by attempting to access the subtree once (avoids materializing all positions)
+        try:
+            _ = tree.subtree_at(pos) if pos != () else tree
+        except IndexError:
             return
 
-        goals = list(filter(lambda x: x is not None, [
-            Goal.from_rhs_rule(rhs)
-            for rhs in self._rules[start]
-            if len(rhs.arguments) == len(tree.children)
-               and rhs.terminal == tree.root
-               and all(
-                argument.value == child.root and len(child.children) == 0
-                for argument, child in zip(rhs.arguments, tree.children, strict=True)
-                if isinstance(argument, ConstantArgument)
-            )
-        ]))
+        initial_goals = self._initial_goals_for(start, tree)
 
         if pos == ():
-            yield from goals
+            # the variable is at the root: initial goals are already the wanted ones
+            for g in initial_goals:
+                yield g
             return
 
-        pending_goals: deque[Goal[NT, T, G]] = deque(goals)
+        pending_goals: deque[Goal[NT, T, G]] = deque(initial_goals)
 
         while pending_goals:
             goal = pending_goals.pop()
-            for child_pos, nt in goal.subgoals.items():
-                if child_pos != pos:
-                    sub_t = tree.subtree_at(child_pos)
-                    next_goals = list(filter(lambda x: x is not None, [
-                        goal.update(rhs, child_pos)
-                        for rhs in self._rules[nt]
-                        if len(rhs.arguments) == len(sub_t.children)
-                           and rhs.terminal == sub_t.root
-                           and all(
-                            argument.value == child.root and len(child.children) == 0
-                            for argument, child in zip(rhs.arguments, sub_t.children, strict=True)
-                            if isinstance(argument, ConstantArgument)
-                        )
-                    ]))
-                    for next_goal in next_goals:
-                        if len(next_goal.subgoals) == 1:
-                            if pos in next_goal.subgoals:
-                                yield next_goal
-                    pending_goals.extend(next_goals)
+            # expand every child subgoal except the target position
+            for child_pos in list(goal.subgoals.keys()):
+                if child_pos == pos:
+                    continue
+                next_goals = self._expand_goal_at(goal, child_pos, tree)
+                for ng in next_goals:
+                    if self._is_goal_for_position(ng, pos):
+                        yield ng
+                pending_goals.extend(next_goals)
         return
-
-
-
-
-
-
-
-
 
     def resolution(
         self,
@@ -718,17 +734,8 @@ class SolutionSpace(Generic[NT, T, G]):
             task = stack.pop()
             if isinstance(task, tuple):
                 nt, tree = task
-                relevant_rhss = [
-                    rhs
-                    for rhs in self._rules[nt]
-                    if len(rhs.arguments) == len(tree.children)
-                    and rhs.terminal == tree.root
-                    and all(
-                        argument.value == child.root and len(child.children) == 0
-                        for argument, child in zip(rhs.arguments, tree.children, strict=True)
-                        if isinstance(argument, ConstantArgument)
-                    )
-                ]
+                # use shared helper to check whether a rule matches the current tree head
+                relevant_rhss = [rhs for rhs in self._rules[nt] if self._rule_matches_subtree(rhs, tree)]
 
                 # disjunction of the results for individual rules
                 def or_inputs(count: int = len(relevant_rhss)) -> None:
