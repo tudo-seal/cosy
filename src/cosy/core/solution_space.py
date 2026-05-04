@@ -10,7 +10,7 @@ from queue import PriorityQueue
 from types import FunctionType
 from typing import Any, Generic, TypeVar
 
-from cosy.core.tree import Tree
+from src.cosy.core.tree import Tree  # TODO: remove src.!
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
@@ -475,6 +475,80 @@ class SolutionSpace(Generic[NT, T, G]):
                                 queues[m].put(new_term)
             current_bucket_size += 1
         return
+
+    def goal_from_tree(self, start: NT, tree: Tree[T], pos: Path) -> Iterable[Goal[NT, T, G]]:
+        """
+        Constructs the goal
+        ?- Start(T(X))
+        where T(X) is the tree with variable X at position pos.
+
+        goal_from_tree returns all valid goals with exactly one subgoal at pos, which are the result of a resolution
+        from start. These goals describe the variance of subtrees at position pos,
+        which can be used to construct the language of trees which vary the subtree of the argument tree at this
+        position.
+
+        This function can be seen as a hybrid of resolution and contains_tree. In the context of logic programming
+        it would simply be resolution, but in CoSy our solution space doesn't consist of Horn clauses and unification
+        is more or less done by hand.
+
+        In contrast to resolution, the search rule is fixed to depth-first search, because the tree must be
+        finite and therefore depth-first search is complete and memory-efficient.
+        """
+
+        if start not in self.nonterminals():
+            return
+
+        if pos not in tree.positions():
+            return
+
+        goals = list(filter(lambda x: x is not None, [
+            Goal.from_rhs_rule(rhs)
+            for rhs in self._rules[start]
+            if len(rhs.arguments) == len(tree.children)
+               and rhs.terminal == tree.root
+               and all(
+                argument.value == child.root and len(child.children) == 0
+                for argument, child in zip(rhs.arguments, tree.children, strict=True)
+                if isinstance(argument, ConstantArgument)
+            )
+        ]))
+
+        if pos == ():
+            yield from goals
+            return
+
+        pending_goals: deque[Goal[NT, T, G]] = deque(goals)
+
+        while pending_goals:
+            goal = pending_goals.pop()
+            for child_pos, nt in goal.subgoals.items():
+                if child_pos != pos:
+                    sub_t = tree.subtree_at(child_pos)
+                    next_goals = list(filter(lambda x: x is not None, [
+                        goal.update(rhs, child_pos)
+                        for rhs in self._rules[nt]
+                        if len(rhs.arguments) == len(sub_t.children)
+                           and rhs.terminal == sub_t.root
+                           and all(
+                            argument.value == child.root and len(child.children) == 0
+                            for argument, child in zip(rhs.arguments, sub_t.children, strict=True)
+                            if isinstance(argument, ConstantArgument)
+                        )
+                    ]))
+                    for next_goal in next_goals:
+                        if len(next_goal.subgoals) == 1:
+                            if pos in next_goal.subgoals:
+                                yield next_goal
+                    pending_goals.extend(next_goals)
+        return
+
+
+
+
+
+
+
+
 
     def resolution(
         self,

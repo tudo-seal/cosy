@@ -13,6 +13,7 @@ from typing import Any, Generic, TypeVar
 
 T = TypeVar("T", bound=Hashable)
 
+Path = tuple[int, ...]
 
 class Tree(Generic[T]):
     root: T
@@ -136,3 +137,26 @@ class Tree(Generic[T]):
 
             results.append(current_combinator)
         return results.pop()
+
+    def positions(self) -> set[Path]:
+        """Return all positions in the tree."""
+        result: set[Path] = set()
+        queue: deque[tuple[Tree[T], Path]] = deque([(self, ())])
+        while queue:
+            current, path = queue.popleft()
+            result.add(path)
+            for i, child in enumerate(current.children):
+                queue.append((child, path + (i,)))
+        return result
+
+    def subtree_at(self, pos: Path) -> "Tree[T]":
+        """Return subtree at given position."""
+        if pos == ():
+            return self
+        current = 0
+        for i, child in enumerate(self.children):
+            current += 1
+            if i == pos[current]:
+                return child.subtree_at(pos[current:])
+        raise IndexError(f"Path {pos} is not valid for this tree")
+
