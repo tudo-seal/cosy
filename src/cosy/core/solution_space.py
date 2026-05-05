@@ -538,9 +538,13 @@ class SolutionSpace(Generic[NT, T, G]):
             return
 
         # validate pos by attempting to access the subtree once (avoids materializing all positions)
-        try:
-            _ = tree.subtree_at(pos) if pos != () else tree
-        except IndexError:
+        #try:
+        #    _ = tree.subtree_at(pos) if pos != () else tree
+        #except IndexError:
+        #    return
+
+        # We will check for pos being a leaf position, therefore all positions will be generated and stored in a tree
+        if pos not in tree.positions():
             return
 
         initial_goals = self._initial_goals_for(start, tree)
@@ -550,6 +554,8 @@ class SolutionSpace(Generic[NT, T, G]):
             for g in initial_goals:
                 yield g
             return
+
+        is_leaf: bool = pos in tree.leaf_positions()
 
         pending_goals: deque[Goal[NT, T, G]] = deque(initial_goals)
 

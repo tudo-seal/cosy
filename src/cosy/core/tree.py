@@ -20,6 +20,7 @@ class Tree(Generic[T]):
     children: tuple["Tree[T]", ...]
     size: int
     _hash: int
+    _positions: set[Path] | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         self.root = root
@@ -140,6 +141,8 @@ class Tree(Generic[T]):
 
     def positions(self) -> set[Path]:
         """Return all positions in the tree."""
+        if self._positions is not None:
+            return self._positions
         result: set[Path] = set()
         queue: deque[tuple[Tree[T], Path]] = deque([(self, ())])
         while queue:
@@ -147,6 +150,17 @@ class Tree(Generic[T]):
             result.add(path)
             for i, child in enumerate(current.children):
                 queue.append((child, path + (i,)))
+        return result
+
+    def leaf_positions(self) -> set[Path]:
+        """Return all leaf positions in the tree."""
+        result: set[Path] = set()
+        all_positions: set[Path] = self.positions()
+        # leaf positions are all positions that are no prefix of another position
+        # a prefix of a position is defined as follows: p is a prefix of q if p == q or p is a prefix of q[:-1]
+        for pos in all_positions:
+            if not any(pos != other and pos == other[: len(pos)] for other in all_positions):
+                result.add(pos)
         return result
 
     def subtree_at(self, pos: Path) -> "Tree[T]":
