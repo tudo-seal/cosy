@@ -167,10 +167,8 @@ class Tree(Generic[T]):
         """Return subtree at given position."""
         if pos == ():
             return self
-        current = 0
         for i, child in enumerate(self.children):
-            current += 1
-            if i == pos[current]:
-                return child.subtree_at(pos[current:])
+            if i == pos[0]:
+                return child.subtree_at(pos[1:])
         raise IndexError(f"Path {pos} is not valid for this tree")
 
