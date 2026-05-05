@@ -12,6 +12,8 @@ from typing import Any, Generic, TypeVar
 
 from cosy.core.tree import Tree
 
+import random
+
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
 G = TypeVar("G", bound=Hashable)  # type of constants
@@ -595,6 +597,7 @@ class SolutionSpace(Generic[NT, T, G]):
         variance_strategy_pop: Callable[[deque[Goal]], tuple[deque[Goal], Goal]],
         subgoal_selection_strategy: Callable[[Goal], tuple[Path, NonTerminalArgument[NT]]],
         max_count: int | None = None,
+        max_depth: int | None = None,
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
@@ -668,13 +671,17 @@ class SolutionSpace(Generic[NT, T, G]):
                 if goal.success:
                     new_term = goal.grounded[()][1]
                     if new_term not in all_results:
+                        # depth 0
                         yield new_term
                         all_results.add(new_term)
                         if max_count is not None and len(all_results) >= max_count:
                             return
                 else:
-                    non_successful_goals.append(goal)
-        non_successful_goals.reverse()
+                    non_successful_goals = [goal] + non_successful_goals
+
+        if max_depth is not None and max_depth == 0:
+            return
+
         variance: deque[Goal] = variance_strategy_push(deque(), non_successful_goals)
 
         # Selection, Unification, Derivation and Termination
@@ -689,6 +696,11 @@ class SolutionSpace(Generic[NT, T, G]):
                 # Derivation
                 new_goal = current_goal.update(r, p)
                 if new_goal is not None:
+                    if max_depth is not None:
+                        paths = list(new_goal.grounded.keys()) + list(new_goal.subgoals.keys())
+                        depth = max(len(p) for p in paths)
+                        if depth > max_depth:
+                            continue
                     # Termination
                     if new_goal.success:
                         new_term = new_goal.grounded[()][1]
@@ -706,6 +718,7 @@ class SolutionSpace(Generic[NT, T, G]):
         self,
         start: NT,
         max_count: int | None = None,
+        max_depth: int | None = None,
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
@@ -725,12 +738,53 @@ class SolutionSpace(Generic[NT, T, G]):
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy, max_count, tree, pos)
+        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy,
+                               max_count, max_depth, tree, pos)
+
+    def sample_tree(self, start: NT,
+                    max_depth: int = None,
+                    tree: Tree[T] | None = None,
+                    pos: Path | None = None,) -> Tree[T] | None:
+        """
+        This method samples a tree top-down with possibly limited depth.
+
+        Be aware, that this method is not guaranteed to terminate if the solution space contains recursive rules and
+        max_depth is None, as it may get stuck in an infinite branch of the SLD-Derivation-Tree.
+        Additionally the user has to ensure that the solution space is not empty, as an empty solution space can lead
+        to nontermination as well.
+        """
+        def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
+            goals = list(new_goals)
+            random.shuffle(goals)
+            queue.extendleft(goals)  # depth-first search <~> LIFO
+            return queue
+
+        def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
+            return queue, queue.popleft()  # depth-first search <~> LIFO
+
+        def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
+            max_len = max(len(p) for p in goal.subgoals)
+            filtered = list(filter(lambda x: len(x[0]) == max_len, goal.subgoals.items()))
+            return random.choice(filtered)
+            # assuming new subgoals (deeper positions) are added "to the left" of the old ones
+
+        trees: Iterable[Tree[T]] = self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy,
+                                                   max_depth=max_depth, tree=tree, pos=pos)
+
+        try:
+            iterator = iter(trees)
+            tree = next(iterator)
+        except StopIteration:
+            return None
+
+        return tree
+
 
     def breadth_first_resolution(
         self,
         start: NT,
         max_count: int | None = None,
+        max_depth: int | None = None,
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
@@ -750,7 +804,8 @@ class SolutionSpace(Generic[NT, T, G]):
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy, max_count, tree, pos)
+        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy,
+                               max_count, max_depth, tree, pos)
 
     def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
         """Check if the solution space contains a given `tree` derivable from `start`."""
