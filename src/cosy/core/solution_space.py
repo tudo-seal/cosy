@@ -522,40 +522,50 @@ class SolutionSpace(Generic[NT, T, G]):
                     results.append(new)
         return results
 
-    def _is_goal_for_position(self, goal: Goal[NT, T, G], pos: Path) -> bool:
-        """Return True if `goal` has exactly one open subgoal and it is at `pos`."""
-        return len(goal.subgoals) == 1 and pos in goal.subgoals
+    def _is_goal_for_position(self, goal: Goal[NT, T, G], pos: Path, is_pos_leaf: bool) -> bool:
+        """Return True if goal successfully represents pos as the single variation point.
+
+        This is true if:
+        - pos is a nonterminal combinator (exactly one open subgoal at pos), or
+        - pos is a leaf literal (goal is successful with no open subgoals)
+        """
+        # Case: pos is a nonterminal (combinator) — exactly one open subgoal at pos
+        has_open_at_pos = len(goal.subgoals) == 1 and pos in goal.subgoals
+
+        # Case: pos is a leaf literal — no open subgoals and goal is successful
+        is_complete_leaf = len(goal.subgoals) == 0 and is_pos_leaf and goal.success
+
+        return has_open_at_pos or is_complete_leaf
 
     def goal_from_tree(self, start: NT, tree: Tree[T], pos: Path) -> Iterable[Goal[NT, T, G]]:
         """
         Constructs the goal ?- Start(T(X)) where T(X) is `tree` with variable X at position `pos`.
 
-        Yields all valid goals that result from resolving `start` to a goal that contains exactly one
-        open subgoal at `pos`. The algorithm performs a depth-first search.
+        Yields all valid goals that result from resolving `start` to a goal that contains exactly
+        one open subgoal at `pos`. The algorithm performs a depth-first search.
         """
 
         if start not in self.nonterminals():
             return
 
         # validate pos by attempting to access the subtree once (avoids materializing all positions)
-        #try:
-        #    _ = tree.subtree_at(pos) if pos != () else tree
-        #except IndexError:
-        #    return
-
-        # We will check for pos being a leaf position, therefore all positions will be generated and stored in a tree
-        if pos not in tree.positions():
+        try:
+            _ = tree.subtree_at(pos) if pos != () else tree
+        except IndexError:
             return
+
+        # compute leaf positions once, reuse for all checks
+        leaf_positions = tree.leaf_positions()
+        is_pos_leaf = pos in leaf_positions
 
         initial_goals = self._initial_goals_for(start, tree)
 
         if pos == ():
             # the variable is at the root: initial goals are already the wanted ones
             for g in initial_goals:
-                yield g
+                if self._is_goal_for_position(g, pos, is_pos_leaf):
+                    yield g
             return
-
-        is_leaf: bool = pos in tree.leaf_positions()
 
         pending_goals: deque[Goal[NT, T, G]] = deque(initial_goals)
 
@@ -564,12 +574,15 @@ class SolutionSpace(Generic[NT, T, G]):
             # expand every child subgoal except the target position
             for child_pos in list(goal.subgoals.keys()):
                 if child_pos == pos:
+                    if self._is_goal_for_position(goal, pos, is_pos_leaf):
+                        yield goal
                     continue
                 next_goals = self._expand_goal_at(goal, child_pos, tree)
                 for ng in next_goals:
-                    if self._is_goal_for_position(ng, pos):
+                    if self._is_goal_for_position(ng, pos, is_pos_leaf):
                         yield ng
-                pending_goals.extend(next_goals)
+                    else:
+                        pending_goals.append(ng)
         return
 
     def resolution(
