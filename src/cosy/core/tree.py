@@ -10,6 +10,7 @@ from collections.abc import Callable, Hashable, Sequence
 from functools import partial
 from inspect import Parameter, _empty, _ParameterKind, signature
 from typing import Any, Generic, TypeVar
+from copy import copy
 
 T = TypeVar("T", bound=Hashable)
 
@@ -50,6 +51,13 @@ class Tree(Generic[T]):
 
     def __str__(self) -> str:
         return self.__rec_to_str__(outermost=True)
+
+    def __copy__(self) -> "Tree[T]":
+        children_copy = tuple(copy(child) for child in self.children)
+        return Tree(
+            root=self.root,
+            children=children_copy,
+        )
 
     def interpret(self, interpretation: dict[T, Any] | None = None) -> Any:
         """Recursively evaluate given term."""
@@ -171,4 +179,30 @@ class Tree(Generic[T]):
             if i == pos[0]:
                 return child.subtree_at(pos[1:])
         raise IndexError(f"Path {pos} is not valid for this tree")
+
+    def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
+        """Return replaced subtree at given position."""
+        if pos == ():
+            return tree
+
+        # validate pos by attempting to access the subtree once (avoids materializing all positions)
+        try:
+            _ = tree.subtree_at(pos) if pos != () else tree
+        except IndexError:
+            raise IndexError(f"Path {pos} is not valid for this tree")
+
+        new_tree = copy(self)
+
+        # traverse the path to the subtree to replace
+        current = new_tree
+        for i in pos[:-1]:
+            if i < 0 or i >= len(current.children):
+                raise ValueError(f"Invalid path.")
+            current = current.children[i]
+        # replace the subtree at the given path
+        insert = copy(tree)
+        current.children = tuple(current.children[:pos[-1]] + (insert,) + current.children[pos[-1] + 1:])
+        return new_tree
+
+
 
