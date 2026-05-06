@@ -5,7 +5,8 @@ const canvas_width = 960;
 const tree_width = canvas_width - margin.right - margin.left;
 const tree_height = canvas_height - margin.top - margin.bottom;
 const tree_level_depth = 180;
-const circle_radius = 25;
+const node_size = 25;
+const preview_node_size = 5;
 const transition_duration = 750;
 
 // ============ Global State ============
@@ -170,7 +171,10 @@ const tree = d3.layout.tree()
     .size([tree_height, tree_width]);
 
 const diagonal = d3.svg.diagonal()
-    .projection((d) => [d.y, d.x]);
+    .projection((d) => {
+        console.log("Diagonal projection:", d);
+        return [d.y, d.x];
+    });
 
 const realSvg = d3.select("body").append("svg")
     .attr("width", "100%")
@@ -181,6 +185,14 @@ const realSvg = d3.select("body").append("svg")
 const svgDefs = realSvg.append("defs");
 const svg = realSvg.append("g")
     .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+// ============ Pan and Zoom Setup ============
+const zoom = d3.behavior.zoom()
+    .on("zoom", () => {
+        svg.attr("transform", "translate(" + d3.event.translate + ")scale(" + d3.event.scale + ")");
+    });
+
+realSvg.call(zoom);
 
 // Load visualization data
 d3.json("./results.json", (error, data) => {
@@ -213,6 +225,15 @@ function filterParameterNodes(node) {
     return node;
 }
 
+function togglePreview(node) {
+    if (node.only_preview) {
+        node.only_preview = false;
+    }
+    else {
+        node.only_preview = true;
+    }
+}
+
 function loadResult(resultNum) {
     let resultData;
     try {
@@ -232,9 +253,14 @@ function loadResult(resultNum) {
     
     root.x0 = tree_height / 2;
     root.y0 = 0;
+    root.y = 0;
+    //console.log("Initial root:", root);
+    //console.log("root_y:", root.y);
 
     // Recursively collapse all children initially
     function collapse(d) {
+        d.collapsed = true;
+        d.only_preview = true;
         if (d.children) {
             d._children = d.children;
             d._children.forEach(collapse);
@@ -245,6 +271,8 @@ function loadResult(resultNum) {
     if (root.children) {
         root.children.forEach(collapse);
     }
+    root.collapsed = true;
+    root.only_preview = false;
     
     update(root);
     return true;
@@ -290,9 +318,10 @@ function update(source) {
         nodes = nodes.filter(d => d.is_combinator);
         links = links.filter(link => link.source.is_combinator && link.target.is_combinator);
     }
-
+    source.y = 0;
     // Normalize for fixed-depth
-    nodes.forEach((d) => { d.y = d.depth * tree_level_depth; });
+    nodes.forEach((d) => {d.y = (d.parent.y || 0) + 100 + d.val.length*10});
+    // { d.y = d.depth * tree_level_depth; console.log(d.parent)});
 
     // Set unique ID for each node
     const node = svg.selectAll("g.node")
@@ -301,7 +330,7 @@ function update(source) {
     // Enter any new nodes at the parent's previous position
     const newNodes = node.enter().append("g")
         .attr("class", "node")
-        .attr("transform", (d) => "translate(" + source.y0 + "," + source.x0 + ")")
+        .attr("transform", (d) => "translate(" + (d.parent ? d.parent.y0 : source.y0) + "," + (d.parent ? d.parent.x0 : source.x0) + ")")
         .on("click", click)
         .on("mouseover", function() {
             // Emphasize labels on hovered node
@@ -322,6 +351,7 @@ function update(source) {
             
             svg.select("g.node:hover").selectAll("text")
                 .style("display", (d, i) => {
+                    if (d.only_preview) return "none";
                     if (i === 0) return checkboxState.showValues ? "inline" : "none";
                     if (i === 1) return checkboxState.showParameters ? "inline" : "none";
                     if (i === 2) return checkboxState.showCombinatorNames ? "inline" : "none";
@@ -332,17 +362,25 @@ function update(source) {
             svg.selectAll("g.node").each(function(d) {
                 if (this !== d3.event.target && d3.event.target !== d3.event.relatedTarget) {
                     d3.select(this).select("text.value-text")
-                        .style("display", checkboxState.showValues ? "inline" : "none");
+                        .style("display", (d) => checkboxState.showValues && !d.only_preview ? "inline" : "none");
                     d3.select(this).select("text.parameter-text")
-                        .style("display", checkboxState.showParameters ? "inline" : "none");
+                        .style("display", (d) => checkboxState.showParameters && !d.only_preview ? "inline" : "none");
                     d3.select(this).select("text.combinator-text")
-                        .style("display", checkboxState.showCombinatorNames ? "inline" : "none");
+                        .style("display", (d) => checkboxState.showCombinatorNames && !d.only_preview ? "inline" : "none");
                 }
             });
         });
+    
 
+    node.each(function(d) {
+        d.x_pos = d.x;
+        if (d.only_preview && d.parent) {
+            d.x_pos -= (d.x - d.parent.x) * 0.8;
+        }
+    });
     // Add circle for combinators or rect for parameters
     newNodes.each(function(d) {
+        //console.log("Node5:", d);
         const nodeGroup = d3.select(this);
         if (d.is_combinator) {
             nodeGroup.append("circle")
@@ -355,10 +393,10 @@ function update(source) {
                 });
         } else {
             nodeGroup.append("rect")
-                .attr("x", -0.75 * circle_radius)
-                .attr("y", -0.75 * circle_radius)
-                .attr("width", 1.5 * circle_radius)
-                .attr("height", 1.5 * circle_radius)
+                .attr("x", 1e-5)
+                .attr("y", 1e-5)
+                .attr("width", 1e-5)
+                .attr("height", 1e-5)
                 .style("fill", "#a2a2a2")
                 .style("stroke", "#878787")
                 .style("stroke-width", 2);
@@ -368,16 +406,17 @@ function update(source) {
     // Add value label (left of node)
     newNodes.append("text")
         .attr("class", "value-text")
-        .attr("x", -1.1 * circle_radius)
+        .attr("x", -1.1 * node_size)
         .attr("dy", ".35em")
         .attr("text-anchor", "end")
+        .attr()
         .text((d) => d.val);
     
     // Add parameter label (above node)
     newNodes.append("text")
         .attr("class", "parameter-text")
         .attr("x", 0)
-        .attr("dy", -1.1 * circle_radius)
+        .attr("dy", -1.1 * node_size)
         .attr("text-anchor", "middle")
         .text((d) => d.parameter)
         .style("text-anchor", "middle");
@@ -386,54 +425,72 @@ function update(source) {
     newNodes.append("text")
         .attr("class", "combinator-text")
         .attr("x", 0)
-        .attr("dy", 1.3 * circle_radius)
+        .attr("dy", 1.3 * node_size)
         .attr("text-anchor", "middle")
         .text((d) => d.combinator)
 
+    // node.each(function(d) {
+    //     if (d.only_preview) {
+    //         d.selectAll("text").style("display", "none");
+    //     } else {
+    //         d3.select(this).select("text.value-text")
+    //             .style("display", checkboxState.showValues ? "inline" : "none");
+    //         d3.select(this).select("text.parameter-text")
+    //             .style("display", checkboxState.showParameters ? "inline" : "none");
+    //         d3.select(this).select("text.combinator-text")
+    //             .style("display", checkboxState.showCombinatorNames ? "inline" : "none");
+    //     }
+    // });
     // Reset stripe counter and add default stripes
     makeStripes("myStripes", ["green", "red"]);
     stripeIdCounter = 0;
     
     // Transition nodes to their new position
     const movedNode = node.transition().duration(transition_duration)
-        .attr("transform", (d) => "translate(" + d.y + "," + d.x + ")");
+        .attr("transform", (d) => "translate(" + d.y + "," + d.x_pos + ")");
     
     clearStripes();
     
     movedNode.select("circle")
-        .attr("r", circle_radius);
+        .attr("r", (d) => d.only_preview ? preview_node_size : node_size);
     
     movedNode.select("rect")
-        .attr("x", -0.75 * circle_radius)
-        .attr("y", -0.75 * circle_radius)
-        .attr("width", 1.5 * circle_radius)
-        .attr("height", 1.5 * circle_radius);
+        .attr("x", (d) =>  -0.75 * (d.only_preview ? preview_node_size : node_size))
+        .attr("y", (d) => -0.75 * (d.only_preview ? preview_node_size : node_size))
+        .attr("width", (d) => 1.5 * (d.only_preview ? preview_node_size : node_size))
+        .attr("height", (d) => 1.5 * (d.only_preview ? preview_node_size : node_size));
     
     movedNode.select("text.value-text")
-        .style("display", checkboxState.showValues ? "inline" : "None");
+        .style("display", (d) => checkboxState.showValues && !d.only_preview ? "inline" : "None");
     
     movedNode.select("text.parameter-text")
-        .style("display", checkboxState.showParameters ? "inline" : "None");
+        .style("display", (d) => checkboxState.showParameters && !d.only_preview ? "inline" : "None");
     
     movedNode.select("text.combinator-text")
-        .style("display", checkboxState.showCombinatorNames ? "inline" : "None");
+        .style("display", (d) => checkboxState.showCombinatorNames && !d.only_preview ? "inline" : "None");
 
     // Transition exiting nodes to the parent's new position
-    const hiddenNodes = node.exit().transition().duration(transition_duration)
-        .attr("transform", (d) => "translate(" + source.y + "," + source.x + ")")
-        .remove();
-    
-    hiddenNodes.select("circle")
+    const hiddenNodes = node.exit()
+        ;//.remove();
+
+    const fullyRemovedNodes = hiddenNodes.remove();
+    //const previewNodes = hiddenNodes.filter((d) => d.parent === source);
+    fullyRemovedNodes.select("circle")
         .attr("r", 1e-5);
     
-    hiddenNodes.select("rect")
+    fullyRemovedNodes.select("rect")
         .attr("x", 0)
         .attr("y", 0)
         .attr("width", 0)
         .attr("height", 0);
-    
-    hiddenNodes.selectAll("text")
-        .style("display", "none");
+    //console.log("previewNodes", previewNodes);
+    //previewNodes.selectAll("text").forEach((t) => console.log("text", t));
+    //previewNodes.transition().duration(transition_duration)
+    //    .attr("transform", (d) => "translate(" + (source.y + 50) + "," + d.x + ")")
+    //previewNodes.selectAll("text")
+    //    .style("display", "None").forEach((t) => console.log("text", t));
+    //previewNodes.select("text.value-text")
+    //    .attr("display", "none");
 
     // Update the links
     const link = svg.selectAll("path.link")
@@ -443,7 +500,7 @@ function update(source) {
     link.enter().insert("path", "g")
         .attr("class", "link")
         .attr("d", (d) => {
-            const o = { x: source.x0, y: source.y0 };
+            const o = { x: d.source.x0, y: d.source.y0 };
             return diagonal({ source: o, target: o });
         })
         .append("svg:title")
@@ -451,12 +508,18 @@ function update(source) {
 
     // Transition links to their new position
     link.transition().duration(transition_duration)
-        .attr("d", diagonal);
+        .attr("d", (d) => {
+            console.log("Link transition:", d);
+            const from = { x: d.source.x_pos, y: d.source.y };
+            const to = { x: d.target.x_pos, y: d.target.y };
+            const o = { x: d.x, y: d.y };
+            return diagonal({ source: from, target: to }); //{ x: d.x_pos, y: d.y });
+        });
 
     // Transition exiting links to the parent's new position
     link.exit().transition().duration(transition_duration)
         .attr("d", (d) => {
-            const o = { x: source.x, y: source.y };
+            const o = { x: source.x_pos, y: source.y };
             return diagonal({ source: o, target: o });
         })
         .remove();
@@ -469,12 +532,22 @@ function update(source) {
 }
 // Toggle children on click
 function click(d) {
-    if (d.children) {
-        d._children = d.children;
-        d.children = null;
+    if (d.only_preview)
+        return;
+    if (d.collapsed) {
+        d.collapsed = false;
+        for (c of d.children) {
+            c.only_preview = false;
+            c.children = c._children;
+            c._children = null;
+        }
     } else {
-        d.children = d._children;
-        d._children = null;
+        d.collapsed = true;
+        for (c of d.children) {
+            c.only_preview = true;
+            c._children = c.children;
+            c.children = null;
+        }
     }
     update(d);
 }
