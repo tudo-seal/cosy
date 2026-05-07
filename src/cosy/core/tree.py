@@ -22,6 +22,7 @@ class Tree(Generic[T]):
     size: int
     _hash: int
     _positions: set[Path] | None = None
+    _leaf_positions: set[Path] | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         self.root = root
@@ -158,10 +159,13 @@ class Tree(Generic[T]):
             result.add(path)
             for i, child in enumerate(current.children):
                 queue.append((child, path + (i,)))
+        self._positions = result
         return result
 
     def leaf_positions(self) -> set[Path]:
         """Return all leaf positions in the tree."""
+        if self._leaf_positions is not None:
+            return self._leaf_positions
         result: set[Path] = set()
         all_positions: set[Path] = self.positions()
         # leaf positions are all positions that are no prefix of another position
@@ -169,6 +173,7 @@ class Tree(Generic[T]):
         for pos in all_positions:
             if not any(pos != other and pos == other[: len(pos)] for other in all_positions):
                 result.add(pos)
+        self._leaf_positions = result
         return result
 
     def subtree_at(self, pos: Path) -> "Tree[T]":
@@ -177,7 +182,7 @@ class Tree(Generic[T]):
             return self
         for i, child in enumerate(self.children):
             if i == pos[0]:
-                return child.subtree_at(pos[1:])
+                return copy(child.subtree_at(pos[1:]))
         raise IndexError(f"Path {pos} is not valid for this tree")
 
     def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
@@ -187,7 +192,7 @@ class Tree(Generic[T]):
 
         # validate pos by attempting to access the subtree once (avoids materializing all positions)
         try:
-            _ = tree.subtree_at(pos) if pos != () else tree
+            _ = self.subtree_at(pos) if pos != () else tree
         except IndexError:
             raise IndexError(f"Path {pos} is not valid for this tree")
 

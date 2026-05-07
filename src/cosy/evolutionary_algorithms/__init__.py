@@ -24,32 +24,32 @@ Key Concepts:
 """
 
 # Core classes
-from src.cosy.evolutionary_algorithms.evolutionary import (
+from cosy.evolutionary_algorithms.evolutionary import (
     Evolutionary,
     SimpleGeneticProgramming,
     EAState,
 )
 
 # Initialization
-from src.cosy.evolutionary_algorithms.initialisation import (
+from cosy.evolutionary_algorithms.initialisation import (
     Initialization,
     RandomLimitedDepthFirstInitialization,
 )
 
 # Mutation
-from src.cosy.evolutionary_algorithms.mutation import (
+from cosy.evolutionary_algorithms.mutation import (
     Mutation,
     ResolutionMutation,
 )
 
 # Recombination
-from src.cosy.evolutionary_algorithms.recombination import (
+from cosy.evolutionary_algorithms.recombination import (
     Recombination,
     Crossover,
 )
 
 # Selection
-from src.cosy.evolutionary_algorithms.selection import (
+from cosy.evolutionary_algorithms.selection import (
     Selection,
     TournamentSelection,
     FitnessProportionalSelection,
@@ -59,7 +59,7 @@ from src.cosy.evolutionary_algorithms.selection import (
 )
 
 # Fitness
-from src.cosy.evolutionary_algorithms.fitness import (
+from cosy.evolutionary_algorithms.fitness import (
     Fitness,
     FitnessComparator,
     ScalarFitnessComparator,

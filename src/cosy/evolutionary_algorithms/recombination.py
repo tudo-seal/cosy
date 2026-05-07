@@ -11,14 +11,15 @@ from typing import Generic, TypeVar
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
 
-from src.cosy.core.tree import Tree
-from src.cosy.core.solution_space import SolutionSpace
+from cosy.core.tree import Tree
+from cosy.core.solution_space import SolutionSpace
 from itertools import product
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
 G = TypeVar("G", bound=Hashable)  # type of constants
 
+Path = tuple[int, ...]
 
 class Recombination(ABC, Generic[NT, T, G]):
     """Abstract base class for recombination (crossover) operators.
@@ -32,15 +33,17 @@ class Recombination(ABC, Generic[NT, T, G]):
         G: Type of constants/ground symbols
     """
 
-    def __init__(self, solution_space: SolutionSpace[NT, T, G], start: NT):
+    def __init__(self, solution_space: SolutionSpace[NT, T, G], start: NT, max_depth: int | None = None):
         """Initialize the recombination operator.
         
         Args:
             solution_space: The search space that defines valid individuals.
             start: The start non-terminal for generating new individuals.
+            max_depth: The maximum depth of the trees in the search space.
         """
         self.solution_space = solution_space
         self.start = start
+        self.max_depth = max_depth
 
     @abstractmethod
     def recombine(self, primary: Tree[T], secondary: Tree[T]) -> list[Tree[T]]:
@@ -68,6 +71,22 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         T: Type of terminals in the grammar/search space
         G: Type of constants/ground symbols
     """
+
+    def maximum_leaf_length(self, leaf_positions: set[Path], position: Path) -> int:
+        """Calculate the maximum leaf length for a given position in the tree.
+
+        This is used to ensure that when swapping subtrees, the resulting offspring
+        do not exceed the maximum depth constraint. The maximum leaf length is
+        determined by the distance from the position to the nearest leaf in the tree.
+
+        Args:
+            leaf_positions: A list of paths to leaf nodes in the tree.
+            position: The path to the current position being evaluated.
+
+        Returns:
+            The maximum allowed depth for a subtree at the given position.
+        """
+        return max(len(leaf) - len(position) for leaf in leaf_positions if leaf[:len(position)] == position)
 
     def recombine(self, primary: Tree[T], secondary: Tree[T]) -> list[Tree[T]]:
         """Exchange subtrees at randomly selected crossover points.
@@ -105,12 +124,27 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         if not secondary_positions:
             return []
 
+        random.shuffle(primary_positions)
+        random.shuffle(secondary_positions)
+
         # Generate all possible crossover point pairs
-        possible_recombination_points = list(product(primary_positions, secondary_positions))
+        possible_recombination_points = product(primary_positions, secondary_positions)
+        iterator = iter(possible_recombination_points)
 
         # Try a random crossover point pair
-        primary_crossover_point, secondary_crossover_point = random.choice(possible_recombination_points)
-        possible_recombination_points.remove((primary_crossover_point, secondary_crossover_point))
+        #primary_crossover_point, secondary_crossover_point = possible_recombination_points.
+        #possible_recombination_points.remove((primary_crossover_point, secondary_crossover_point))
+        try:
+            primary_crossover_point, secondary_crossover_point = next(iterator)
+            primary_max_depth = self.maximum_leaf_length(primary.leaf_positions(), primary_crossover_point)
+            secondary_max_depth = self.maximum_leaf_length(secondary.leaf_positions(), secondary_crossover_point)
+            if self.max_depth is not None:
+                while (len(primary_crossover_point) + secondary_max_depth > self.max_depth or
+                       len(secondary_crossover_point) + primary_max_depth > self.max_depth):
+                    primary_crossover_point, secondary_crossover_point = next(iterator)
+        except StopIteration:
+            return []
+
 
         # Extract subtrees at crossover points
         primary_subtree = primary.subtree_at(primary_crossover_point)
@@ -129,8 +163,16 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         while (not self.solution_space.contains_tree(self.start, primary_child)
                and not self.solution_space.contains_tree(self.start, secondary_child)
                and primary_positions and secondary_positions):
-            primary_crossover_point, secondary_crossover_point = random.choice(possible_recombination_points)
-            possible_recombination_points.remove((primary_crossover_point, secondary_crossover_point))
+            try:
+                primary_crossover_point, secondary_crossover_point = next(iterator)
+                primary_max_depth = self.maximum_leaf_length(primary.leaf_positions(), primary_crossover_point)
+                secondary_max_depth = self.maximum_leaf_length(secondary.leaf_positions(), secondary_crossover_point)
+                if self.max_depth is not None:
+                    while len(primary_crossover_point) + secondary_max_depth > self.max_depth or len(
+                            secondary_crossover_point) + primary_max_depth > self.max_depth:
+                        primary_crossover_point, secondary_crossover_point = next(iterator)
+            except StopIteration:
+                break
 
             primary_subtree = primary.subtree_at(primary_crossover_point)
             secondary_subtree = secondary.subtree_at(secondary_crossover_point)

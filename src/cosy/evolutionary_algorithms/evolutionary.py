@@ -13,14 +13,14 @@ from typing import Generic, TypeVar
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterable
 
-from src.cosy.core.tree import Tree
-from src.cosy.core.solution_space import SolutionSpace
+from cosy.core.tree import Tree
+from cosy.core.solution_space import SolutionSpace
 
-from src.cosy.evolutionary_algorithms.mutation import Mutation
-from src.cosy.evolutionary_algorithms.recombination import Recombination
-from src.cosy.evolutionary_algorithms.selection import Selection
-from src.cosy.evolutionary_algorithms.initialisation import Initialization
-from src.cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator, ScalarFitnessComparator
+from cosy.evolutionary_algorithms.mutation import Mutation
+from cosy.evolutionary_algorithms.recombination import Recombination
+from cosy.evolutionary_algorithms.selection import Selection
+from cosy.evolutionary_algorithms.initialisation import Initialization
+from cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator, ScalarFitnessComparator
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
@@ -125,6 +125,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         last_state: EAState[T] | None = None
         for state in self.evolutionary_stream(fitness_function, population_size, mutation_rate, recombination_rate):
             last_state = state
+            print(f"Generation {state.generation}")
         if last_state is None:
             return []
         return sorted(
@@ -401,7 +402,7 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
             # Combine elites with selected survivors
             population = elites + selected
             population_fitness = {
-                tree: candidate_fitness[tree] for tree in population if tree in candidate_fitness
+                tree: candidate_fitness[tree] if tree in candidate_fitness else population_fitness[tree] for tree in population
             }
             population_ages = {tree: candidate_ages.get(tree, previous_ages.get(tree, 0) + 1) for tree in population}
             generation += 1

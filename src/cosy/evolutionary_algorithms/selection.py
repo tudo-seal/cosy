@@ -14,8 +14,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Hashable, Iterable, Sequence, Mapping
 from typing import Generic, TypeVar
 
-from src.cosy.core.tree import Tree
-from src.cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator
+from cosy.core.tree import Tree
+from cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals

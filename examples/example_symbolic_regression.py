@@ -1,12 +1,12 @@
-from src.cosy.core.tree import Tree
-from src.cosy.core.types import Group, DataGroup
-from src.cosy.core import SpecificationBuilder, Synthesizer, Constructor, Literal, Var
-from src.cosy.evolutionary_algorithms.evolutionary import SimpleGeneticProgramming, EAState
-from src.cosy.evolutionary_algorithms.selection import FitnessProportionalSelection, FitnessBasedReplacement
-from src.cosy.evolutionary_algorithms.initialisation import RandomLimitedDepthFirstInitialization
-from src.cosy.evolutionary_algorithms.mutation import ResolutionMutation
-from src.cosy.evolutionary_algorithms.recombination import Crossover
-from src.cosy.evolutionary_algorithms.fitness import ScalarFitnessComparator
+from cosy.core.tree import Tree
+from cosy.core.types import Group, DataGroup
+from cosy.core import SpecificationBuilder, Synthesizer, Constructor, Literal, Var
+from cosy.evolutionary_algorithms.evolutionary import SimpleGeneticProgramming, EAState
+from cosy.evolutionary_algorithms.selection import FitnessProportionalSelection, FitnessBasedReplacement, TournamentSelection, AgeBasedReplacement, RankBasedSelection
+from cosy.evolutionary_algorithms.initialisation import RandomLimitedDepthFirstInitialization
+from cosy.evolutionary_algorithms.mutation import ResolutionMutation
+from cosy.evolutionary_algorithms.recombination import Crossover
+from cosy.evolutionary_algorithms.fitness import ScalarFitnessComparator
 
 from math import sin, cos, log, exp
 import time
@@ -28,61 +28,54 @@ class Symbolic_Regression:
         return {
             "Const": SpecificationBuilder()
             .parameter("c", constant)
-            .suffix(Constructor("EXP", Constructor("depth", Literal(0)) & Constructor("depth", Literal(None)))),
+            .suffix(Constructor("EXP", Constructor("depth", Literal(0)) & Constructor("depth", Literal(None)))
+                    & Constructor("Value")),
 
             "Var": SpecificationBuilder()
             .parameter("v", variable)
-            .suffix(Constructor("EXP", Constructor("depth", Literal(0)) & Constructor("depth", Literal(None)))),
+            .suffix(Constructor("EXP", Constructor("depth", Literal(0)) & Constructor("depth", Literal(None)))
+                    & Constructor("Value")),
 
             "(+)": SpecificationBuilder()
-            .parameter("d", depth)
             .parameter("d1", depth)
-            .parameter("d2", depth, lambda v: [v["d"] - 1 - v["d1"]])
+            .parameter("d2", depth)
+            .parameter("d", depth, lambda v: [max(v["d1"], v["d2"]) + 1])
             .argument("left", Constructor("EXP", Constructor("depth", Var("d1"))))
             .argument("right", Constructor("EXP", Constructor("depth", Var("d2"))))
-            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))),
+            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))
+                    & Constructor("Non-Value")),
 
             "(-)": SpecificationBuilder()
-            .parameter("d", depth)
             .parameter("d1", depth)
-            .parameter("d2", depth, lambda v: [v["d"] - 1 - v["d1"]])
+            .parameter("d2", depth)
+            .parameter("d", depth, lambda v: [max(v["d1"], v["d2"]) + 1])
             .argument("left", Constructor("EXP", Constructor("depth", Var("d1"))))
             .argument("right", Constructor("EXP", Constructor("depth", Var("d2"))))
-            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))),
+            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))
+                    & Constructor("Non-Value")),
 
             "(*)": SpecificationBuilder()
-            .parameter("d", depth)
             .parameter("d1", depth)
-            .parameter("d2", depth, lambda v: [v["d"] - 1 - v["d1"]])
+            .parameter("d2", depth)
+            .parameter("d", depth, lambda v: [max(v["d1"], v["d2"]) + 1])
             .argument("left", Constructor("EXP", Constructor("depth", Var("d1"))))
             .argument("right", Constructor("EXP", Constructor("depth", Var("d2"))))
-            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))),
-
-            "(/)": SpecificationBuilder()
-            .parameter("d", depth)
-            .parameter("d1", depth)
-            .parameter("d2", depth, lambda v: [v["d"] - 1 - v["d1"]])
-            .argument("left", Constructor("EXP", Constructor("depth", Var("d1"))))
-            .argument("right", Constructor("EXP", Constructor("depth", Var("d2"))))
-            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))),
+            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))
+                    & Constructor("Non-Value")),
 
             "sin": SpecificationBuilder()
             .parameter("d", depth)
             .parameter("d1", depth, lambda v: [v["d"] - 1])
             .argument("arg", Constructor("EXP", Constructor("depth", Var("d1"))))
-            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))),
+            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))
+                    & Constructor("Non-Value")),
 
             "cos": SpecificationBuilder()
             .parameter("d", depth)
             .parameter("d1", depth, lambda v: [v["d"] - 1])
             .argument("arg", Constructor("EXP", Constructor("depth", Var("d1"))))
-            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))),
-
-            "log": SpecificationBuilder()
-            .parameter("d", depth)
-            .parameter("d1", depth, lambda v: [v["d"] - 1])
-            .argument("arg", Constructor("EXP", Constructor("depth", Var("d1"))))
-            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))),
+            .suffix(Constructor("EXP", Constructor("depth", Var("d")) & Constructor("depth", Literal(None)))
+                    & Constructor("Non-Value")),
         }
 
     def pretty_term_algebra(self):
@@ -97,13 +90,10 @@ class Symbolic_Regression:
 
             "(*)": lambda d, d1, d2, l, r: f"({l} * {r})",
 
-            "(/)": lambda d, d1, d2, l, r: f"({l} / {r})",
-
             "sin": lambda d, d1, arg: f"sin({arg})",
 
             "cos": lambda d, d1, arg: f"cos({arg})",
 
-            "log": lambda d, d1, arg: f"log({arg})",
 
         }
 
@@ -119,20 +109,17 @@ class Symbolic_Regression:
 
             "(*)": lambda d, d1, d2, l, r, x: l(x) * r(x),
 
-            "(/)": lambda d, d1, d2, l, r, x: l(x) / r(x),
-
             "sin": lambda d, d1, arg, x: sin(arg(x)),
 
             "cos": lambda d, d1, arg, x: cos(arg(x)),
-
-            "log": lambda d, d1, arg, x: log(arg(x)),
         }
 
 
 if __name__ == "__main__":
 
-    def target_function(x : float) -> float:
-        return 2.5382 * sin(1.2345 * x) + (0.1234 * (x ** 2) - 0.5678)
+    def target_function(x: float) -> float:
+        #return 2.5382 * sin(1.2345 * x) + (0.1234 * (x ** 2) - 0.5678)
+        return 2.5382 * x**3 + 1.2345 * x**2 - 0.5678
 
     train_data_size = 100
     test_data_size = 100
@@ -157,12 +144,9 @@ if __name__ == "__main__":
 
     constants = [2.5382, 1.2345, 0.1234, 0.5678]
 
-    for _ in range(5):
-        constants.append(random.uniform(0.0, 10.0))
-
     repo = Symbolic_Regression(max_depth=6, variables=["x"], constants=constants)
 
-    target = Constructor("EXP", Constructor("depth", Literal(None)))
+    target = Constructor("EXP", Constructor("depth", Literal(None))) & Constructor("Non-Value")
     synthesizer = Synthesizer(repo.specification(), {})
 
     start_time = time.time()
@@ -171,36 +155,40 @@ if __name__ == "__main__":
 
     print(f"SolutionSpace construction took {end_time - start_time:.5f} seconds.")
 
+    SIZE_PENALTY_COEFF = 0.1
+
     def mean_squared_error(y_true: list[float], y_pred: list[float]) -> float:
         return sum((yt - yp) ** 2 for yt, yp in zip(y_true, y_pred)) / len(y_true)
 
     def fitness_function(tree: Tree[str]) -> float:
         substitute_in_tree = tree.interpret(repo.substitution_algebra())
         y_pred = [substitute_in_tree({"x": x}) for x in X_train]
-        return mean_squared_error(y_train, y_pred)
+        mse = mean_squared_error(y_train, y_pred)
+        #mse += SIZE_PENALTY_COEFF * tree.size
+        return mse
 
     def test_function(tree: Tree[str]) -> float:
         substitute_in_tree = tree.interpret(repo.substitution_algebra())
         y_pred = [substitute_in_tree({"x": x}) for x in X_test]
         return mean_squared_error(y_test, y_pred)
 
-    max_generations = 50
+    max_generations = 200
 
     def termination(state: EAState[str]) -> bool:
         return state.generation >= max_generations
 
-    initialization = RandomLimitedDepthFirstInitialization(solution_space, target, 7)
-    mutation = ResolutionMutation(solution_space, target, 7)
-    recombination = Crossover(solution_space, target)
+    initialization = RandomLimitedDepthFirstInitialization(solution_space, target, 6)
+    mutation = ResolutionMutation(solution_space, target, 6)
+    recombination = Crossover(solution_space, target, 6)
     parent_selection = FitnessProportionalSelection()
     survivor_selection = FitnessBasedReplacement()
-    fitness_comparator = ScalarFitnessComparator(False) # minimize MSE
+    fitness_comparator = ScalarFitnessComparator(False)  # minimize MSE
 
     gp = SimpleGeneticProgramming(solution_space, target, termination, initialization, mutation, recombination,
                                   parent_selection, survivor_selection, fitness_comparator)
 
     start_time = time.time()
-    best_tree = gp.evolutionary_best(fitness_function, 200, 0.05, 0.9)
+    best_tree = gp.evolutionary_best(fitness_function, 250, 0.1, 0.9)
     end_time = time.time()
 
     print(f"Symbolic Regression took {end_time - start_time:.5f} seconds.")
@@ -208,4 +196,5 @@ if __name__ == "__main__":
     print(f"Best solution: {best_tree.interpret(repo.pretty_term_algebra())}")
     print(f"Train MSE: {fitness_function(best_tree):.5f}")
     print(f"Test MSE: {test_function(best_tree):.5f}")
+    #print(f"With size penalty: {SIZE_PENALTY_COEFF:.5f}")
 

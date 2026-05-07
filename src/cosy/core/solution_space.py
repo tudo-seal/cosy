@@ -581,11 +581,13 @@ class SolutionSpace(Generic[NT, T, G]):
                 if child_pos == pos:
                     if self._is_goal_for_position(goal, pos, is_pos_leaf):
                         yield goal
+                        return  # one goal is enough ??!!!
                     continue
                 next_goals = self._expand_goal_at(goal, child_pos, tree)
                 for ng in next_goals:
                     if self._is_goal_for_position(ng, pos, is_pos_leaf):
                         yield ng
+                        return  # one goal is enough ??!!!
                     else:
                         pending_goals.append(ng)
         return
@@ -664,7 +666,7 @@ class SolutionSpace(Generic[NT, T, G]):
         else:
             goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
         # yield all solutions for already successful initial goals
-        goals = list(goals)
+        #goals = list(goals)
         non_successful_goals = []
         for goal in goals:
             if goal is not None:
@@ -752,6 +754,9 @@ class SolutionSpace(Generic[NT, T, G]):
         max_depth is None, as it may get stuck in an infinite branch of the SLD-Derivation-Tree.
         Additionally the user has to ensure that the solution space is not empty, as an empty solution space can lead
         to nontermination as well.
+
+        TODO: Because resolution directly returns all successful goals after the first derivation step without pushing
+              goals to the stack, this method currently doens't work with requests, were depth 0 terms are allowed!
         """
         def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
             goals = list(new_goals)
