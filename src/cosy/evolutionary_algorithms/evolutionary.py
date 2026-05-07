@@ -110,7 +110,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         pass
 
     def evolutionary_last_generation(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                                     mutation_rate: float, recombination_rate: float) -> list[Tree[T]]:
+                                     mutation_rate: float, recombination_rate: float, verbose: bool = False) -> list[Tree[T]]:
         """Return the final generation, sorted by fitness (best first).
         
         Args:
@@ -118,6 +118,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
+            verbose: Print generation numbers during the run if True (default: False).
         
         Returns:
             A list of individuals from the final generation, sorted by fitness (best first).
@@ -125,7 +126,8 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         last_state: EAState[T] | None = None
         for state in self.evolutionary_stream(fitness_function, population_size, mutation_rate, recombination_rate):
             last_state = state
-            print(f"Generation {state.generation}")
+            if verbose:
+                print(f"Generation {state.generation}")
         if last_state is None:
             return []
         return sorted(
@@ -135,7 +137,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         )
 
     def evolutionary_best(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                          mutation_rate: float, recombination_rate: float) -> Tree[T] | None:
+                          mutation_rate: float, recombination_rate: float, verbose: bool = False) -> Tree[T] | None:
         """Return the best individual from the final generation, if any.
         
         Args:
@@ -143,17 +145,18 @@ class Evolutionary(ABC, Generic[NT, T, G]):
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
+            verbose: Print generation numbers during the run if True (default: False).
         
         Returns:
             The best individual from the final generation, or None if no individuals were generated.
         """
         last_generation = self.evolutionary_last_generation(
-            fitness_function, population_size, mutation_rate, recombination_rate
+            fitness_function, population_size, mutation_rate, recombination_rate, verbose
         )
         return last_generation[0] if last_generation else None
 
     def evolutionary_search(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                            mutation_rate: float, recombination_rate: float) -> Iterable[Tree[T]]:
+                            mutation_rate: float, recombination_rate: float, verbose: bool = False) -> Iterable[Tree[T]]:
         """Backward-compatible alias for returning the final generation.
         
         Args:
@@ -161,12 +164,13 @@ class Evolutionary(ABC, Generic[NT, T, G]):
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
+            verbose: Print generation numbers during the run if True (default: False).
         
         Returns:
             An iterable of individuals from the final generation, sorted by fitness (best first).
         """
         return self.evolutionary_last_generation(
-            fitness_function, population_size, mutation_rate, recombination_rate
+            fitness_function, population_size, mutation_rate, recombination_rate, verbose
         )
 
 

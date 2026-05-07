@@ -80,9 +80,9 @@ class Symbolic_Regression:
 
     def pretty_term_algebra(self):
         return {
-            "Const": lambda c: f"Constant({c})",
+            "Const": lambda c: f"{c}",
 
-            "Var": lambda v: f"Variable({v})",
+            "Var": lambda v: f"{v}",
 
             "(+)": lambda d, d1, d2, l, r: f"({l} + {r})",
 
@@ -181,14 +181,14 @@ if __name__ == "__main__":
     mutation = ResolutionMutation(solution_space, target, 6)
     recombination = Crossover(solution_space, target, 6)
     parent_selection = FitnessProportionalSelection()
-    survivor_selection = FitnessBasedReplacement()
+    survivor_selection = AgeBasedReplacement()
     fitness_comparator = ScalarFitnessComparator(False)  # minimize MSE
 
     gp = SimpleGeneticProgramming(solution_space, target, termination, initialization, mutation, recombination,
                                   parent_selection, survivor_selection, fitness_comparator)
 
     start_time = time.time()
-    best_tree = gp.evolutionary_best(fitness_function, 250, 0.1, 0.9)
+    best_tree = gp.evolutionary_best(fitness_function, 250, 0.1, 0.9, verbose=True)
     end_time = time.time()
 
     print(f"Symbolic Regression took {end_time - start_time:.5f} seconds.")
