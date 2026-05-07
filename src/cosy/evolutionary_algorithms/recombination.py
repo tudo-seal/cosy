@@ -5,6 +5,7 @@ from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 
 from src.cosy.core.tree import Tree
 from src.cosy.core.solution_space import SolutionSpace
+from itertools import product
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
@@ -39,10 +40,10 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         if not secondary_positions:
             return []
 
-        primary_crossover_point = random.choice(primary_positions)
-        primary_positions.remove(primary_crossover_point)
-        secondary_crossover_point = random.choice(secondary_positions)
-        secondary_positions.remove(secondary_crossover_point)
+        possible_recombination_points = list(product(primary_positions, secondary_positions))
+
+        primary_crossover_point, secondary_crossover_point = random.choice(possible_recombination_points)
+        possible_recombination_points.remove((primary_crossover_point, secondary_crossover_point))
 
         primary_subtree = primary.subtree_at(primary_crossover_point)
         secondary_subtree = secondary.subtree_at(secondary_crossover_point)
@@ -57,10 +58,8 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         while (not self.solution_space.contains_tree(self.start, primary_child)
                and not self.solution_space.contains_tree(self.start, secondary_child)
                and primary_positions and secondary_positions):
-            primary_crossover_point = random.choice(primary_positions)
-            primary_positions.remove(primary_crossover_point)
-            secondary_crossover_point = random.choice(secondary_positions)
-            secondary_positions.remove(secondary_crossover_point)
+            primary_crossover_point, secondary_crossover_point = random.choice(possible_recombination_points)
+            possible_recombination_points.remove((primary_crossover_point, secondary_crossover_point))
 
             primary_subtree = primary.subtree_at(primary_crossover_point)
             secondary_subtree = secondary.subtree_at(secondary_crossover_point)
