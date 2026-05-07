@@ -1,7 +1,14 @@
-import random
+"""
+Population initialization strategies for evolutionary algorithms.
+
+This module provides components for creating initial populations of candidate solutions.
+Different initialization strategies can significantly impact the quality and diversity
+of the initial population and thus the overall search performance.
+"""
+
 from typing import Generic, TypeVar
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Hashable, Iterable
 
 from src.cosy.core.tree import Tree
 from src.cosy.core.solution_space import SolutionSpace
@@ -12,23 +19,74 @@ G = TypeVar("G", bound=Hashable)  # type of constants
 
 
 class Initialization(ABC, Generic[NT, T, G]):
+    """Abstract base class for population initialization strategies.
+    
+    Subclasses must implement the initialize_population method to generate
+    valid individuals according to their specific strategy.
+    
+    Type Parameters:
+        NT: Type of non-terminals in the grammar/search space
+        T: Type of terminals in the grammar/search space
+        G: Type of constants/ground symbols
+    """
 
     def __init__(self, solution_space: SolutionSpace[NT, T, G], start: NT):
+        """Initialize the strategy with a search space and start symbol.
+        
+        Args:
+            solution_space: The search space that defines valid individuals.
+            start: The start non-terminal for generating individuals.
+        """
         self.solution_space = solution_space
         self.start = start
 
     @abstractmethod
     def initialize_population(self, population_size: int) -> Iterable[Tree[T]]:
+        """Generate an initial population of candidate solutions.
+        
+        Args:
+            population_size: The desired size of the population.
+        
+        Yields:
+            Valid individuals (Tree objects) from the search space.
+        """
         pass
 
 
 class RandomLimitedDepthFirstInitialization(Initialization[NT, T, G], Generic[NT, T, G]):
+    """Initialize population with random trees limited to a maximum depth.
+    
+    This strategy generates individuals using the solution space's sampling method,
+    constraining the maximum depth to ensure reasonable computational complexity
+    and control tree size.
+    
+    Type Parameters:
+        NT: Type of non-terminals in the grammar/search space
+        T: Type of terminals in the grammar/search space
+        G: Type of constants/ground symbols
+    """
 
     def __init__(self, solution_space: SolutionSpace[NT, T, G], start: NT, max_depth: int):
+        """Initialize the random limited-depth initialization strategy.
+        
+        Args:
+            solution_space: The search space that defines valid individuals.
+            start: The start non-terminal for generating individuals.
+            max_depth: Maximum tree depth for generated individuals.
+        """
         super().__init__(solution_space, start)
         self.max_depth = max_depth
 
     def initialize_population(self, population_size: int) -> Iterable[Tree[T]]:
+        """Generate population_size random individuals with limited depth.
+        
+        Args:
+            population_size: The desired population size.
+        
+        Yields:
+            Valid Tree individuals sampled from the solution space,
+            or skips None results from failed sampling attempts.
+        """
         for _ in range(population_size):
             tree = self.solution_space.sample_tree(self.start, self.max_depth)
             if tree is not None:

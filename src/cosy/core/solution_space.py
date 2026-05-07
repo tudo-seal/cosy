@@ -742,7 +742,7 @@ class SolutionSpace(Generic[NT, T, G]):
                                max_count, max_depth, tree, pos)
 
     def sample_tree(self, start: NT,
-                    max_depth: int = None,
+                    max_depth: int | None = None,
                     tree: Tree[T] | None = None,
                     pos: Path | None = None,) -> Tree[T] | None:
         """
@@ -768,7 +768,8 @@ class SolutionSpace(Generic[NT, T, G]):
             return random.choice(filtered)
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        trees: Iterable[Tree[T]] = self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy,
+        trees: Iterable[Tree[T]] = self.resolution(start, variance_strategy_push, variance_strategy_pop,
+                                                   goal_selection_strategy,
                                                    max_depth=max_depth, tree=tree, pos=pos)
 
         try:
