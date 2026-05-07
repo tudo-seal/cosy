@@ -289,10 +289,12 @@ function makeStripes(id, colors) {
 
     const grad = svgDefs.append("linearGradient")
         .attr("id", id)
-        .attr("spreadMethod", "repeat")
-        .attr("x2", "30")
-        .attr("gradientUnits", "userSpaceOnUse")
-        .attr("gradientTransform", "rotate(-45)");
+        .attr("spreadMethod", "pad")
+        .attr("x1", "0%")
+        .attr("y1", "100%")
+        .attr("x2", "100%")
+        .attr("y2", "0%")
+        .attr("gradientUnits", "objectBoundingBox");
     
     colors.forEach((color) => {
         grad.append("stop")
@@ -442,14 +444,14 @@ function update(source) {
     //     }
     // });
     // Reset stripe counter and add default stripes
-    makeStripes("myStripes", ["green", "red"]);
+    // makeStripes("myStripes", ["green", "red"]);
     stripeIdCounter = 0;
+    clearStripes();
+    
     
     // Transition nodes to their new position
     const movedNode = node.transition().duration(transition_duration)
         .attr("transform", (d) => "translate(" + d.y + "," + d.x_pos + ")");
-    
-    clearStripes();
     
     movedNode.select("circle")
         .attr("r", (d) => d.only_preview ? preview_node_size : node_size);
