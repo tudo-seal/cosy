@@ -27,11 +27,6 @@ class Recombination(ABC, Generic[NT, T, G]):
 
     Recombination operators combine two parent individuals to create offspring.
     Subclasses implement specific crossover strategies by implementing the recombine method.
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def __init__(
@@ -72,11 +67,6 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
     This operator performs standard genetic programming crossover by swapping
     random subtrees between two parents. The crossover points are selected from
     non-leaf positions to ensure meaningful recombination.
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def maximum_leaf_length(self, leaf_positions: set[Path], position: Path) -> int:

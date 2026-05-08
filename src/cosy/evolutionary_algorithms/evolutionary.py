@@ -51,11 +51,6 @@ class Evolutionary(ABC, Generic[NT, T, G]):
 
     This class defines the interface for evolutionary algorithms composed from reusable components.
     Subclasses implement specific evolutionary strategies by defining the evolutionary_stream method.
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def __init__(
@@ -213,11 +208,6 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
     - Fitness caching: Avoids recomputing fitness for identical individuals
     - Robustness: Retries variation operators multiple times if they produce invalid individuals
     - Age tracking: Maintains individual age for diversity-aware selection
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def __init__(

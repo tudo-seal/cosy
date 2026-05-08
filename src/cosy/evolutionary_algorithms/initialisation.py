@@ -24,11 +24,6 @@ class Initialization(ABC, Generic[NT, T, G]):
 
     Subclasses must implement the initialize_population method to generate
     valid individuals according to their specific strategy.
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def __init__(self, solution_space: SolutionSpace[NT, T, G], start: NT, rng: random.Random | None = None):
@@ -60,11 +55,6 @@ class RandomLimitedDepthFirstInitialization(Initialization[NT, T, G], Generic[NT
     This strategy generates individuals using the solution space's sampling method,
     constraining the maximum depth to ensure reasonable computational complexity
     and control tree size.
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def __init__(

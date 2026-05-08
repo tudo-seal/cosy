@@ -23,11 +23,6 @@ class Mutation(ABC, Generic[NT, T, G]):
 
     Mutation operators transform individuals by modifying their structure.
     Subclasses implement specific mutation strategies by implementing the mutate method.
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def __init__(
@@ -70,11 +65,6 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
     at that position with a newly generated subtree, thus modifying the tree structure.
     The new subtree is generated respecting the search space constraints and optional
     depth limits.
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     def mutate(self, tree: Tree[T]) -> list[Tree[T]]:

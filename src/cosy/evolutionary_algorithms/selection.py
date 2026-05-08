@@ -28,11 +28,6 @@ class Selection(ABC, Generic[NT, T, G]):
     Selection operators are responsible for choosing individuals from a population.
     They can be used for parent selection (producing a mating pool) or
     survivor selection (choosing individuals for the next generation).
-
-    Type Parameters:
-        NT: Type of non-terminals in the grammar/search space
-        T: Type of terminals in the grammar/search space
-        G: Type of constants/ground symbols
     """
 
     @abstractmethod
