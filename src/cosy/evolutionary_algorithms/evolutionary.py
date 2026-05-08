@@ -8,19 +8,19 @@ individuals in the population.
 """
 
 import random
-from dataclasses import dataclass
-from typing import Generic, TypeVar
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterable
+from dataclasses import dataclass
+from typing import Generic, TypeVar
 
-from cosy.core.tree import Tree
 from cosy.core.solution_space import SolutionSpace
-
+from cosy.core.tree import Tree
+from cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator, ScalarFitnessComparator
+from cosy.evolutionary_algorithms.initialisation import Initialization
 from cosy.evolutionary_algorithms.mutation import Mutation
 from cosy.evolutionary_algorithms.recombination import Recombination
 from cosy.evolutionary_algorithms.selection import Selection
-from cosy.evolutionary_algorithms.initialisation import Initialization
-from cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator, ScalarFitnessComparator
+from cosy.rng.factory import RNGFactory
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
@@ -30,7 +30,7 @@ G = TypeVar("G", bound=Hashable)  # type of constants
 @dataclass
 class EAState(Generic[T]):
     """Snapshot of one generation in an evolutionary run.
-    
+
     Attributes:
         generation: The generation number (starts at 0).
         population: The current population of individuals (Tree objects).
@@ -38,6 +38,7 @@ class EAState(Generic[T]):
         offspring: The individuals created in this generation through variation.
         ages: Mapping from individuals to their age (generations alive).
     """
+
     generation: int
     population: list[Tree[T]]
     fitness: dict[Tree[T], Fitness]
@@ -47,28 +48,31 @@ class EAState(Generic[T]):
 
 class Evolutionary(ABC, Generic[NT, T, G]):
     """Abstract base class for component-oriented evolutionary algorithms.
-    
+
     This class defines the interface for evolutionary algorithms composed from reusable components.
     Subclasses implement specific evolutionary strategies by defining the evolutionary_stream method.
-    
+
     Type Parameters:
         NT: Type of non-terminals in the grammar/search space
         T: Type of terminals in the grammar/search space
         G: Type of constants/ground symbols
     """
 
-    def __init__(self, solution_space: SolutionSpace[NT, T, G], start: NT,
-                 termination_condition: Callable[[EAState[T]], bool],
-                 initialization: Initialization[NT, T, G],
-                 mutation: Mutation[NT, T, G],
-                 recombination: Recombination[NT, T, G],
-                 parent_selection: Selection[NT, T, G],
-                 survivor_selection: Selection[NT, T, G],
-                 fitness_comparator: FitnessComparator = ScalarFitnessComparator(),
-                 rng: random.Random | None = None,
-                 ):
+    def __init__(
+        self,
+        solution_space: SolutionSpace[NT, T, G],
+        start: NT,
+        termination_condition: Callable[[EAState[T]], bool],
+        initialization: Initialization[NT, T, G],
+        mutation: Mutation[NT, T, G],
+        recombination: Recombination[NT, T, G],
+        parent_selection: Selection[NT, T, G],
+        survivor_selection: Selection[NT, T, G],
+        fitness_comparator: FitnessComparator = ScalarFitnessComparator(),
+        rng: random.Random | None = None,
+    ):
         """Initialize the evolutionary algorithm with the given components.
-        
+
         Args:
             solution_space: Defines the search space and constraint satisfaction.
             start: The start non-terminal for generating new individuals.
@@ -93,33 +97,43 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         self.survivor_selection = survivor_selection
 
     @abstractmethod
-    def evolutionary_stream(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                            mutation_rate: float, recombination_rate: float) -> Iterable[EAState[T]]:
+    def evolutionary_stream(
+        self,
+        fitness_function: Callable[[Tree[T]], Fitness],
+        population_size: int,
+        mutation_rate: float,
+        recombination_rate: float,
+    ) -> Iterable[EAState[T]]:
         """Yield successive EA states until the termination condition is met.
-        
+
         Args:
             fitness_function: Function mapping individuals to fitness values.
             population_size: Target population size for each generation.
             mutation_rate: Probability of applying mutation during variation [0, 1].
             recombination_rate: Probability of applying recombination during variation [0, 1].
                                mutation_rate + recombination_rate should be <= 1.
-        
+
         Yields:
             EAState: Snapshots of each generation until termination_condition returns True.
         """
-        pass
 
-    def evolutionary_last_generation(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                                     mutation_rate: float, recombination_rate: float, verbose: bool = False) -> list[Tree[T]]:
+    def evolutionary_last_generation(
+        self,
+        fitness_function: Callable[[Tree[T]], Fitness],
+        population_size: int,
+        mutation_rate: float,
+        recombination_rate: float,
+        verbose: bool = False,
+    ) -> list[Tree[T]]:
         """Return the final generation, sorted by fitness (best first).
-        
+
         Args:
             fitness_function: Function to evaluate individuals.
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
             verbose: Print generation numbers during the run if True (default: False).
-        
+
         Returns:
             A list of individuals from the final generation, sorted by fitness (best first).
         """
@@ -127,7 +141,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         for state in self.evolutionary_stream(fitness_function, population_size, mutation_rate, recombination_rate):
             last_state = state
             if verbose:
-                print(f"Generation {state.generation}")
+                print(f"Generation {state}")
         if last_state is None:
             return []
         return sorted(
@@ -136,17 +150,23 @@ class Evolutionary(ABC, Generic[NT, T, G]):
             reverse=True,
         )
 
-    def evolutionary_best(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                          mutation_rate: float, recombination_rate: float, verbose: bool = False) -> Tree[T] | None:
+    def evolutionary_best(
+        self,
+        fitness_function: Callable[[Tree[T]], Fitness],
+        population_size: int,
+        mutation_rate: float,
+        recombination_rate: float,
+        verbose: bool = False,
+    ) -> Tree[T] | None:
         """Return the best individual from the final generation, if any.
-        
+
         Args:
             fitness_function: Function to evaluate individuals.
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
             verbose: Print generation numbers during the run if True (default: False).
-        
+
         Returns:
             The best individual from the final generation, or None if no individuals were generated.
         """
@@ -155,17 +175,23 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         )
         return last_generation[0] if last_generation else None
 
-    def evolutionary_search(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                            mutation_rate: float, recombination_rate: float, verbose: bool = False) -> Iterable[Tree[T]]:
+    def evolutionary_search(
+        self,
+        fitness_function: Callable[[Tree[T]], Fitness],
+        population_size: int,
+        mutation_rate: float,
+        recombination_rate: float,
+        verbose: bool = False,
+    ) -> Iterable[Tree[T]]:
         """Backward-compatible alias for returning the final generation.
-        
+
         Args:
             fitness_function: Function to evaluate individuals.
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
             verbose: Print generation numbers during the run if True (default: False).
-        
+
         Returns:
             An iterable of individuals from the final generation, sorted by fitness (best first).
         """
@@ -176,38 +202,44 @@ class Evolutionary(ABC, Generic[NT, T, G]):
 
 class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
     """A straightforward genetic programming implementation using component-based operators.
-    
-    This implemention applies one of three operations per individual proportional to their rates:
+
+    This implementation applies one of three operations per individual proportional to their rates:
     - Mutation: Transform an individual using the mutation operator
     - Recombination: Create offspring by combining two parent individuals
     - Survival: Select an unchanged individual
-    
+
     Features:
     - Elitism: Preserves the best individuals across generations
     - Fitness caching: Avoids recomputing fitness for identical individuals
     - Robustness: Retries variation operators multiple times if they produce invalid individuals
     - Age tracking: Maintains individual age for diversity-aware selection
-    
+
     Type Parameters:
         NT: Type of non-terminals in the grammar/search space
         T: Type of terminals in the grammar/search space
         G: Type of constants/ground symbols
     """
 
-    def __init__(self, solution_space: SolutionSpace[NT, T, G], start: NT,
-                 termination_condition: Callable[[EAState[T]], bool],
-                 initialization: Initialization[NT, T, G],
-                 mutation: Mutation[NT, T, G],
-                 recombination: Recombination[NT, T, G],
-                 parent_selection: Selection[NT, T, G],
-                 survivor_selection: Selection[NT, T, G],
-                 fitness_comparator: FitnessComparator = ScalarFitnessComparator(),
-                 rng: random.Random | None = None,
-                 elite_count: int = 1,
-                 max_attempts_factor: int = 5,
-                 min_attempts: int = 10,):
+    def __init__(
+        self,
+        solution_space: SolutionSpace[NT, T, G],
+        start: NT,
+        termination_condition: Callable[[EAState[T]], bool],
+        initialization: Initialization[NT, T, G],
+        mutation: Mutation[NT, T, G],
+        recombination: Recombination[NT, T, G],
+        parent_selection: Selection[NT, T, G],
+        survivor_selection: Selection[NT, T, G],
+        fitness_comparator: FitnessComparator = ScalarFitnessComparator(),
+        rng: random.Random | None = None,
+        elite_count: int = 1,
+        max_attempts_factor: int = 5,
+        min_attempts: int = 10,
+        rng_factory: RNGFactory | None = None,
+        distribute_rngs: bool = True,
+    ):
         """Initialize a Simple Genetic Programming search strategy.
-        
+
         Args:
             solution_space: Defines the search space and constraint satisfaction.
             start: The start non-terminal for generating new individuals.
@@ -218,10 +250,16 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
             parent_selection: Component for selecting parents for variation.
             survivor_selection: Component for selecting survivors for the next generation.
             fitness_comparator: Component for comparing fitness values (mono- or multi-objective).
-            rng: Optional random number generator for reproducibility.
+            rng: Optional random number generator for reproducibility (default: new unseeded Random()).
             elite_count: Number of best individuals to preserve unchanged each generation (default: 1).
             max_attempts_factor: Maximum attempts = population_size * this factor (default: 5).
             min_attempts: Minimum number of variation attempts per generation (default: 10).
+            rng_factory: Optional RNGFactory for producing independent child RNGs for components.
+                        If None, one is created from self.rng automatically. Each child RNG is
+                        deterministically seeded, ensuring reproducibility and independence.
+            distribute_rngs: If True (default), attempt to assign child RNGs from rng_factory to
+                            components that expose an 'rng' attribute. Gracefully skips components
+                            without 'rng' attribute. Set to False to disable distribution.
         """
         super().__init__(
             solution_space=solution_space,
@@ -238,11 +276,43 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
         self.elite_count = max(0, elite_count)
         self.max_attempts_factor = max(1, max_attempts_factor)
         self.min_attempts = max(0, min_attempts)
+        # RNG factory and optional distribution to components
+        if rng_factory is None:
+            self.rng_factory = RNGFactory.from_random(self.rng)
+        else:
+            self.rng_factory = rng_factory
 
-    def evolutionary_stream(self, fitness_function: Callable[[Tree[T]], Fitness], population_size: int,
-                            mutation_rate: float, recombination_rate: float) -> Iterable[EAState[T]]:
+        if distribute_rngs:
+            # Create and assign child RNGs for components that expose a 'rng' attribute.
+            # This ensures each component gets an independent, deterministic RNG stream derived
+            # from the factory's master seed. Child RNGs are independent (different sequences)
+            # yet reproducible (same master seed → same child RNGs) via deterministic seeding.
+            init_rng = self.rng_factory.child()
+            mutation_rng = self.rng_factory.child()
+            recomb_rng = self.rng_factory.child()
+            parent_sel_rng = self.rng_factory.child()
+            survivor_sel_rng = self.rng_factory.child()
+
+            if hasattr(self.initialization, "rng"):
+                self.initialization.rng = init_rng
+            if hasattr(self.mutation, "rng"):
+                self.mutation.rng = mutation_rng
+            if hasattr(self.recombination, "rng"):
+                self.recombination.rng = recomb_rng
+            if hasattr(self.parent_selection, "rng"):
+                self.parent_selection.rng = parent_sel_rng
+            if hasattr(self.survivor_selection, "rng"):
+                self.survivor_selection.rng = survivor_sel_rng
+
+    def evolutionary_stream(
+        self,
+        fitness_function: Callable[[Tree[T]], Fitness],
+        population_size: int,
+        mutation_rate: float,
+        recombination_rate: float,
+    ) -> Iterable[EAState[T]]:
         """Yield EA states while optimizing the provided fitness function.
-        
+
         The algorithm proceeds as follows:
         1. Initialize population using the initialization component
         2. Evaluate fitness for all individuals
@@ -252,21 +322,22 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
            c. Evaluate offspring fitness
            d. Select survivors for the next generation
            e. Yield the new state
-        
+
         Args:
             fitness_function: Function mapping individuals to fitness values.
             population_size: Target population size for each generation.
             mutation_rate: Probability of applying mutation [0, 1].
             recombination_rate: Probability of applying recombination [0, 1].
-            
+
         Yields:
             EAState: Snapshots of each generation until termination_condition returns True.
-            
+
         Raises:
             ValueError: If mutation_rate + recombination_rate > 1.
         """
         if mutation_rate + recombination_rate > 1:
-            raise ValueError("mutation_rate + recombination_rate > 1 not supported")
+            msg = "mutation_rate + recombination_rate > 1 not supported"
+            raise ValueError(msg)
 
         # Initialize the population
         population: list[Tree[T]] = list(self.initialization.initialize_population(population_size))
@@ -281,7 +352,7 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
             return fitness_cache[tree]
 
         population_fitness: dict[Tree[T], Fitness] = {tree: get_fitness(tree) for tree in population}
-        population_ages: dict[Tree[T], int] = {tree: 0 for tree in population}
+        population_ages: dict[Tree[T], int] = dict.fromkeys(population, 0)
 
         generation: int = 0
         state = EAState(
@@ -344,19 +415,19 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
                     weights=[mutation_rate, recombination_rate, 1 - mutation_rate - recombination_rate],
                     k=1,
                 )[0]
-                
+
                 # Apply the selected operator
                 if variation_operator == "mutate":
                     parent = next_parent()
                     if parent is None:
                         break
-                    candidates = list(self.mutation.mutate(parent))
+                    candidates = self.mutation.mutate(parent)
                 elif variation_operator == "crossover":
                     parent1 = next_parent()
                     parent2 = next_parent()
                     if parent1 is None or parent2 is None:
                         break
-                    candidates = list(self.recombination.recombine(parent1, parent2))
+                    candidates = self.recombination.recombine(parent1, parent2)
                 else:
                     survivor = next_parent()
                     if survivor is None:
@@ -382,7 +453,7 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
             previous_ages = population_ages
             candidate_fitness: dict[Tree[T], Fitness] = {tree: get_fitness(tree) for tree in offspring}
             candidate_ages: dict[Tree[T], int] = {}
-            
+
             # Age tracking: new individuals start at age 0, retained individuals age by 1
             for tree in offspring:
                 candidate_ages[tree] = previous_ages.get(tree, -1) + 1
@@ -402,15 +473,16 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
                     previous_generation_ages=previous_ages,
                 )
             )
-            
+
             # Combine elites with selected survivors
             population = elites + selected
             population_fitness = {
-                tree: candidate_fitness[tree] if tree in candidate_fitness else population_fitness[tree] for tree in population
+                tree: candidate_fitness[tree] if tree in candidate_fitness else population_fitness[tree]
+                for tree in population
             }
             population_ages = {tree: candidate_ages.get(tree, previous_ages.get(tree, 0) + 1) for tree in population}
             generation += 1
-            
+
             # Create the next state
             state = EAState(
                 generation=generation,

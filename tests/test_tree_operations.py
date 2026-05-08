@@ -60,5 +60,3 @@ def test_contains_tree(query, component_specifications) -> None:
     for pos in tree_correct_positions:
         subtree = tree.subtree_at(pos)
         assert tree.replace_subtree_at(pos, subtree) == tree
-
-

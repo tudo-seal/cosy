@@ -25,9 +25,17 @@ Key Concepts:
 
 # Core classes
 from cosy.evolutionary_algorithms.evolutionary import (
+    EAState,
     Evolutionary,
     SimpleGeneticProgramming,
-    EAState,
+)
+
+# Fitness
+from cosy.evolutionary_algorithms.fitness import (
+    Fitness,
+    FitnessComparator,
+    ParetoFitnessComparator,
+    ScalarFitnessComparator,
 )
 
 # Initialization
@@ -44,52 +52,44 @@ from cosy.evolutionary_algorithms.mutation import (
 
 # Recombination
 from cosy.evolutionary_algorithms.recombination import (
-    Recombination,
     Crossover,
+    Recombination,
 )
 
 # Selection
 from cosy.evolutionary_algorithms.selection import (
-    Selection,
-    TournamentSelection,
+    AgeBasedReplacement,
+    FitnessBasedReplacement,
     FitnessProportionalSelection,
     RankBasedSelection,
-    FitnessBasedReplacement,
-    AgeBasedReplacement,
-)
-
-# Fitness
-from cosy.evolutionary_algorithms.fitness import (
-    Fitness,
-    FitnessComparator,
-    ScalarFitnessComparator,
-    ParetoFitnessComparator,
+    Selection,
+    TournamentSelection,
 )
 
 __all__ = [
+    "AgeBasedReplacement",
+    "Crossover",
+    "EAState",
     # Core algorithm classes
     "Evolutionary",
-    "SimpleGeneticProgramming",
-    "EAState",
-    # Initialization
-    "Initialization",
-    "RandomLimitedDepthFirstInitialization",
-    # Mutation
-    "Mutation",
-    "ResolutionMutation",
-    # Recombination
-    "Recombination",
-    "Crossover",
-    # Selection
-    "Selection",
-    "TournamentSelection",
-    "FitnessProportionalSelection",
-    "RankBasedSelection",
-    "FitnessBasedReplacement",
-    "AgeBasedReplacement",
     # Fitness
     "Fitness",
+    "FitnessBasedReplacement",
     "FitnessComparator",
-    "ScalarFitnessComparator",
+    "FitnessProportionalSelection",
+    # Initialization
+    "Initialization",
+    # Mutation
+    "Mutation",
     "ParetoFitnessComparator",
+    "RandomLimitedDepthFirstInitialization",
+    "RankBasedSelection",
+    # Recombination
+    "Recombination",
+    "ResolutionMutation",
+    "ScalarFitnessComparator",
+    # Selection
+    "Selection",
+    "SimpleGeneticProgramming",
+    "TournamentSelection",
 ]

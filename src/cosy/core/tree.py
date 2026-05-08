@@ -7,14 +7,15 @@ import contextlib
 # Uniqueness is guaranteed by python's set (instead of list) data structure.
 from collections import deque
 from collections.abc import Callable, Hashable, Sequence
+from copy import copy
 from functools import partial
 from inspect import Parameter, _empty, _ParameterKind, signature
 from typing import Any, Generic, TypeVar
-from copy import copy
 
 T = TypeVar("T", bound=Hashable)
 
 Path = tuple[int, ...]
+
 
 class Tree(Generic[T]):
     root: T
@@ -158,7 +159,7 @@ class Tree(Generic[T]):
             current, path = queue.popleft()
             result.add(path)
             for i, child in enumerate(current.children):
-                queue.append((child, path + (i,)))
+                queue.append((child, (*path, i)))
         self._positions = result
         return result
 
@@ -183,7 +184,8 @@ class Tree(Generic[T]):
         for i, child in enumerate(self.children):
             if i == pos[0]:
                 return copy(child.subtree_at(pos[1:]))
-        raise IndexError(f"Path {pos} is not valid for this tree")
+        msg = f"Path {pos} is not valid for this tree"
+        raise IndexError(msg)
 
     def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
         """Return replaced subtree at given position."""
@@ -194,7 +196,8 @@ class Tree(Generic[T]):
         try:
             _ = self.subtree_at(pos) if pos != () else tree
         except IndexError:
-            raise IndexError(f"Path {pos} is not valid for this tree")
+            msg = f"Path {pos} is not valid for this tree"
+            raise IndexError(msg) from BaseException
 
         new_tree = copy(self)
 
@@ -202,12 +205,10 @@ class Tree(Generic[T]):
         current = new_tree
         for i in pos[:-1]:
             if i < 0 or i >= len(current.children):
-                raise ValueError(f"Invalid path.")
+                msg = "Invalid path."
+                raise ValueError(msg)
             current = current.children[i]
         # replace the subtree at the given path
         insert = copy(tree)
-        current.children = tuple(current.children[:pos[-1]] + (insert,) + current.children[pos[-1] + 1:])
+        current.children = (*current.children[: pos[-1]], insert, *current.children[pos[-1] + 1 :])
         return new_tree
-
-
-

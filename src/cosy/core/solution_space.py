@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections import defaultdict, deque
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -11,8 +12,6 @@ from types import FunctionType
 from typing import Any, Generic, TypeVar
 
 from cosy.core.tree import Tree
-
-import random
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
@@ -487,9 +486,10 @@ class SolutionSpace(Generic[NT, T, G]):
             return False
         # all constant arguments must match a leaf child with the same root
         for argument, child in zip(rhs.arguments, subtree.children, strict=True):
-            if isinstance(argument, ConstantArgument):
-                if not (len(child.children) == 0 and argument.value == child.root):
-                    return False
+            if isinstance(argument, ConstantArgument) and not (
+                len(child.children) == 0 and argument.value == child.root
+            ):
+                return False
         return True
 
     def _initial_goals_for(self, start: NT, tree: Tree[T]) -> list[Goal[NT, T, G]]:
@@ -531,8 +531,9 @@ class SolutionSpace(Generic[NT, T, G]):
         - pos is a nonterminal combinator (exactly one open subgoal at pos), or
         - pos is a leaf literal (goal is successful with no open subgoals)
         """
-        valid_children = [p for p in goal.subgoals.keys() if
-                          not any(p != other and p == other[: len(p)] for other in goal.subgoals.keys())]
+        valid_children = [
+            p for p in goal.subgoals if not any(p != other and p == other[: len(p)] for other in goal.subgoals)
+        ]
         # Case: pos is a nonterminal (combinator) — exactly one open subgoal at pos
         has_open_at_pos = len(valid_children) == 1 and pos in valid_children
 
@@ -566,8 +567,7 @@ class SolutionSpace(Generic[NT, T, G]):
 
         if pos == ():
             # the variable is at the root: initial goals are already the wanted ones
-            for g in initial_goals:
-                yield g
+            yield from initial_goals
             return
 
         pending_goals: deque[Goal[NT, T, G]] = deque(initial_goals)
@@ -576,7 +576,9 @@ class SolutionSpace(Generic[NT, T, G]):
             goal = pending_goals.pop()
             # expand every child subgoal except the target position
             # a child subgoal has a position as key, that is no prefix to another key position
-            valid_children = [p for p in goal.subgoals.keys() if not any(p != other and p == other[: len(p)] for other in goal.subgoals.keys())]
+            valid_children = [
+                p for p in goal.subgoals if not any(p != other and p == other[: len(p)] for other in goal.subgoals)
+            ]
             for child_pos in valid_children:
                 if child_pos == pos:
                     if self._is_goal_for_position(goal, pos, is_pos_leaf):
@@ -661,13 +663,13 @@ class SolutionSpace(Generic[NT, T, G]):
 
         # Initialize
         # goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
+        goals: Iterable[Goal[NT, T, G] | None] = []
         if tree is not None and pos is not None:
             goals = self.goal_from_tree(start, tree, pos)
         else:
             goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
         # yield all solutions for already successful initial goals
-        #goals = list(goals)
-        non_successful_goals = []
+        non_successful_goals: list[Goal[NT, T, G]] = []
         for goal in goals:
             if goal is not None:
                 if goal.success:
@@ -679,7 +681,7 @@ class SolutionSpace(Generic[NT, T, G]):
                         if max_count is not None and len(all_results) >= max_count:
                             return
                 else:
-                    non_successful_goals = [goal] + non_successful_goals
+                    non_successful_goals = [goal, *non_successful_goals]
 
         if max_depth is not None and max_depth == 0:
             return
@@ -740,13 +742,25 @@ class SolutionSpace(Generic[NT, T, G]):
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy,
-                               max_count, max_depth, tree, pos)
+        return self.resolution(
+            start,
+            variance_strategy_push,
+            variance_strategy_pop,
+            goal_selection_strategy,
+            max_count,
+            max_depth,
+            tree,
+            pos,
+        )
 
-    def sample_tree(self, start: NT,
-                    max_depth: int | None = None,
-                    tree: Tree[T] | None = None,
-                    pos: Path | None = None,) -> Tree[T] | None:
+    def sample_tree(
+        self,
+        start: NT,
+        max_depth: int | None = None,
+        tree: Tree[T] | None = None,
+        pos: Path | None = None,
+        rng: random.Random | None = None,
+    ) -> Tree[T] | None:
         """
         This method samples a tree top-down with possibly limited depth.
 
@@ -758,9 +772,12 @@ class SolutionSpace(Generic[NT, T, G]):
         TODO: Because resolution directly returns all successful goals after the first derivation step without pushing
               goals to the stack, this method currently doens't work with requests, were depth 0 terms are allowed!
         """
+        # allow deterministic sampling by providing an RNG instance
+        rndm: random.Random = rng if rng is not None else random.Random()
+
         def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
             goals = list(new_goals)
-            random.shuffle(goals)
+            rndm.shuffle(goals)
             queue.extendleft(goals)  # depth-first search <~> LIFO
             return queue
 
@@ -770,12 +787,18 @@ class SolutionSpace(Generic[NT, T, G]):
         def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
             max_len = max(len(p) for p in goal.subgoals)
             filtered = list(filter(lambda x: len(x[0]) == max_len, goal.subgoals.items()))
-            return random.choice(filtered)
+            return rndm.choice(filtered)
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        trees: Iterable[Tree[T]] = self.resolution(start, variance_strategy_push, variance_strategy_pop,
-                                                   goal_selection_strategy,
-                                                   max_depth=max_depth, tree=tree, pos=pos)
+        trees: Iterable[Tree[T]] = self.resolution(
+            start,
+            variance_strategy_push,
+            variance_strategy_pop,
+            goal_selection_strategy,
+            max_depth=max_depth,
+            tree=tree,
+            pos=pos,
+        )
 
         try:
             iterator = iter(trees)
@@ -784,7 +807,6 @@ class SolutionSpace(Generic[NT, T, G]):
             return None
 
         return tree
-
 
     def breadth_first_resolution(
         self,
@@ -810,8 +832,16 @@ class SolutionSpace(Generic[NT, T, G]):
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy,
-                               max_count, max_depth, tree, pos)
+        return self.resolution(
+            start,
+            variance_strategy_push,
+            variance_strategy_pop,
+            goal_selection_strategy,
+            max_count,
+            max_depth,
+            tree,
+            pos,
+        )
 
     def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
         """Check if the solution space contains a given `tree` derivable from `start`."""

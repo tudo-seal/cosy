@@ -8,8 +8,9 @@ enabling the evolutionary algorithm to handle diverse problem domains.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol, Sequence, Callable
+from typing import Protocol
 
 # Fitness can be either a single scalar value or a multi-dimensional vector
 Fitness = float | Sequence[float]
@@ -17,7 +18,7 @@ Fitness = float | Sequence[float]
 
 class FitnessComparator(Protocol):
     """Protocol for comparing fitness values and providing sorting keys.
-    
+
     Implementations of this protocol define how fitness values are compared and ordered.
     This allows the evolutionary algorithm to support both single-objective and multi-objective
     optimization by simply swapping the comparator.
@@ -25,11 +26,11 @@ class FitnessComparator(Protocol):
 
     def compare(self, first: Fitness, second: Fitness) -> int:
         """Compare two fitness values.
-        
+
         Args:
             first: First fitness value to compare.
             second: Second fitness value to compare.
-            
+
         Returns:
             1 if first is better, -1 if second is better, 0 if tie.
         """
@@ -37,13 +38,13 @@ class FitnessComparator(Protocol):
 
     def scalarize(self, fitness: Fitness) -> float:
         """Map fitness to a single scalar where larger is better.
-        
+
         This method is used for selection operators that require a single numeric value
         for weighting or ranking purposes.
-        
+
         Args:
             fitness: The fitness value to convert to a scalar.
-            
+
         Returns:
             A scalar value where larger values represent better fitness.
         """
@@ -51,12 +52,12 @@ class FitnessComparator(Protocol):
 
     def sort_key(self, fitness: Fitness) -> float:
         """Return a sort key where larger values are better fitness.
-        
+
         This is primarily used for sorting individuals by fitness.
-        
+
         Args:
             fitness: The fitness value to convert to a sort key.
-            
+
         Returns:
             A numeric value suitable for sorting, where larger is better.
         """
@@ -66,14 +67,15 @@ class FitnessComparator(Protocol):
 @dataclass(frozen=True)
 class ScalarFitnessComparator:
     """Single-objective fitness comparator for scalar fitness values.
-    
+
     This comparator handles simple scalar fitness optimization. It can be configured
     for both maximization and minimization problems.
-    
+
     Attributes:
         greater_is_better: If True, larger fitness values are better (maximization).
                           If False, smaller fitness values are better (minimization).
     """
+
     greater_is_better: bool = True
 
     def compare(self, first: Fitness, second: Fitness) -> int:
@@ -99,17 +101,18 @@ class ScalarFitnessComparator:
 @dataclass(frozen=True)
 class ParetoFitnessComparator:
     """Multi-objective fitness comparator using Pareto dominance.
-    
+
     This comparator handles multi-dimensional fitness using Pareto domination concepts.
     An individual dominates another if it is at least as good in all objectives
     and strictly better in at least one objective.
-    
+
     Attributes:
         maximize: Sequence of booleans indicating which objectives should be maximized.
                  If None, all objectives are maximized by default.
         tie_breaker: Optional function to break ties between non-dominated solutions.
                     Takes a normalized fitness vector and returns a scalar value.
     """
+
     maximize: Sequence[bool] | None = None
     tie_breaker: Callable[[Sequence[float]], float] | None = None
 
@@ -124,7 +127,8 @@ class ParetoFitnessComparator:
         if self.maximize is None:
             return tuple(True for _ in range(length))
         if len(self.maximize) != length:
-            raise ValueError("maximize length must match fitness dimension")
+            msg = "maximize length must match fitness dimension"
+            raise ValueError(msg)
         return tuple(bool(v) for v in self.maximize)
 
     def _normalize(self, fitness: Fitness) -> tuple[float, ...]:
@@ -138,17 +142,17 @@ class ParetoFitnessComparator:
         """Compare two fitness values using Pareto dominance."""
         first_vec = self._normalize(first)
         second_vec = self._normalize(second)
-        
+
         # Check if first dominates second
         first_dominates = all(a >= b for a, b in zip(first_vec, second_vec, strict=True)) and any(
             a > b for a, b in zip(first_vec, second_vec, strict=True)
         )
-        
+
         # Check if second dominates first
         second_dominates = all(b >= a for a, b in zip(first_vec, second_vec, strict=True)) and any(
             b > a for a, b in zip(first_vec, second_vec, strict=True)
         )
-        
+
         if first_dominates and not second_dominates:
             return 1
         if second_dominates and not first_dominates:
@@ -165,4 +169,3 @@ class ParetoFitnessComparator:
     def sort_key(self, fitness: Fitness) -> float:
         """Return the scalarized fitness as the sort key."""
         return self.scalarize(fitness)
-
