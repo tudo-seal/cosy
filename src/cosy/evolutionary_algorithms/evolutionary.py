@@ -136,7 +136,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         for state in self.evolutionary_stream(fitness_function, population_size, mutation_rate, recombination_rate):
             last_state = state
             if verbose:
-                print(f"Generation {state}")
+                print(f"Generation {state.generation}")
         if last_state is None:
             return []
         return sorted(
