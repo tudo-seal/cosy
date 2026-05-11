@@ -122,7 +122,7 @@ def test_simple_gp_last_generation_and_best_use_fitness_order() -> None:
         fitness_calls.append(tree)
         return 2.0 if tree.root == "low" else 1.0
 
-    gp = SimpleGeneticProgramming(
+    gp: Any = SimpleGeneticProgramming(
         solution_space,
         "start",
         lambda state: state.generation >= 0,
@@ -142,6 +142,40 @@ def test_simple_gp_last_generation_and_best_use_fitness_order() -> None:
     fitness_calls.clear()
     assert gp.evolutionary_best(fitness, 2, 0.0, 0.0) == high
     assert fitness_calls == [low, high]
+
+
+def test_simple_gp_supports_batch_fitness_functions() -> None:
+    low = Tree("low")
+    high = Tree("high")
+    solution_space: Any = object()
+    initialization: Any = StaticInitialization([low, high])
+    mutation: Any = RecordingMutation()
+    recombination: Any = EmptyRecombination()
+    parent_selection: Any = RecordingSelection()
+    survivor_selection: Any = RecordingSelection()
+    batch_calls: list[list[Tree[str]]] = []
+
+    def fitness(trees: list[Tree[str]]) -> dict[Tree[str], float]:
+        batch_calls.append(list(trees))
+        return {tree: 2.0 if tree.root == "low" else 1.0 for tree in trees}
+
+    gp: Any = SimpleGeneticProgramming(
+        solution_space,
+        "start",
+        lambda state: state.generation >= 0,
+        initialization,
+        mutation,
+        recombination,
+        parent_selection,
+        survivor_selection,
+        ScalarFitnessComparator(False),
+        rng=random.Random(0),
+    )
+
+    last_generation = gp.evolutionary_last_generation(fitness, 2, 0.0, 0.0)
+
+    assert last_generation == [high, low]
+    assert batch_calls == [[low, high]]
 
 
 def test_simple_gp_returns_none_for_an_empty_initial_population() -> None:

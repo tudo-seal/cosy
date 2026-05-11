@@ -227,7 +227,8 @@ def run_symbolic_regression(
 
 if __name__ == "__main__":
     start_time = time.time()
-    best_tree, train_mse, test_mse = run_symbolic_regression(seed=0)
+    best_tree, train_mse, test_mse = run_symbolic_regression(seed=0, population_size=250,
+                                                             max_generations=200, max_depth=5)
     end_time = time.time()
 
     print(f"Symbolic Regression took {end_time - start_time:.5f} seconds.")

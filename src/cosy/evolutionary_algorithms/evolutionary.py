@@ -7,11 +7,12 @@ The framework uses SolutionSpace to define a constraint-based search space and T
 individuals in the population.
 """
 
+import inspect
 import random
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable, Iterable
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar, cast, get_origin, get_type_hints
 
 from cosy.core.solution_space import SolutionSpace
 from cosy.core.tree import Tree
@@ -25,6 +26,11 @@ from cosy.rng.factory import RNGFactory
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
 G = TypeVar("G", bound=Hashable)  # type of constants
+
+FitnessFunctionMode = Literal["auto", "single", "batch"]
+FitnessFunctionSingle = Callable[[Tree[T]], Fitness]
+FitnessFunctionBatch = Callable[[list[Tree[T]]], Mapping[Tree[T], Fitness]]
+FitnessFunction = FitnessFunctionSingle | FitnessFunctionBatch
 
 
 @dataclass
@@ -91,22 +97,95 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         self.parent_selection = parent_selection
         self.survivor_selection = survivor_selection
 
+    @staticmethod
+    def _deduplicate_population(population: Iterable[Tree[T]]) -> list[Tree[T]]:
+        return list(dict.fromkeys(population))
+
+    @staticmethod
+    def _looks_like_batch_fitness_function(fitness_function: Callable[..., Any]) -> bool:
+        try:
+            signature = inspect.signature(fitness_function)
+            type_hints = get_type_hints(fitness_function)
+        except (TypeError, ValueError):
+            return False
+
+        parameters = [parameter for parameter in signature.parameters.values() if parameter.kind in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }]
+        if len(parameters) != 1:
+            return False
+
+        parameter_name = parameters[0].name
+        annotation = type_hints.get(parameter_name, parameters[0].annotation)
+        if annotation is inspect._empty:
+            return False
+
+        origin = get_origin(annotation)
+        return origin in {list, Iterable, tuple, set} or annotation in {list, Iterable, tuple, set}
+
+    def _evaluate_population_fitness(
+        self,
+        fitness_function: Callable[..., Any],
+        population: Iterable[Tree[T]],
+        fitness_cache: dict[Tree[T], Fitness],
+        *,
+        fitness_function_mode: FitnessFunctionMode = "auto",
+    ) -> dict[Tree[T], Fitness]:
+        unique_population = self._deduplicate_population(population)
+        missing = [tree for tree in unique_population if tree not in fitness_cache]
+
+        if missing:
+            if fitness_function_mode == "single":
+                for tree in missing:
+                    fitness_cache[tree] = cast(FitnessFunctionSingle, fitness_function)(tree)
+            elif fitness_function_mode == "batch":
+                evaluated = cast(FitnessFunctionBatch, fitness_function)(missing)
+                missing_fitness = dict(evaluated)
+                missing_keys = [tree for tree in missing if tree not in missing_fitness]
+                if missing_keys:
+                    msg = "Batch fitness function must return a fitness value for every requested tree"
+                    raise ValueError(msg)
+                fitness_cache.update({tree: missing_fitness[tree] for tree in missing})
+            else:
+                if self._looks_like_batch_fitness_function(fitness_function):
+                    evaluated = cast(Callable[[list[Tree[T]]], Any], fitness_function)(missing)
+                    if not isinstance(evaluated, Mapping):
+                        msg = "Batch fitness function must return a mapping from tree to fitness"
+                        raise TypeError(msg)
+                    missing_fitness = dict(evaluated)
+                    missing_keys = [tree for tree in missing if tree not in missing_fitness]
+                    if missing_keys:
+                        msg = "Batch fitness function must return a fitness value for every requested tree"
+                        raise ValueError(msg)
+                    fitness_cache.update({tree: missing_fitness[tree] for tree in missing})
+                else:
+                    for tree in missing:
+                        fitness_cache[tree] = cast(FitnessFunctionSingle, fitness_function)(tree)
+
+        return {tree: fitness_cache[tree] for tree in unique_population}
+
     @abstractmethod
     def evolutionary_stream(
         self,
-        fitness_function: Callable[[Tree[T]], Fitness],
+        fitness_function: Callable[..., Any],
         population_size: int,
         mutation_rate: float,
         recombination_rate: float,
+        fitness_function_mode: FitnessFunctionMode = "auto",
     ) -> Iterable[EAState[T]]:
         """Yield successive EA states until the termination condition is met.
 
         Args:
-            fitness_function: Function mapping individuals to fitness values.
+            fitness_function: Function mapping individuals to fitness values. Also supports a batch
+                variant that accepts a list of trees and returns a mapping from tree to fitness.
             population_size: Target population size for each generation.
             mutation_rate: Probability of applying mutation during variation [0, 1].
             recombination_rate: Probability of applying recombination during variation [0, 1].
                                mutation_rate + recombination_rate should be <= 1.
+            fitness_function_mode: How to interpret fitness_function. "single" expects a tree at
+                a time, "batch" expects a list of trees, and "auto" tries batch first and falls
+                back to single-tree evaluation.
 
         Yields:
             EAState: Snapshots of each generation until termination_condition returns True.
@@ -114,26 +193,34 @@ class Evolutionary(ABC, Generic[NT, T, G]):
 
     def evolutionary_last_generation(
         self,
-        fitness_function: Callable[[Tree[T]], Fitness],
+        fitness_function: Callable[..., Any],
         population_size: int,
         mutation_rate: float,
         recombination_rate: float,
         verbose: bool = False,
+        fitness_function_mode: FitnessFunctionMode = "auto",
     ) -> list[Tree[T]]:
         """Return the final generation, sorted by fitness (best first).
 
         Args:
-            fitness_function: Function to evaluate individuals.
+            fitness_function: Function to evaluate individuals. Also supports a batch variant.
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
             verbose: Print generation numbers during the run if True (default: False).
+            fitness_function_mode: How to interpret fitness_function (see evolutionary_stream).
 
         Returns:
             A list of individuals from the final generation, sorted by fitness (best first).
         """
         last_state: EAState[T] | None = None
-        for state in self.evolutionary_stream(fitness_function, population_size, mutation_rate, recombination_rate):
+        for state in self.evolutionary_stream(
+            fitness_function,
+            population_size,
+            mutation_rate,
+            recombination_rate,
+            fitness_function_mode,
+        ):
             last_state = state
             if verbose:
                 print(f"Generation {state.generation}")
@@ -147,51 +234,65 @@ class Evolutionary(ABC, Generic[NT, T, G]):
 
     def evolutionary_best(
         self,
-        fitness_function: Callable[[Tree[T]], Fitness],
+        fitness_function: Callable[..., Any],
         population_size: int,
         mutation_rate: float,
         recombination_rate: float,
         verbose: bool = False,
+        fitness_function_mode: FitnessFunctionMode = "auto",
     ) -> Tree[T] | None:
         """Return the best individual from the final generation, if any.
 
         Args:
-            fitness_function: Function to evaluate individuals.
+            fitness_function: Function to evaluate individuals. Also supports a batch variant.
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
             verbose: Print generation numbers during the run if True (default: False).
+            fitness_function_mode: How to interpret fitness_function (see evolutionary_stream).
 
         Returns:
             The best individual from the final generation, or None if no individuals were generated.
         """
         last_generation = self.evolutionary_last_generation(
-            fitness_function, population_size, mutation_rate, recombination_rate, verbose
+            fitness_function,
+            population_size,
+            mutation_rate,
+            recombination_rate,
+            verbose,
+            fitness_function_mode,
         )
         return last_generation[0] if last_generation else None
 
     def evolutionary_search(
         self,
-        fitness_function: Callable[[Tree[T]], Fitness],
+        fitness_function: Callable[..., Any],
         population_size: int,
         mutation_rate: float,
         recombination_rate: float,
         verbose: bool = False,
+        fitness_function_mode: FitnessFunctionMode = "auto",
     ) -> Iterable[Tree[T]]:
         """Backward-compatible alias for returning the final generation.
 
         Args:
-            fitness_function: Function to evaluate individuals.
+            fitness_function: Function to evaluate individuals. Also supports a batch variant.
             population_size: Population size for the evolutionary run.
             mutation_rate: Mutation probability during variation.
             recombination_rate: Recombination probability during variation.
             verbose: Print generation numbers during the run if True (default: False).
+            fitness_function_mode: How to interpret fitness_function (see evolutionary_stream).
 
         Returns:
             An iterable of individuals from the final generation, sorted by fitness (best first).
         """
         return self.evolutionary_last_generation(
-            fitness_function, population_size, mutation_rate, recombination_rate, verbose
+            fitness_function,
+            population_size,
+            mutation_rate,
+            recombination_rate,
+            verbose,
+            fitness_function_mode,
         )
 
 
@@ -296,10 +397,11 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
 
     def evolutionary_stream(
         self,
-        fitness_function: Callable[[Tree[T]], Fitness],
+        fitness_function: Callable[..., Any],
         population_size: int,
         mutation_rate: float,
         recombination_rate: float,
+        fitness_function_mode: FitnessFunctionMode = "auto",
     ) -> Iterable[EAState[T]]:
         """Yield EA states while optimizing the provided fitness function.
 
@@ -314,10 +416,14 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
            e. Yield the new state
 
         Args:
-            fitness_function: Function mapping individuals to fitness values.
+            fitness_function: Function mapping individuals to fitness values. Also supports a batch
+                variant that accepts a list of trees and returns a mapping from tree to fitness.
             population_size: Target population size for each generation.
             mutation_rate: Probability of applying mutation [0, 1].
             recombination_rate: Probability of applying recombination [0, 1].
+            fitness_function_mode: How to interpret fitness_function. "single" expects a tree at
+                a time, "batch" expects a list of trees, and "auto" tries batch first and falls
+                back to single-tree evaluation.
 
         Yields:
             EAState: Snapshots of each generation until termination_condition returns True.
@@ -335,13 +441,12 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
         # Cache fitness values across generations to avoid recomputation for unchanged individuals.
         fitness_cache: dict[Tree[T], Fitness] = {}
 
-        def get_fitness(tree: Tree[T]) -> Fitness:
-            """Retrieve fitness from cache or compute and cache it."""
-            if tree not in fitness_cache:
-                fitness_cache[tree] = fitness_function(tree)
-            return fitness_cache[tree]
-
-        population_fitness: dict[Tree[T], Fitness] = {tree: get_fitness(tree) for tree in population}
+        population_fitness = self._evaluate_population_fitness(
+            fitness_function,
+            population,
+            fitness_cache,
+            fitness_function_mode=fitness_function_mode,
+        )
         population_ages: dict[Tree[T], int] = dict.fromkeys(population, 0)
 
         generation: int = 0
@@ -441,7 +546,12 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
 
             # Prepare candidates for survivor selection (elites + new offspring)
             previous_ages = population_ages
-            candidate_fitness: dict[Tree[T], Fitness] = {tree: get_fitness(tree) for tree in offspring}
+            candidate_fitness = self._evaluate_population_fitness(
+                fitness_function,
+                offspring,
+                fitness_cache,
+                fitness_function_mode=fitness_function_mode,
+            )
             candidate_ages: dict[Tree[T], int] = {}
 
             # Age tracking: new individuals start at age 0, retained individuals age by 1
