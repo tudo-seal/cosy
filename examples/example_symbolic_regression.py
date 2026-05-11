@@ -100,7 +100,10 @@ class SymbolicRegression:
         }
 
     @staticmethod
-    def substitution_algebra() -> dict[str, Any]:
+    def evaluation_algebra() -> dict[str, Any]:
+        # Implements a term assignment. Therefore, the evaluation algebra takes a variable assignment as an additional
+        # input and evaluates the term in floating point arithmetic with respect to this variable assignment.
+        # The variable assignment is a mapping from variable names to their values, e.g., {"x": 1.0}.
         return {
             "Const": lambda c, x: c,
             "Var": lambda v, x: x[v],
@@ -178,12 +181,12 @@ def run_symbolic_regression(
         return sum((yt - yp) ** 2 for yt, yp in zip(y_true, y_pred, strict=False)) / len(y_true)
 
     def fitness_function(tree: Tree[str]) -> float:
-        substitute_in_tree = tree.interpret(repo.substitution_algebra())
+        substitute_in_tree = tree.interpret(repo.evaluation_algebra())
         y_pred = [substitute_in_tree({"x": x}) for x in train_values]
         return mean_squared_error(y_train, y_pred)
 
     def test_function(tree: Tree[str]) -> float:
-        substitute_in_tree = tree.interpret(repo.substitution_algebra())
+        substitute_in_tree = tree.interpret(repo.evaluation_algebra())
         y_pred = [substitute_in_tree({"x": x}) for x in test_values]
         return mean_squared_error(y_test, y_pred)
 
