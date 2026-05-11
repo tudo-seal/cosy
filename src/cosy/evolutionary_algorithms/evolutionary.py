@@ -109,16 +109,21 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         except (TypeError, ValueError):
             return False
 
-        parameters = [parameter for parameter in signature.parameters.values() if parameter.kind in {
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        }]
+        parameters = [
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }
+        ]
         if len(parameters) != 1:
             return False
 
         parameter_name = parameters[0].name
         annotation = type_hints.get(parameter_name, parameters[0].annotation)
-        if annotation is inspect._empty:
+        if annotation is inspect.Signature.empty:
             return False
 
         origin = get_origin(annotation)
@@ -138,9 +143,20 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         if missing:
             if fitness_function_mode == "single":
                 for tree in missing:
-                    fitness_cache[tree] = cast(FitnessFunctionSingle, fitness_function)(tree)
+                    fitness_cache[tree] = cast("FitnessFunctionSingle", fitness_function)(tree)
             elif fitness_function_mode == "batch":
-                evaluated = cast(FitnessFunctionBatch, fitness_function)(missing)
+                evaluated = cast("FitnessFunctionBatch", fitness_function)(missing)
+                missing_fitness = dict(evaluated)
+                missing_keys = [tree for tree in missing if tree not in missing_fitness]
+                if missing_keys:
+                    msg = "Batch fitness function must return a fitness value for every requested tree"
+                    raise ValueError(msg)
+                fitness_cache.update({tree: missing_fitness[tree] for tree in missing})
+            elif self._looks_like_batch_fitness_function(fitness_function):
+                evaluated = cast("Callable[[list[Tree[T]]], Any]", fitness_function)(missing)
+                if not isinstance(evaluated, Mapping):
+                    msg = "Batch fitness function must return a mapping from tree to fitness"
+                    raise TypeError(msg)
                 missing_fitness = dict(evaluated)
                 missing_keys = [tree for tree in missing if tree not in missing_fitness]
                 if missing_keys:
@@ -148,20 +164,8 @@ class Evolutionary(ABC, Generic[NT, T, G]):
                     raise ValueError(msg)
                 fitness_cache.update({tree: missing_fitness[tree] for tree in missing})
             else:
-                if self._looks_like_batch_fitness_function(fitness_function):
-                    evaluated = cast(Callable[[list[Tree[T]]], Any], fitness_function)(missing)
-                    if not isinstance(evaluated, Mapping):
-                        msg = "Batch fitness function must return a mapping from tree to fitness"
-                        raise TypeError(msg)
-                    missing_fitness = dict(evaluated)
-                    missing_keys = [tree for tree in missing if tree not in missing_fitness]
-                    if missing_keys:
-                        msg = "Batch fitness function must return a fitness value for every requested tree"
-                        raise ValueError(msg)
-                    fitness_cache.update({tree: missing_fitness[tree] for tree in missing})
-                else:
-                    for tree in missing:
-                        fitness_cache[tree] = cast(FitnessFunctionSingle, fitness_function)(tree)
+                for tree in missing:
+                    fitness_cache[tree] = cast("FitnessFunctionSingle", fitness_function)(tree)
 
         return {tree: fitness_cache[tree] for tree in unique_population}
 
