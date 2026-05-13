@@ -48,13 +48,14 @@ class Mutation(ABC, Generic[NT, T, G]):
         self.rng = rng if rng is not None else random.Random()
 
     @abstractmethod
-    def mutate(self, tree: Tree[T], trim: int = 1) -> list[Tree[T]]:
+    def mutate(self, tree: Tree[T], trim: int = 1, verbose: bool = False) -> list[Tree[T]]:
         """Apply mutation to an individual tree.
 
         Args:
             tree: The individual to mutate.
             trim: Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
                   For example, trim=1 means only consider positions that are not leaves.
+            verbose: If True, print detailed information about the mutation process.
 
         Yields:
             One or more mutated variants of the input tree,
@@ -71,7 +72,7 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
     depth limits.
     """
 
-    def mutate(self, tree: Tree[T], trim: int = 1) -> list[Tree[T]]:
+    def mutate(self, tree: Tree[T], trim: int = 1, verbose: bool = False) -> list[Tree[T]]:
         """Replace a random non-leaf subtree with a newly sampled one.
 
         Algorithm:
@@ -84,6 +85,7 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
             tree: The tree to mutate.
             trim: Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
                   For example, trim=1 means only consider positions that are not leaves.
+            verbose: If True, print detailed information about the mutation process.
 
         Returns:
             A list containing the mutated tree, or an empty list if mutation failed.
@@ -111,10 +113,11 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
         mutant = self.solution_space.sample_tree(
             self.start, tree=tree, pos=mutation_point, max_depth=self.max_depth, rng=self.rng
         )
-
+        print(f"Mutation point: {mutation_point}")
         # If the first attempt fails, retry with other positions
         while mutant is None and positions:
             mutation_point = self.rng.choice(positions)
+            print(f"Mutation point failed, updated to: {mutation_point}")
             positions.remove(mutation_point)
             mutant = self.solution_space.sample_tree(
                 self.start, tree=tree, pos=mutation_point, max_depth=self.max_depth, rng=self.rng
