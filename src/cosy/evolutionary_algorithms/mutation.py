@@ -104,8 +104,9 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
                 # leaf positions are all positions that are no prefix of another position
                 # a prefix of a position is defined as follows: p is a prefix of q if p == q or p is a prefix of q[:-1]
                 for pos in positions:
-                    if (min_trim_length <= len(pos)) and not any(pos != other and pos == other[: len(pos)]
-                                                                 for other in positions):
+                    if (min_trim_length <= len(pos)) and not any(
+                        pos != other and pos == other[: len(pos)] for other in positions
+                    ):
                         leafs.add(pos)
 
         # Try to replace a random non-leaf position with a new subtree
