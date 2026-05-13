@@ -17,6 +17,8 @@ NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
 G = TypeVar("G", bound=Hashable)  # type of constants
 
+Path = tuple[int, ...]
+
 
 class Mutation(ABC, Generic[NT, T, G]):
     """Abstract base class for mutation operators.
@@ -46,11 +48,13 @@ class Mutation(ABC, Generic[NT, T, G]):
         self.rng = rng if rng is not None else random.Random()
 
     @abstractmethod
-    def mutate(self, tree: Tree[T]) -> list[Tree[T]]:
+    def mutate(self, tree: Tree[T], trim: int = 1) -> list[Tree[T]]:
         """Apply mutation to an individual tree.
 
         Args:
             tree: The individual to mutate.
+            trim: Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
+                  For example, trim=1 means only consider positions that are not leaves.
 
         Yields:
             One or more mutated variants of the input tree,
@@ -67,7 +71,7 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
     depth limits.
     """
 
-    def mutate(self, tree: Tree[T]) -> list[Tree[T]]:
+    def mutate(self, tree: Tree[T], trim: int = 1) -> list[Tree[T]]:
         """Replace a random non-leaf subtree with a newly sampled one.
 
         Algorithm:
@@ -78,6 +82,8 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
 
         Args:
             tree: The tree to mutate.
+            trim: Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
+                  For example, trim=1 means only consider positions that are not leaves.
 
         Returns:
             A list containing the mutated tree, or an empty list if mutation failed.
@@ -85,10 +91,19 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
         # Get all non-leaf positions (excluding root and leaves)
         positions = list(tree.positions())
         positions.remove(())  # Remove root
-        for leaf in tree.leaf_positions():
-            positions.remove(leaf)  # Remove leaves
-        if not positions:
-            return []
+        leafs: set[Path] = tree.leaf_positions()
+        for i in range(trim):
+            for leaf in leafs:
+                positions.remove(leaf)  # Remove leaves
+            if not positions:
+                return []
+            if i < trim - 1:
+                leafs = set()
+                # leaf positions are all positions that are no prefix of another position
+                # a prefix of a position is defined as follows: p is a prefix of q if p == q or p is a prefix of q[:-1]
+                for pos in positions:
+                    if not any(pos != other and pos == other[: len(pos)] for other in positions):
+                        leafs.add(pos)
 
         # Try to replace a random non-leaf position with a new subtree
         mutation_point = self.rng.choice(positions)
