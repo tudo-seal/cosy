@@ -11,8 +11,8 @@ from cosy.evolutionary_algorithms.fitness import ScalarFitnessComparator
 from cosy.evolutionary_algorithms.initialisation import RandomLimitedDepthFirstInitialization
 from cosy.evolutionary_algorithms.mutation import ResolutionMutation
 from cosy.evolutionary_algorithms.recombination import Crossover
-from cosy.evolutionary_algorithms.selection import AgeBasedReplacement, FitnessProportionalSelection, Selection
 from cosy.evolutionary_algorithms.rng.factory import RNGFactory
+from cosy.evolutionary_algorithms.selection import AgeBasedReplacement, FitnessProportionalSelection, Selection
 
 
 class SymbolicRegression:
