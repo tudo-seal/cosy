@@ -18,6 +18,9 @@ Path = tuple[int, ...]
 
 
 class Tree(Generic[T]):
+    """
+    Please only use immutably.
+    """
     root: T
     children: tuple["Tree[T]", ...]
     size: int

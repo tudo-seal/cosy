@@ -9,7 +9,7 @@ Tests cover:
 
 import random
 
-from cosy.rng.factory import RNGFactory
+from cosy.evolutionary_algorithms.rng.factory import RNGFactory
 
 
 class TestRNGFactoryCreation:

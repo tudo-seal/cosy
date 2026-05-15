@@ -21,7 +21,7 @@ from cosy.evolutionary_algorithms.initialisation import Initialization
 from cosy.evolutionary_algorithms.mutation import Mutation
 from cosy.evolutionary_algorithms.recombination import Recombination
 from cosy.evolutionary_algorithms.selection import Selection
-from cosy.rng.factory import RNGFactory
+from cosy.evolutionary_algorithms.rng.factory import RNGFactory
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
