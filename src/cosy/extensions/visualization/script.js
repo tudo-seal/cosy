@@ -17,6 +17,7 @@ let selectedResult = 0;
 let stripeIdCounter = 0;
 let allStripeGradients = [];
 let colorMap = {};
+let gradientCache = {}; // Maps color array JSON to gradient ID
 
 
 
@@ -133,23 +134,66 @@ const colorMapDisplay = colorMapContainer.append("div")
 function refreshColorMapDisplay() {
     colorMapDisplay.selectAll("*").remove();
     Object.entries(colorMap).forEach(([key, value]) => {
+        // value is now an array of color strings
+        const gradId = getOrCreateGradient(value);
+        
         const entry = colorMapDisplay.append("div")
             .style("margin-bottom", "8px")
-            .style("display", "flex")
-            .style("align-items", "center")
-            .style("gap", "8px");
-        
-        entry.append("div")
+            .style("position", "relative")
             .style("width", "100%")
-            .style("height", "25px")
-            .style("background-color", value)
+            .style("height", "25px");
+        
+        // Create an inline SVG element with the gradient pattern
+        const svgElement = entry.append("svg")
+            .attr("width", "100%")
+            .attr("height", "100%")
             .style("border", "1px solid #ccc")
-            .style("display", "flex")
-            .style("align-items", "center")
-            .style("justify-content", "center")
+            .style("position", "absolute")
+            .style("top", "0")
+            .style("left", "0");
+        
+        // Add defs and pattern for this specific box
+        const defs = svgElement.append("defs");
+        const pattern = defs.append("pattern")
+            .attr("id", gradId + "_box")
+            .attr("x", "0")
+            .attr("y", "0")
+            .attr("width", "1")
+            .attr("height", "1")
+            .attr("patternUnits", "objectBoundingBox")
+            .attr("viewBox", "0 0 " + value.length + " 1")
+            .attr("preserveAspectRatio", "none");
+        
+        value.forEach((colorArray, stripeIndex) => {
+            const colorGradId = getOrCreateGradient([colorArray]);
+            const stripeWidth = 1;
+            const stripeX = stripeIndex;
+            
+            pattern.append("rect")
+                .attr("x", stripeX)
+                .attr("y", "0")
+                .attr("width", stripeWidth)
+                .attr("height", "1")
+                .style("fill", "url(#" + colorGradId + ")");
+        });
+        
+        // Fill the SVG with the pattern
+        svgElement.append("rect")
+            .attr("width", "100%")
+            .attr("height", "100%")
+            .style("fill", "url(#" + gradId + "_box)");
+        
+        // Add text label on top of the SVG
+        entry.append("text")
+            .style("position", "absolute")
+            .style("top", "50%")
+            .style("left", "50%")
+            .style("transform", "translate(-50%, -50%)")
             .style("font-size", "10px")
             .style("font-weight", "bold")
             .style("color", "#000")
+            .style("pointer-events", "none")
+            .style("z-index", "1")
             .text(key);
     });
 }
@@ -172,7 +216,7 @@ const tree = d3.layout.tree()
 
 const diagonal = d3.svg.diagonal()
     .projection((d) => {
-        console.log("Diagonal projection:", d);
+        //console.log("Diagonal projection:", d);
         return [d.y, d.x];
     });
 
@@ -283,31 +327,82 @@ function clearStripes() {
     allStripeGradients = [];
 }
 
-function makeStripes(id, colors) {
-    const step = 1 / colors.length;
-    let offset = 0;
-
+function getOrCreateGradient(colorArray) {
+    // Create a deterministic ID based on the color array
+    const colorKey = JSON.stringify(colorArray);
+    
+    // Check if gradient already exists in cache
+    if (gradientCache[colorKey]) {
+        return gradientCache[colorKey];
+    }
+    
+    // Create a new gradient
+    const gradId = "colorGradient_" + Object.keys(gradientCache).length;
     const grad = svgDefs.append("linearGradient")
-        .attr("id", id)
+        .attr("id", gradId)
         .attr("spreadMethod", "pad")
         .attr("x1", "0%")
-        .attr("y1", "100%")
-        .attr("x2", "100%")
-        .attr("y2", "0%")
-        .attr("gradientUnits", "objectBoundingBox");
+        .attr("y1", "0%")
+        .attr("x2", "0%")
+        .attr("y2", "100%")
+        .attr("gradientUnits", "objectBoundingBox")
+        .attr("patternTransform", "rotate(45)");
     
-    colors.forEach((color) => {
+    const colorStep = 1 / colorArray.length;
+    let colorOffset = 0;
+    
+    colorArray.forEach((color) => {
         grad.append("stop")
-            .attr("offset", offset)
+            .attr("offset", colorOffset)
             .attr("stop-color", color);
-        offset += step;
+        colorOffset += colorStep;
         grad.append("stop")
-            .attr("offset", offset)
+            .attr("offset", colorOffset)
             .attr("stop-color", color);
     });
     
+    // Cache it
+    gradientCache[colorKey] = gradId;
     allStripeGradients.push(grad);
+    
+    return gradId;
 }
+
+function makeStripes(id, colors) {
+    console.log("Making stripes with id:", id, "and colors:", colors);
+    const numStripes = colors.length;
+    
+    // Create a pattern using a viewBox to maintain coordinate system
+    const pattern = svgDefs.append("pattern")
+        .attr("id", id)
+        .attr("x", "0")
+        .attr("y", "0")
+        .attr("width", "1")
+        .attr("height", "1")
+        .attr("patternUnits", "objectBoundingBox")
+        .attr("viewBox", "0 0 " + numStripes + " 1")
+        .attr("preserveAspectRatio", "none")
+        .attr("patternTransform", "rotate(45)");
+    
+    colors.forEach((colorArray, stripeIndex) => {
+        const stripeWidth = 1;
+        const stripeX = stripeIndex;
+        
+        // Get or create gradient for this color array
+        const gradId = getOrCreateGradient(colorArray);
+        
+        // Add rectangle for this stripe
+        pattern.append("rect")
+            .attr("x", stripeX)
+            .attr("y", "0")
+            .attr("width", stripeWidth)
+            .attr("height", "1")
+            .style("fill", "url(#" + gradId + ")");
+    });
+}
+// Example call:[["green", "blue", "yellow"], ["red"]]
+// previously: makeStripes("myStripes", [["green", "blue"], ["red"]]);
+//makeStripes("myStripes", [["green", "blue", "yellow"], ["red"]]);
 
 // ============ Tree Rendering ============
 function update(source) {
@@ -390,6 +485,7 @@ function update(source) {
                 .style("fill", () => {
                     stripeIdCounter += 1;
                     const stripeName = "stripe" + d.id + stripeIdCounter;
+                    //makeStripes(stripeName, [["green", "blue", "yellow"], ["red", "black"]]);
                     makeStripes(stripeName, d.colors);
                     return "url(#" + stripeName + ")";
                 });
@@ -511,7 +607,7 @@ function update(source) {
     // Transition links to their new position
     link.transition().duration(transition_duration)
         .attr("d", (d) => {
-            console.log("Link transition:", d);
+            //console.log("Link transition:", d);
             const from = { x: d.source.x_pos, y: d.source.y };
             const to = { x: d.target.x_pos, y: d.target.y };
             const o = { x: d.x, y: d.y };

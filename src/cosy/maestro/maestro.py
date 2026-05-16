@@ -68,4 +68,5 @@ class Maestro(Generic[T]):
             trees,
             component_interpretations=self.component_interpretations,
             named_components_with_specifications=self.named_components_with_specifications,
+            taxonomy=None if self.taxonomy is None else self._synthesizer.subtypes.taxonomy, # This way we get the closure of the taxonomy
         )

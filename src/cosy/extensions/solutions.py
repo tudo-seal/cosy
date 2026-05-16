@@ -1,6 +1,7 @@
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from typing import Any, Generic, TypeVar
 
+from cosy.core.subtypes import Taxonomy
 from cosy.core.tree import Tree
 from cosy.core.types import Abstraction, Implication, Type
 from cosy.extensions import visualize
@@ -35,10 +36,12 @@ class MaestroSolutions(Solutions[T]):
         trees: Iterable[Tree[T]],
         component_interpretations: dict[T, Callable[..., Any]],
         named_components_with_specifications: Sequence[tuple[T, Callable, Abstraction | Implication | Type]],
+        taxonomy: Taxonomy | None
     ):
         super().__init__(trees)
         self.component_interpretations = component_interpretations
         self.named_components_with_specifications = named_components_with_specifications
+        self.taxonomy = taxonomy
 
     def __iter__(self) -> Generator[Any, None, None]:
         for result in self.trees():
@@ -49,4 +52,5 @@ class MaestroSolutions(Solutions[T]):
             amount=amount,
             trees=self.trees(),
             named_components_with_specifications=self.named_components_with_specifications,
+            taxonomy=self.taxonomy
         )
