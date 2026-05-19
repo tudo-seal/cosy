@@ -83,11 +83,16 @@ exclude_lines = [
 [tool.ruff.lint.extend-per-file-ignores]
 "**/tests/**/*" = [
   "FBT",
+  "S311",    # random.Random is intentionally used for deterministic seeding
+  "ARG002",  # Unused method arguments in mock/test implementations
+  "ARG005",  # Unused lambda arguments in test fixtures
 ]
 "**/examples/**/*" = [
   "T201",
   "INP001",
   "FBT",
+  "S311",    # random.Random is intentionally used for deterministic seeding
+  "ARG005",  # Unused lambda arguments in symbolic algebra definitions
 ]
 "**/benchmarks/**/*" = [
   "PLC1901",
@@ -96,6 +101,24 @@ exclude_lines = [
   "S",
   "TID252",
   "FBT",
+]
+"**/evolutionary_algorithms/**/*" = [
+  "FBT",      # Boolean-typed arguments in function definitions
+  "ARG002",   # Unused method arguments for interface compatibility
+  "ARG005",   # Unused lambda arguments for algebra operations
+  "S311",     # random.Random is intentionally used for deterministic seeding
+  "B008",     # Mutable default argument in helper interface
+  "B023",     # Function definition does not bind loop variable (intentional for generator pattern)
+  "B904",     # Exception chaining (pre-existing code pattern)
+  "T201",     # Use of print() for optional logging in evolutionary algorithm implementations
+]
+"**/core/**/*" = [
+  "FBT",      # Boolean-typed arguments in function definitions
+  "S311",     # random.Random is intentionally used for deterministic seeding
+]
+"**/rng/**/*" = [
+  "S311",     # random.Random is intentionally used for deterministic seeding
+  "ARG002",   # Unused parameters in interface compatibility methods
 ]
 
 [tool.setuptools.packages.find]

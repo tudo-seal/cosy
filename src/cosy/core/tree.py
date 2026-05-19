@@ -7,18 +7,27 @@ import contextlib
 # Uniqueness is guaranteed by python's set (instead of list) data structure.
 from collections import deque
 from collections.abc import Callable, Hashable, Sequence
+from copy import copy
 from functools import partial
 from inspect import Parameter, _empty, _ParameterKind, signature
 from typing import Any, Generic, TypeVar
 
 T = TypeVar("T", bound=Hashable)
 
+Path = tuple[int, ...]
+
 
 class Tree(Generic[T]):
+    """
+    Please only use immutably.
+    """
+
     root: T
     children: tuple["Tree[T]", ...]
     size: int
     _hash: int
+    _positions: set[Path] | None = None
+    _leaf_positions: set[Path] | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         self.root = root
@@ -48,6 +57,13 @@ class Tree(Generic[T]):
 
     def __str__(self) -> str:
         return self.__rec_to_str__(outermost=True)
+
+    def __copy__(self) -> "Tree[T]":
+        children_copy = tuple(copy(child) for child in self.children)
+        return Tree(
+            root=self.root,
+            children=children_copy,
+        )
 
     def interpret(self, interpretation: dict[T, Any] | None = None) -> Any:
         """Recursively evaluate given term."""
@@ -136,3 +152,67 @@ class Tree(Generic[T]):
 
             results.append(current_combinator)
         return results.pop()
+
+    def positions(self) -> set[Path]:
+        """Return all positions in the tree."""
+        if self._positions is not None:
+            return self._positions
+        result: set[Path] = set()
+        queue: deque[tuple[Tree[T], Path]] = deque([(self, ())])
+        while queue:
+            current, path = queue.popleft()
+            result.add(path)
+            for i, child in enumerate(current.children):
+                queue.append((child, (*path, i)))
+        self._positions = result
+        return result
+
+    def leaf_positions(self) -> set[Path]:
+        """Return all leaf positions in the tree."""
+        if self._leaf_positions is not None:
+            return self._leaf_positions
+        result: set[Path] = set()
+        all_positions: set[Path] = self.positions()
+        # leaf positions are all positions that are no prefix of another position
+        # a prefix of a position is defined as follows: p is a prefix of q if p == q or p is a prefix of q[:-1]
+        for pos in all_positions:
+            if not any(pos != other and pos == other[: len(pos)] for other in all_positions):
+                result.add(pos)
+        self._leaf_positions = result
+        return result
+
+    def subtree_at(self, pos: Path) -> "Tree[T]":
+        """Return subtree at given position."""
+        if pos == ():
+            return self
+        for i, child in enumerate(self.children):
+            if i == pos[0]:
+                return copy(child.subtree_at(pos[1:]))
+        msg = f"Path {pos} is not valid for this tree"
+        raise IndexError(msg)
+
+    def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
+        """Return replaced subtree at given position."""
+        if pos == ():
+            return tree
+
+        # validate pos by attempting to access the subtree once (avoids materializing all positions)
+        try:
+            _ = self.subtree_at(pos) if pos != () else tree
+        except IndexError:
+            msg = f"Path {pos} is not valid for this tree"
+            raise IndexError(msg) from BaseException
+
+        new_tree = copy(self)
+
+        # traverse the path to the subtree to replace
+        current = new_tree
+        for i in pos[:-1]:
+            if i < 0 or i >= len(current.children):
+                msg = "Invalid path."
+                raise ValueError(msg)
+            current = current.children[i]
+        # replace the subtree at the given path
+        insert = copy(tree)
+        current.children = (*current.children[: pos[-1]], insert, *current.children[pos[-1] + 1 :])
+        return new_tree

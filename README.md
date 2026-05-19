@@ -39,10 +39,11 @@ the `Maestro` is sufficient.
 
 ## Examples
 
-Examples currently all employ the `Maestro`. 
-
 - For a simple example for a theoretically minded computer scientist, see: [Fibonacci](https://tudo-seal.github.io/cosy/quick-start/)
 - For a simple example for a practically minded engineer, see: [Robot Arm (WIP)](#)
+
+While the examples above use `Maestro`, the following example uses the `Synthesizer`:
+- For a simple example on the usage of evolutionary algorithms for searching the synthesized solution spaces, see: [Symbolic Regression](./examples/example_symbolic_regression.py)
 
 
 ## Installation

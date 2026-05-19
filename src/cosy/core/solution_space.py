@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections import defaultdict, deque
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -476,6 +477,123 @@ class SolutionSpace(Generic[NT, T, G]):
             current_bucket_size += 1
         return
 
+    # --- helpers for goal_from_tree / contains_tree ---------------------------------
+    def _rule_matches_subtree(self, rhs: RHSRule[NT, T, G], subtree: Tree[T]) -> bool:
+        """Return True if rhs can match the given subtree head (arity, terminal and constant leaf args)."""
+        if len(rhs.arguments) != len(subtree.children):
+            return False
+        if rhs.terminal != subtree.root:
+            return False
+        # all constant arguments must match a leaf child with the same root
+        for argument, child in zip(rhs.arguments, subtree.children, strict=True):
+            if isinstance(argument, ConstantArgument) and not (
+                len(child.children) == 0 and argument.value == child.root
+            ):
+                return False
+        return True
+
+    def _initial_goals_for(self, start: NT, tree: Tree[T]) -> list[Goal[NT, T, G]]:
+        """Build initial goals from rules for `start` that match the root `tree`.
+
+        Filters out None results from Goal.from_rhs_rule.
+        """
+        goals: list[Goal[NT, T, G]] = []
+        for rhs in self._rules[start]:
+            if self._rule_matches_subtree(rhs, tree):
+                g = Goal.from_rhs_rule(rhs)
+                if g is not None:
+                    goals.append(g)
+        return goals
+
+    def _expand_goal_at(self, goal: Goal[NT, T, G], child_pos: Path, tree: Tree[T]) -> list[Goal[NT, T, G]]:
+        """Expand a single subgoal at `child_pos` of `goal` and return the list of resulting goals.
+
+        This calls `goal.update(...)` for every rule that matches the corresponding subtree and
+        filters out None results.
+        """
+        try:
+            subtree = tree.subtree_at(child_pos)
+        except IndexError:
+            return []
+        nt = goal.subgoals[child_pos].origin
+        results: list[Goal[NT, T, G]] = []
+        for rhs in self._rules[nt]:
+            if self._rule_matches_subtree(rhs, subtree):
+                new = goal.update(rhs, child_pos)
+                if new is not None:
+                    results.append(new)
+        return results
+
+    def _is_goal_for_position(self, goal: Goal[NT, T, G], pos: Path, is_pos_leaf: bool) -> bool:
+        """Return True if goal successfully represents pos as the single variation point.
+
+        This is true if:
+        - pos is a nonterminal combinator (exactly one open subgoal at pos), or
+        - pos is a leaf literal (goal is successful with no open subgoals)
+        """
+        valid_children = [
+            p for p in goal.subgoals if not any(p != other and p == other[: len(p)] for other in goal.subgoals)
+        ]
+        # Case: pos is a nonterminal (combinator) — exactly one open subgoal at pos
+        has_open_at_pos = len(valid_children) == 1 and pos in valid_children
+
+        # Case: pos is a leaf literal — no open subgoals and goal is successful
+        is_complete_leaf = len(goal.subgoals) == 0 and is_pos_leaf and goal.success
+
+        return has_open_at_pos or is_complete_leaf
+
+    def goal_from_tree(self, start: NT, tree: Tree[T], pos: Path) -> Iterable[Goal[NT, T, G]]:
+        """
+        Constructs the goal ?- Start(T(X)) where T(X) is `tree` with variable X at position `pos`.
+
+        Yields all valid goals that result from resolving `start` to a goal that contains exactly
+        one open subgoal at `pos`. The algorithm performs a depth-first search.
+        """
+
+        if start not in self.nonterminals():
+            return
+
+        # validate pos by attempting to access the subtree once (avoids materializing all positions)
+        try:
+            _ = tree.subtree_at(pos) if pos != () else tree
+        except IndexError:
+            return
+
+        # compute leaf positions once, reuse for all checks
+        leaf_positions = tree.leaf_positions()
+        is_pos_leaf = pos in leaf_positions
+
+        initial_goals = self._initial_goals_for(start, tree)
+
+        if pos == ():
+            # the variable is at the root: initial goals are already the wanted ones
+            yield from initial_goals
+            return
+
+        pending_goals: deque[Goal[NT, T, G]] = deque(initial_goals)
+
+        while pending_goals:
+            goal = pending_goals.pop()
+            # expand every child subgoal except the target position
+            # a child subgoal has a position as key, that is no prefix to another key position
+            valid_children = [
+                p for p in goal.subgoals if not any(p != other and p == other[: len(p)] for other in goal.subgoals)
+            ]
+            for child_pos in valid_children:
+                if child_pos == pos:
+                    if self._is_goal_for_position(goal, pos, is_pos_leaf):
+                        yield goal
+                        return  # one goal is enough ??!!!
+                    continue
+                next_goals = self._expand_goal_at(goal, child_pos, tree)
+                for ng in next_goals:
+                    if self._is_goal_for_position(ng, pos, is_pos_leaf):
+                        yield ng
+                        return  # one goal is enough ??!!!
+                    else:
+                        pending_goals.append(ng)
+        return
+
     def resolution(
         self,
         start: NT,
@@ -483,6 +601,9 @@ class SolutionSpace(Generic[NT, T, G]):
         variance_strategy_pop: Callable[[deque[Goal]], tuple[deque[Goal], Goal]],
         subgoal_selection_strategy: Callable[[Goal], tuple[Path, NonTerminalArgument[NT]]],
         max_count: int | None = None,
+        max_depth: int | None = None,
+        tree: Tree[T] | None = None,
+        pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
         """
         Enumerate terms implemented via SLD-Resolution.
@@ -541,21 +662,30 @@ class SolutionSpace(Generic[NT, T, G]):
         all_results: set[Tree[T]] = set()
 
         # Initialize
-        goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
+        # goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
+        goals: Iterable[Goal[NT, T, G] | None] = []
+        if tree is not None and pos is not None:
+            goals = self.goal_from_tree(start, tree, pos)
+        else:
+            goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
         # yield all solutions for already successful initial goals
-        non_successful_goals = []
+        non_successful_goals: list[Goal[NT, T, G]] = []
         for goal in goals:
             if goal is not None:
                 if goal.success:
                     new_term = goal.grounded[()][1]
                     if new_term not in all_results:
+                        # depth 0
                         yield new_term
                         all_results.add(new_term)
                         if max_count is not None and len(all_results) >= max_count:
                             return
                 else:
-                    non_successful_goals.append(goal)
-        non_successful_goals.reverse()
+                    non_successful_goals = [goal, *non_successful_goals]
+
+        if max_depth is not None and max_depth == 0:
+            return
+
         variance: deque[Goal] = variance_strategy_push(deque(), non_successful_goals)
 
         # Selection, Unification, Derivation and Termination
@@ -570,6 +700,11 @@ class SolutionSpace(Generic[NT, T, G]):
                 # Derivation
                 new_goal = current_goal.update(r, p)
                 if new_goal is not None:
+                    if max_depth is not None:
+                        paths = list(new_goal.grounded.keys()) + list(new_goal.subgoals.keys())
+                        depth = max(len(p) for p in paths)
+                        if depth > max_depth:
+                            continue
                     # Termination
                     if new_goal.success:
                         new_term = new_goal.grounded[()][1]
@@ -587,6 +722,9 @@ class SolutionSpace(Generic[NT, T, G]):
         self,
         start: NT,
         max_count: int | None = None,
+        max_depth: int | None = None,
+        tree: Tree[T] | None = None,
+        pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
         """A simple implementation of SLD-Resolution with leftmost goal selection and depth-first search in the SLD-Derivation-Tree."""
 
@@ -604,12 +742,79 @@ class SolutionSpace(Generic[NT, T, G]):
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy, max_count)
+        return self.resolution(
+            start,
+            variance_strategy_push,
+            variance_strategy_pop,
+            goal_selection_strategy,
+            max_count,
+            max_depth,
+            tree,
+            pos,
+        )
+
+    def sample_tree(
+        self,
+        start: NT,
+        max_depth: int | None = None,
+        tree: Tree[T] | None = None,
+        pos: Path | None = None,
+        rng: random.Random | None = None,
+    ) -> Tree[T] | None:
+        """
+        This method samples a tree top-down with possibly limited depth.
+
+        Be aware, that this method is not guaranteed to terminate if the solution space contains recursive rules and
+        max_depth is None, as it may get stuck in an infinite branch of the SLD-Derivation-Tree.
+        Additionally the user has to ensure that the solution space is not empty, as an empty solution space can lead
+        to nontermination as well.
+
+        TODO: Because resolution directly returns all successful goals after the first derivation step without pushing
+              goals to the stack, this method currently doens't work with requests, were depth 0 terms are allowed!
+        """
+        # allow deterministic sampling by providing an RNG instance
+        rndm: random.Random = rng if rng is not None else random.Random()
+
+        def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
+            goals = list(new_goals)
+            rndm.shuffle(goals)
+            queue.extendleft(goals)  # depth-first search <~> LIFO
+            return queue
+
+        def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
+            return queue, queue.popleft()  # depth-first search <~> LIFO
+
+        def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
+            max_len = max(len(p) for p in goal.subgoals)
+            filtered = list(filter(lambda x: len(x[0]) == max_len, goal.subgoals.items()))
+            return rndm.choice(filtered)
+            # assuming new subgoals (deeper positions) are added "to the left" of the old ones
+
+        trees: Iterable[Tree[T]] = self.resolution(
+            start,
+            variance_strategy_push,
+            variance_strategy_pop,
+            goal_selection_strategy,
+            max_depth=max_depth,
+            tree=tree,
+            pos=pos,
+        )
+
+        try:
+            iterator = iter(trees)
+            tree = next(iterator)
+        except StopIteration:
+            return None
+
+        return tree
 
     def breadth_first_resolution(
         self,
         start: NT,
         max_count: int | None = None,
+        max_depth: int | None = None,
+        tree: Tree[T] | None = None,
+        pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
         """A simple implementation of SLD-Resolution with leftmost goal selection and breadth-first search in the SLD-Derivation-Tree."""
 
@@ -627,7 +832,16 @@ class SolutionSpace(Generic[NT, T, G]):
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
             # assuming new subgoals (deeper positions) are added "to the left" of the old ones
 
-        return self.resolution(start, variance_strategy_push, variance_strategy_pop, goal_selection_strategy, max_count)
+        return self.resolution(
+            start,
+            variance_strategy_push,
+            variance_strategy_pop,
+            goal_selection_strategy,
+            max_count,
+            max_depth,
+            tree,
+            pos,
+        )
 
     def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
         """Check if the solution space contains a given `tree` derivable from `start`."""
@@ -644,17 +858,8 @@ class SolutionSpace(Generic[NT, T, G]):
             task = stack.pop()
             if isinstance(task, tuple):
                 nt, tree = task
-                relevant_rhss = [
-                    rhs
-                    for rhs in self._rules[nt]
-                    if len(rhs.arguments) == len(tree.children)
-                    and rhs.terminal == tree.root
-                    and all(
-                        argument.value == child.root and len(child.children) == 0
-                        for argument, child in zip(rhs.arguments, tree.children, strict=True)
-                        if isinstance(argument, ConstantArgument)
-                    )
-                ]
+                # use shared helper to check whether a rule matches the current tree head
+                relevant_rhss = [rhs for rhs in self._rules[nt] if self._rule_matches_subtree(rhs, tree)]
 
                 # disjunction of the results for individual rules
                 def or_inputs(count: int = len(relevant_rhss)) -> None:

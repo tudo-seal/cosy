@@ -78,3 +78,23 @@ def test_contains_tree(query, component_specifications) -> None:
     assert solution_space.contains_tree(query, tree_correct)
     assert not solution_space.contains_tree(query, tree_wrong_1)
     assert not solution_space.contains_tree(query, tree_wrong_2)
+
+    tree_correct_positions = tree_correct.positions()
+
+    for pos in tree_correct_positions:
+        trees = solution_space.depth_first_resolution(query, tree=tree_correct, pos=pos)
+        trees = list(trees)
+        assert trees
+        assert all(solution_space.contains_tree(query, t) for t in trees)
+
+    tree_wrong_1_leaf_positions = tree_wrong_1.leaf_positions()
+    for pos in tree_wrong_1_leaf_positions:
+        trees = solution_space.breadth_first_resolution(query, tree=tree_wrong_1, pos=pos)
+        trees = list(trees)
+        assert not trees
+        assert not any(solution_space.contains_tree(query, t) for t in trees)
+
+    trees = solution_space.breadth_first_resolution(query, tree=tree_wrong_2, pos=(3,))
+    trees = list(trees)
+    assert tree_wrong_2 not in trees
+    assert all(solution_space.contains_tree(query, t) for t in trees)
