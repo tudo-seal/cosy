@@ -75,11 +75,11 @@ class RHSRule(Generic[NT, T, G]):
         return frozenset(arg.origin for arg in self.arguments if isinstance(arg, NonTerminalArgument))
 
     @property
-    def literal_substitution(self) -> Mapping[str, T]:
+    def literal_substitution(self) -> dict[str, T]:
         """_summary_.
 
         Returns:
-            Mapping[str,T]: _description_
+            dict[str,T]: _description_
         """
         return {n.name: n.value for n in self.arguments if isinstance(n, ConstantArgument)}
 
