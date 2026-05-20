@@ -1,7 +1,5 @@
 ##Fibonacci##
-"""
-Overall description of this example goes here.
-"""
+"""Overall description of this example goes here."""
 
 from cosy.core.specification_builder import SpecificationBuilder
 from cosy.core.types import Constructor, DataGroup, Literal, Type, Var
@@ -9,34 +7,37 @@ from cosy.maestro import Maestro
 
 
 def fib_zero() -> int:
-    """
-    The Fibonacci number at index 0.
+    """The Fibonacci number at index 0.
 
-    :return: The Fibonacci number at index 0.
+    Returns:
+        int: The Fibonacci number at index 0.
     """
     return 0
 
 
 def fib_one() -> int:
-    """
-    The Fibonacci number at index .
+    """The Fibonacci number at index .
 
-    :return: The Fibonacci number at index 1.
+    Returns:
+        int: The Fibonacci number at index 1.
     """
     return 1
 
 
 def fib_next(_z: int, _y: int, _x: int, f1: int, f2: int) -> int:
-    """
-    Calculate the Fibonacci number at a given index z using the Fibonacci numbers
+    """Calculate the Fibonacci number at a given index z using the Fibonacci numbers.
+
     at indices x = z - 2 and y = z - 1.
 
-    :param _z: The index for which the Fibonacci number is calculated.
-    :param _y: The index z - 1.
-    :param _x: The index z - 2.
-    :param f1: The Fibonacci number at index (z - 1).
-    :param f2: The Fibonacci number at index (z - 2).
-    :return: The Fibonacci number at index z.
+    Args:
+        _z (_type_): The index for which the Fibonacci number is calculated.
+        _y (_type_): The index z - 1.
+        _x (_type_): The index z - 2.
+        f1 (int): The Fibonacci number at index (z - 1).
+        f2 (int): The Fibonacci number at index (z - 2).
+
+    Returns:
+        int: The Fibonacci number at index z.
     """
     return f1 + f2
 

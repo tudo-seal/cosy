@@ -1,3 +1,5 @@
+"""_summary_."""
+
 from collections.abc import Callable, Mapping
 
 import pytest
@@ -8,6 +10,14 @@ from cosy.core.types import Constructor, Group, Literal, Type, Var
 
 
 def is_free(pos: tuple[int, int]) -> bool:
+    """_summary_.
+
+    Args:
+        pos (tuple[int, int]): _description_
+
+    Returns:
+        bool: _description_
+    """
     col, row = pos
     seed = 0
     if row == col:
@@ -23,26 +33,86 @@ def component_specifications() -> Mapping[
     Callable[[tuple[int, int], tuple[int, int], str], str] | str,
     Specification,
 ]:
+    """_summary_.
+
+    Returns:
+        Mapping[Callable[[tuple[int, int], tuple[int, int], str], str] | str, Specification]: _description_
+    """
+
     def up(b: tuple[int, int], _a: tuple[int, int], p: str) -> str:
+        """_summary_.
+
+        Args:
+            b (tuple[int, int]): _description_
+            p (str): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"{p} => UP({b})"
 
     def down(b: tuple[int, int], _a: tuple[int, int], p: str) -> str:
+        """_summary_.
+
+        Args:
+            b (tuple[int, int]): _description_
+            p (str): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"{p} => DOWN({b})"
 
     def left(b: tuple[int, int], _a: tuple[int, int], p: str) -> str:
+        """_summary_.
+
+        Args:
+            b (tuple[int, int]): _description_
+            p (str): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"{p} => LEFT({b})"
 
     def right(b: tuple[int, int], _a: tuple[int, int], p: str) -> str:
+        """_summary_.
+
+        Args:
+            b (tuple[int, int]): _description_
+            p (str): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"{p} => RIGHT({b})"
 
     def pos(ab: str) -> Type:
+        """_summary_.
+
+        Args:
+            ab (str): _description_
+
+        Returns:
+            Type: _description_
+        """
         return Constructor("pos", Var(ab))
 
     class Int2(Group):
+        """_summary_."""
+
         name = "int2"
 
         # represents the set of all free positions
         def __contains__(self, value: object) -> bool:
+            """_summary_.
+
+            Args:
+                value (object): _description_
+
+            Returns:
+                bool: _description_
+            """
             if isinstance(value, tuple):
                 x, y = value
                 if isinstance(x, int) and isinstance(y, int) and 0 <= x < SIZE and 0 <= y < SIZE and is_free((x, y)):
@@ -50,7 +120,7 @@ def component_specifications() -> Mapping[
             return False
 
         def __iter__(self):
-            pass
+            """_summary_."""
 
     int2 = Int2()
 
@@ -81,9 +151,21 @@ def component_specifications() -> Mapping[
 
 @pytest.fixture
 def fin():
+    """_summary_.
+
+    Returns:
+        _type_: _description_
+    """
     return "pos" @ (Literal((SIZE - 1, SIZE - 1)))
 
 
 def test_benchmark_maze_contains(component_specifications, fin, benchmark):
+    """_summary_.
+
+    Args:
+        component_specifications (_type_): _description_
+        fin (_type_): _description_
+        benchmark (_type_): _description_
+    """
     synthesizer = Synthesizer(component_specifications)
     benchmark(synthesizer.construct_solution_space, fin)

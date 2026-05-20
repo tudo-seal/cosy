@@ -1,5 +1,4 @@
-"""
-Recombination operators for evolutionary algorithms.
+"""Recombination operators for evolutionary algorithms.
 
 Recombination (crossover) operators combine genetic material from two parent solutions
 to create offspring. This is essential for exploiting promising areas of the search space
@@ -39,9 +38,10 @@ class Recombination(ABC, Generic[NT, T, G]):
         """Initialize the recombination operator.
 
         Args:
-            solution_space: The search space that defines valid individuals.
-            start: The start non-terminal for generating new individuals.
-            max_depth: The maximum depth of the trees in the search space.
+            solution_space (SolutionSpace[NT, T, G]): The search space that defines valid individuals.
+            start (NT): The start non-terminal for generating new individuals.
+            max_depth (int | None): The maximum depth of the trees in the search space. (Default value = None)
+            rng (random.Random | None): _description_ (Default value = None)
         """
         self.solution_space = solution_space
         self.start = start
@@ -53,11 +53,11 @@ class Recombination(ABC, Generic[NT, T, G]):
         """Recombine two parent trees to create offspring.
 
         Args:
-            primary: The first parent tree.
-            secondary: The second parent tree.
+            primary (Tree[T]): The first parent tree.
+            secondary (Tree[T]): The second parent tree.
 
         Returns:
-            A list of valid offspring, or an empty list if recombination failed.
+            list[Tree[T]]: A list of valid offspring, or an empty list if recombination failed.
         """
 
 
@@ -77,11 +77,11 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         determined by the distance from the position to the nearest leaf in the tree.
 
         Args:
-            leaf_positions: A list of paths to leaf nodes in the tree.
-            position: The path to the current position being evaluated.
+            leaf_positions (set[Path]): A list of paths to leaf nodes in the tree.
+            position (Path): The path to the current position being evaluated.
 
         Returns:
-            The maximum allowed depth for a subtree at the given position.
+            int: The maximum allowed depth for a subtree at the given position.
         """
         return max(len(leaf) - len(position) for leaf in leaf_positions if leaf[: len(position)] == position)
 
@@ -97,12 +97,12 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         6. Return valid offspring or empty list if none found
 
         Args:
-            primary: The primary parent tree.
-            secondary: The secondary parent tree.
+            primary (Tree[T]): The primary parent tree.
+            secondary (Tree[T]): The secondary parent tree.
 
         Returns:
-            A list containing up to two offspring if valid, or an empty list if no valid
-            offspring could be produced.
+            list[Tree[T]]: A list containing up to two offspring if valid, or an empty list if no valid
+                offspring could be produced.
         """
         # Collect valid crossover points in the primary parent
         # (exclude root and leaves to ensure meaningful swaps)

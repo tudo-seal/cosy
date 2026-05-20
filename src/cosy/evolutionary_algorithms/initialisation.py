@@ -1,5 +1,4 @@
-"""
-Population initialization strategies for evolutionary algorithms.
+"""Population initialization strategies for evolutionary algorithms.
 
 This module provides components for creating initial populations of candidate solutions.
 Different initialization strategies can significantly impact the quality and diversity
@@ -30,8 +29,9 @@ class Initialization(ABC, Generic[NT, T, G]):
         """Initialize the strategy with a search space and start symbol.
 
         Args:
-            solution_space: The search space that defines valid individuals.
-            start: The start non-terminal for generating individuals.
+            solution_space (SolutionSpace[NT, T, G]): The search space that defines valid individuals.
+            start (NT): The start non-terminal for generating individuals.
+            rng (random.Random | None): _description_ (Default value = None)
         """
         self.solution_space = solution_space
         self.start = start
@@ -42,10 +42,10 @@ class Initialization(ABC, Generic[NT, T, G]):
         """Generate an initial population of candidate solutions.
 
         Args:
-            population_size: The desired size of the population.
+            population_size (int): The desired size of the population.
 
         Yields:
-            Valid individuals (Tree objects) from the search space.
+            Tree[T]: Valid individuals (Tree objects) from the search space.
         """
 
 
@@ -63,9 +63,10 @@ class RandomLimitedDepthFirstInitialization(Initialization[NT, T, G], Generic[NT
         """Initialize the random limited-depth initialization strategy.
 
         Args:
-            solution_space: The search space that defines valid individuals.
-            start: The start non-terminal for generating individuals.
-            max_depth: Maximum tree depth for generated individuals.
+            solution_space (SolutionSpace[NT, T, G]): The search space that defines valid individuals.
+            start (NT): The start non-terminal for generating individuals.
+            max_depth (int): Maximum tree depth for generated individuals.
+            rng (random.Random | None): _description_ (Default value = None)
         """
         super().__init__(solution_space, start, rng)
         self.max_depth = max_depth
@@ -74,11 +75,11 @@ class RandomLimitedDepthFirstInitialization(Initialization[NT, T, G], Generic[NT
         """Generate population_size random individuals with limited depth.
 
         Args:
-            population_size: The desired population size.
+            population_size (int): The desired population size.
 
         Yields:
-            Valid Tree individuals sampled from the solution space,
-            or skips None results from failed sampling attempts.
+            Tree[T]: Valid Tree individuals sampled from the solution space,
+                or skips None results from failed sampling attempts.
         """
         for _ in range(population_size):
             tree = self.solution_space.sample_tree(self.start, self.max_depth, rng=self.rng)

@@ -92,7 +92,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @applications-chaumet-2024
+    Chaumet, Constantin, et al. "_A Knowledge-Driven Framework for Synthesizing Designs from Modular Components._" Procedia CIRP, vol. 128, 2024, p. 304---309.
     
  
 
@@ -100,7 +100,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @applications-chaumet-2023
+    Chaumet, Constantin, and Jakob Rehof. "_CLS-CAD: Synthesizing CAD Assemblies in Fusion 360._" arXiv, 2023.
     
  
 
@@ -108,7 +108,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @applications-mages-2022
+    Mages, Alexander, et al. "_Automatic Component-Based Synthesis of User-Configured Manufacturing Simulation Models._" 2022 Winter Simulation Conference (WSC), 2022, p. 1841---1852.
     
  
 
@@ -116,7 +116,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @applications-maeckel-2021
+    Mäckel, Dominik, et al. "_Synthesis of Scheduling Heuristics by Composition and Recombination._" Optimization and Learning, edited by Bernabé Dorronsoro et al., Springer International Publishing, 2021, p. 283---293.
     
  
 
@@ -124,7 +124,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @applications-schaefer-2021
+    Schäfer, Tristan, et al. "_A Synthesis-Based Tool Path Planning Approach for Machining Operations._" Procedia CIRP, vol. 104, 2021, p. 918---923.
     
  
 
@@ -132,7 +132,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @applications-winkels-2018
+    Winkels, Jan, et al. "_Automatic Composition of Rough Solution Possibilities in the Target Planning of Factory Planning Projects by Means of Combinatory Logic._" Leveraging Applications of Formal Methods, Verification and Validation. Industrial Practice: 8th International Symposium, ISoLA 2018, Limassol, Cyprus, November 5-9, 2018, Proceedings, Part IV 8, 2018, p. 487---503.
     
  
 
@@ -140,7 +140,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @applications-bessai-2016
+    Bessai, Jan, Andrej Dudenhefner, Boris Düdder, Moritz Martens, and Jakob Rehof. "_Combinatory Process Synthesis._" Leveraging Applications of Formal Methods, Verification and Validation: Foundational Techniques, 2016, p. 266---281.
 
 </div>
 ///
@@ -151,7 +151,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-dudenhefner-2024
+    Dudenhefner, Andrej, Christoph Stahl, et al. "_Finite Combinatory Logic with Predicates._" 2024.
     
  
 
@@ -159,7 +159,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-dudenhefner-2023
+    Dudenhefner, Andrej, Felix Laarmann, et al. "_Finite Combinatory Logic Extended by a Boolean Query Language for Composition Synthesis._" 29th International Conference on Types for Proofs and Programs TYPES 2023---Abstracts, 2023, p. 105.
     
  
 
@@ -167,7 +167,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-bessai-2019
+    Bessai, Jan. "_A Type-Theoretic Framework for Software Component Synthesis._" 2019. TU Dortmund University, PhD thesis.
     
  
 
@@ -175,7 +175,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-dudenhefner-2019
+    Dudenhefner, Andrej. "_Algorithmic Aspects of Type-Based Program Synthesis._" 2019. TU Dortmund University, PhD thesis.
     
  
 
@@ -183,7 +183,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-kallat-2019
+    Kallat, Fadil, et al. "_CLS-SMT: Bringing Together Combinatory Logic Synthesis and Satisfiability Modulo Theories._" Proceedings Sixth Workshop on Proof eXchange for Theorem Proving, PxTP 2019, Natal, Brazil, August 26, 2019, edited by Giselle Reis and Haniel Barbosa, vol. 301, 2019, p. 51---65. EPTCS.
     
  
 
@@ -191,7 +191,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-bessai-2018
+    Bessai, Jan, and Anna Vasileva. "_User Support for the Combinator Logic Synthesizer Framework._" Proceedings 4th Workshop on Formal Integrated Development Environment, f-IDE@FLoC 2018, Oxford, England, 14 July 2018, edited by Paolo Masci et al., vol. 284, 2018, p. 16---25. EPTCS.
     
  
 
@@ -199,7 +199,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-bessai-2016
+    Bessai, Jan, Boris Düdder, et al. "_Combinatory Synthesis of Classes Using Feature Grammars._" Formal Aspects of Component Software: 12th International Conference, FACS 2015, Niterói, Brazil, October 14-16, 2015, Revised Selected Papers 12, 2016, p. 123---140.
     
  
 
@@ -207,7 +207,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-heineman-2016
+    Heineman, George, Jan Bessai, et al. "_A Long and Winding Road Towards Modular Synthesis._" Leveraging Applications of Formal Methods, Verification and Validation: Foundational Techniques: 7th International Symposium, ISoLA 2016, Imperial, Corfu, Greece, October 10---14, 2016, Proceedings, Part i 7, 2016, p. 303---317.
     
  
 
@@ -215,7 +215,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-bessai-2015
+    Bessai, Jan, Andrej Dudenhefner, Boris Düdder, Tzu-Chun Chen, et al. "_Mixin Composition Synthesis Based on Intersection Types._" 13th International Conference on Typed Lambda Calculi and Applications (TLCA 2015), edited by Thorsten Altenkirch, vol. 38, Schloss Dagstuhl --- Leibniz-Zentrum für Informatik, 2015, p. 76---91. Leibniz International Proceedings in Informatics (LIPIcs).
     
  
 
@@ -223,7 +223,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-heineman-2015
+    Heineman, George, Armend Hoxha, et al. "_Towards Migrating Object-Oriented Frameworks to Enable Synthesis of Product Line Members._" Proceedings of the 19th International Conference on Software Product Line, 2015, p. 56---60.
     
  
 
@@ -231,7 +231,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-bessai-2014
+    Bessai, Jan, Andrej Dudenhefner, Boris Düdder, Moritz Martens, and Jakob Rehof. "_Combinatory Logic Synthesizer._" Leveraging Applications of Formal Methods, Verification and Validation. Technologies for Mastering Change - 6th International Symposium, ISoLA 2014, Imperial, Corfu, Greece, October 8-11, 2014, Proceedings, Part I, edited by Tiziana Margaria and Bernhard Steffen, vol. 8802, Springer, 2014, p. 26---40. Lecture Notes in Computer Science.
     
  
 
@@ -239,7 +239,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-duedder-2014
+    Düdder, Boris, Moritz Martens, and Jakob Rehof. "_Staged Composition Synthesis._" Programming Languages and Systems: 23rd European Symposium on Programming, ESOP 2014, Held as Part of the European Joint Conferences on Theory and Practice of Software, ETAPS 2014, Grenoble, France, April 5-13, 2014, Proceedings 23, 2014, p. 67---86.
     
  
 
@@ -247,7 +247,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-rehof-2013
+    Rehof, Jakob. "_Towards Combinatory Logic Synthesis._" 1st International Workshop on Behavioural Types, BEAT, 2013.
 
 
 
@@ -255,7 +255,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-duedder-2012
+    Düdder, Boris, Moritz Martens, Jakob Rehof, and Paweł Urzyczyn. "_Bounded Combinatory Logic._" Computer Science Logic (CSL'12) - 26th International Workshop/21st Annual Conference of the EACSL, CSL 2012, September 3-6, 2012, Fontainebleau, France, edited by Patrick Cégielski and Arnaud Durand, vol. 16, Schloss Dagstuhl - Leibniz-Zentrum für Informatik, 2012, p. 243---258. LIPIcs.
     
  
 
@@ -263,7 +263,7 @@ An overview over relevant literature, split into applications of CoSy and the th
 
     ---
 
-    @theory-rehof-2011
+    Rehof, Jakob, and Paweł Urzyczyn. "_Finite Combinatory Logic with Intersection Types._" Typed Lambda Calculi and Applications - 10th International Conference, TLCA 2011, Novi Sad, Serbia, June 1-3, 2011. Proceedings, edited by C.-H. Luke Ong, vol. 6690, Springer, 2011, p. 169---183. Lecture Notes in Computer Science.
     
  
 </div>

@@ -1,3 +1,5 @@
+"""_summary_."""
+
 from __future__ import annotations
 
 import math
@@ -16,34 +18,101 @@ from examples.example_symbolic_regression import (
 
 
 class StaticInitialization:
+    """_summary_.
+
+    Attributes:
+        population (_type_): _description_
+    """
+
     def __init__(self, population: list[Tree[str]]) -> None:
+        """_summary_.
+
+        Args:
+            population (list[Tree[str]]): _description_
+        """
         self.population = list(population)
 
     def initialize_population(self, population_size: int):
+        """_summary_.
+
+        Args:
+            population_size (int): _description_
+
+        Returns:
+            _type_: _description_
+        """
         return self.population[:population_size]
 
 
 class EmptyInitialization:
+    """_summary_."""
+
     def initialize_population(self, population_size: int):
+        """_summary_.
+
+        Args:
+            population_size (int): _description_
+
+        Returns:
+            _type_: _description_
+        """
         return []
 
 
 class RecordingMutation:
+    """_summary_.
+
+    Attributes:
+        calls (list[Tree[str]]): _description_
+    """
+
     def __init__(self) -> None:
+        """_summary_."""
         self.calls: list[Tree[str]] = []
 
     def mutate(self, tree: Tree[str]):
+        """_summary_.
+
+        Args:
+            tree (Tree[str]): _description_
+
+        Returns:
+            _type_: _description_
+        """
         self.calls.append(tree)
         return []
 
 
 class EmptyRecombination:
+    """_summary_."""
+
     def recombine(self, primary: Tree[str], secondary: Tree[str]):
+        """_summary_.
+
+        Args:
+            primary (Tree[str]): _description_
+            secondary (Tree[str]): _description_
+
+        Returns:
+            _type_: _description_
+        """
         return []
 
 
 class RecordingSelection:
+    """_summary_.
+
+    Attributes:
+        response (list[Tree[str]] | None): _description_
+        calls (list[dict[str, object]]): _description_
+    """
+
     def __init__(self, response: list[Tree[str]] | None = None) -> None:
+        """_summary_.
+
+        Args:
+            response (list[Tree[str]] | None): _description_ (Default value = None)
+        """
         self.response = response
         self.calls: list[dict[str, object]] = []
 
@@ -56,6 +125,19 @@ class RecordingSelection:
         ages=None,
         previous_generation_ages=None,
     ):
+        """_summary_.
+
+        Args:
+            population_fitness (_type_): _description_
+            population_size (_type_): _description_
+            comparator (_type_): _description_
+            previous_generation_fitness (_type_): _description_ (Default value = None)
+            ages (_type_): _description_ (Default value = None)
+            previous_generation_ages (_type_): _description_ (Default value = None)
+
+        Returns:
+            _type_: _description_
+        """
         self.calls.append(
             {
                 "population_fitness": dict(population_fitness),
@@ -76,6 +158,7 @@ class RecordingSelection:
 
 
 def test_ea_state_is_a_plain_snapshot() -> None:
+    """_summary_."""
     tree = Tree("leaf")
     state = EAState(generation=1, population=[tree], fitness={tree: 1.5}, offspring=[], ages={tree: 0})
 
@@ -83,6 +166,7 @@ def test_ea_state_is_a_plain_snapshot() -> None:
 
 
 def test_simple_gp_rejects_invalid_operator_rates() -> None:
+    """_summary_."""
     solution_space: Any = object()
     initialization: Any = StaticInitialization([])
     mutation: Any = RecordingMutation()
@@ -108,6 +192,7 @@ def test_simple_gp_rejects_invalid_operator_rates() -> None:
 
 
 def test_simple_gp_last_generation_and_best_use_fitness_order() -> None:
+    """_summary_."""
     low = Tree("low")
     high = Tree("high")
     fitness_calls: list[Tree[str]] = []
@@ -119,6 +204,14 @@ def test_simple_gp_last_generation_and_best_use_fitness_order() -> None:
     survivor_selection: Any = RecordingSelection()
 
     def fitness(tree: Tree[str]) -> float:
+        """_summary_.
+
+        Args:
+            tree (Tree[str]): _description_
+
+        Returns:
+            float: _description_
+        """
         fitness_calls.append(tree)
         return 2.0 if tree.root == "low" else 1.0
 
@@ -145,6 +238,7 @@ def test_simple_gp_last_generation_and_best_use_fitness_order() -> None:
 
 
 def test_simple_gp_supports_batch_fitness_functions() -> None:
+    """_summary_."""
     low = Tree("low")
     high = Tree("high")
     solution_space: Any = object()
@@ -156,6 +250,14 @@ def test_simple_gp_supports_batch_fitness_functions() -> None:
     batch_calls: list[list[Tree[str]]] = []
 
     def fitness(trees: list[Tree[str]]) -> dict[Tree[str], float]:
+        """_summary_.
+
+        Args:
+            trees (list[Tree[str]]): _description_
+
+        Returns:
+            dict[Tree[str], float]: _description_
+        """
         batch_calls.append(list(trees))
         return {tree: 2.0 if tree.root == "low" else 1.0 for tree in trees}
 
@@ -179,6 +281,7 @@ def test_simple_gp_supports_batch_fitness_functions() -> None:
 
 
 def test_simple_gp_returns_none_for_an_empty_initial_population() -> None:
+    """_summary_."""
     solution_space: Any = object()
     initialization: Any = EmptyInitialization()
     mutation: Any = RecordingMutation()
@@ -204,12 +307,21 @@ def test_simple_gp_returns_none_for_an_empty_initial_population() -> None:
 
 
 def test_simple_gp_falls_back_to_survivors_and_tracks_ages() -> None:
+    """_summary_."""
     best = Tree("best")
     other = Tree("other")
     fitness_calls: list[Tree[str]] = []
     solution_space: Any = object()
 
     def fitness(tree: Tree[str]) -> float:
+        """_summary_.
+
+        Args:
+            tree (Tree[str]): _description_
+
+        Returns:
+            float: _description_
+        """
         fitness_calls.append(tree)
         return 2.0 if tree.root == "best" else 1.0
 
@@ -258,6 +370,7 @@ def test_simple_gp_falls_back_to_survivors_and_tracks_ages() -> None:
 def test_symbolic_regression() -> None:
     # TODO: This is the most simple integration test.
     #       Everything is prepared to enforce determinism, but a suitable integration test must still be written.
+    """_summary_."""
     best_tree, train_mse, test_mse = run_symbolic_regression(
         # seed=0,
         population_size=30,

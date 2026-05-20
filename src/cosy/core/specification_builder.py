@@ -1,6 +1,6 @@
 # pylint: disable=invalid-name
-"""
-This module provides a `SpecificationBuilder` class, which allows users to define specifications
+"""This module provides a `SpecificationBuilder` class, which allows users to define specifications.
+
 in a declarative manner using a fluent interface.
 """
 
@@ -27,8 +27,7 @@ from cosy.core.types import (
 
 
 class SpecificationBuilder:
-    """
-    A domain-specific language (SpecificationBuilder) to define component specifications.
+    """A domain-specific language (SpecificationBuilder) to define component specifications.
 
     This class provides a interface for defining specifications in a declarative manner. It allows
     users to specify the name and group of each parameter, as well as filter.
@@ -49,9 +48,7 @@ class SpecificationBuilder:
     """
 
     def __init__(self) -> None:
-        """
-        Initialize the SpecificationBuilder object
-        """
+        """Initialize the SpecificationBuilder object."""
 
         self._result: Callable[[Specification], Specification] = lambda suffix: suffix
 
@@ -61,8 +58,7 @@ class SpecificationBuilder:
         group: Group,
         candidates: Callable[[dict[str, Any]], Sequence[Any]] | None = None,
     ) -> SpecificationBuilder:
-        """
-        Introduce a new parameter variable.
+        """Introduce a new parameter variable.
 
         `group` is a Group, and an instance of this specification will be generated
         for each valid literal in the corresponding literal group.
@@ -73,87 +69,121 @@ class SpecificationBuilder:
         defined literal variables. This is useful, if you want to restrict the values of a variable
         to a subset of the values in the corresponding literal group.
 
-        :param name: The name of the new variable.
-        :type name: str
-        :param group: The group of the variable.
-        :type group: Group
-        :param candidates: Parameterized sequence of candidate values, that will be used to generate the literals.
-        :type candidates: Callable[[dict[str, Any]], Sequence[Any]] | None
-        :return: The SpecificationBuilder object.
-        :rtype: SpecificationBuilder
+        Args:
+            name (str): The name of the new variable.
+            group (Group): The group of the variable.
+            candidates (Callable[[dict[str, Any]], Sequence[Any]] | None): Parameterized sequence of candidate values, that will be used to generate the literals. (Default value = None)
+
+        Returns:
+            SpecificationBuilder: The SpecificationBuilder object.
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:
+            """_summary_.
+
+            Args:
+                suffix (Specification): _description_
+                result (_type_): _description_ (Default value = self._result)
+
+            Returns:
+                Specification: _description_
+            """
             return result(Abstraction(LiteralParameter(name, group, candidates), suffix))
 
         self._result = new_result
         return self
 
     def argument(self, name: str, specification: Type) -> SpecificationBuilder:
-        """
-        Introduce a new variable.
+        """Introduce a new variable.
 
         `group` is a `Type`, and an instance will be generated for each tree, satisfying
         the specification given by the type. Since this can only be done in the enumeration step,
         you can only use these variables in predicates, that themselves belong to variables whose `group` is a `Type`.
 
-        :param name: The name of the new variable.
-        :type name: str
-        :param specification: The type of the variable.
-        :type specification: Type
-        :return: The SpecificationBuilder object.
-        :rtype: SpecificationBuilder
+        Args:
+            name (str): The name of the new variable.
+            specification (Type): The type of the variable.
+
+        Returns:
+            SpecificationBuilder: The SpecificationBuilder object.
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:
+            """_summary_.
+
+            Args:
+                suffix (Specification): _description_
+                result (_type_): _description_ (Default value = self._result)
+
+            Returns:
+                Specification: _description_
+            """
             return result(Abstraction(TermParameter(name, specification), suffix))
 
         self._result = new_result
         return self
 
     def parameter_constraint(self, constraint: Callable[[Mapping[str, Any]], bool]) -> SpecificationBuilder:
-        """
-        Constraint on the previously defined parameter variables.
+        """Constraint on the previously defined parameter variables.
 
-        :param constraint: A constraint deciding, if the currently chosen parameter values are valid.
-            The values of variables are passed by a dictionary, where the keys are the names of the
-            parameter variables and the values are the corresponding values.
-        :type constraint: Callable[[Mapping[str, Any]], bool]
-        :return: The SpecificationBuilder object.
-        :rtype: SpecificationBuilder
+        Args:
+            constraint (Callable[[Mapping[str, Any]], bool]): A constraint deciding, if the currently chosen parameter values are valid.
+                The values of variables are passed by a dictionary, where the keys are the names of the
+                parameter variables and the values are the corresponding values.
+
+        Returns:
+            SpecificationBuilder: The SpecificationBuilder object.
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:
+            """_summary_.
+
+            Args:
+                suffix (Specification): _description_
+                result (_type_): _description_ (Default value = self._result)
+
+            Returns:
+                Specification: _description_
+            """
             return result(Implication(Predicate(constraint, True), suffix))
 
         self._result = new_result
         return self
 
     def constraint(self, constraint: Callable[[Mapping[str, Any]], bool]) -> SpecificationBuilder:
-        """
-        Constraint on the previously defined parameter variables and argument variables.
+        """Constraint on the previously defined parameter variables and argument variables.
 
-        :param constraint: A constraint deciding, if the currently chosen values are valid.
-            The values of variables are passed by a dictionary, where the keys are the names of the
-            variables and the values are the corresponding values.
-        :type constraint: Callable[[Mapping[str, Any]], bool]
-        :return: The SpecificationBuilder object.
-        :rtype: SpecificationBuilder
+        Args:
+            constraint (Callable[[Mapping[str, Any]], bool]): A constraint deciding, if the currently chosen values are valid.
+                The values of variables are passed by a dictionary, where the keys are the names of the
+                variables and the values are the corresponding values.
+
+        Returns:
+            SpecificationBuilder: The SpecificationBuilder object.
         """
 
         def new_result(suffix: Specification, result=self._result) -> Specification:
+            """_summary_.
+
+            Args:
+                suffix (Specification): _description_
+                result (_type_): _description_ (Default value = self._result)
+
+            Returns:
+                Specification: _description_
+            """
             return result(Implication(Predicate(constraint, False), suffix))
 
         self._result = new_result
         return self
 
     def suffix(self, suffix: Type) -> Specification:
-        """
-        Constructs the final specification wrapping the given `Type` `suffix`.
+        """Constructs the final specification wrapping the given `Type` `suffix`.
 
-        :param suffix: The wrapped type.
-        :type suffix: Type
-        :return: The constructed specification.
-        :rtype: Abstraction | Type
+        Args:
+            suffix (Type): The wrapped type.
+
+        Returns:
+            Specification: The constructed specification.
         """
         return self._result(suffix)

@@ -1,5 +1,4 @@
-"""
-Component-oriented framework for evolutionary algorithms.
+"""Component-oriented framework for evolutionary algorithms.
 
 This module provides the core infrastructure for building customizable evolutionary algorithms
 by composing independent components (initialization, mutation, recombination, selection).
@@ -38,11 +37,11 @@ class EAState(Generic[T]):
     """Snapshot of one generation in an evolutionary run.
 
     Attributes:
-        generation: The generation number (starts at 0).
-        population: The current population of individuals (Tree objects).
-        fitness: Mapping from individuals to their fitness values.
-        offspring: The individuals created in this generation through variation.
-        ages: Mapping from individuals to their age (generations alive).
+        generation (int): The generation number (starts at 0).
+        population (list[Tree[T]]): The current population of individuals (Tree objects).
+        fitness (dict[Tree[T], Fitness]): Mapping from individuals to their fitness values.
+        offspring (list[Tree[T]]): The individuals created in this generation through variation.
+        ages (dict[Tree[T], int]): Mapping from individuals to their age (generations alive).
     """
 
     generation: int
@@ -75,16 +74,16 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         """Initialize the evolutionary algorithm with the given components.
 
         Args:
-            solution_space: Defines the search space and constraint satisfaction.
-            start: The start non-terminal for generating new individuals.
-            termination_condition: A function that returns True when the EA should stop.
-            initialization: Component for creating initial populations.
-            mutation: Component for applying mutations to individuals.
-            recombination: Component for recombining individuals.
-            parent_selection: Component for selecting parents for variation.
-            survivor_selection: Component for selecting survivors for the next generation.
-            fitness_comparator: Component for comparing fitness values (mono- or multi-objective).
-            rng: Optional random number generator for reproducibility.
+            solution_space (SolutionSpace[NT, T, G]): Defines the search space and constraint satisfaction.
+            start (NT): The start non-terminal for generating new individuals.
+            termination_condition (Callable[[EAState[T]], bool]): A function that returns True when the EA should stop.
+            initialization (Initialization[NT, T, G]): Component for creating initial populations.
+            mutation (Mutation[NT, T, G]): Component for applying mutations to individuals.
+            recombination (Recombination[NT, T, G]): Component for recombining individuals.
+            parent_selection (Selection[NT, T, G]): Component for selecting parents for variation.
+            survivor_selection (Selection[NT, T, G]): Component for selecting survivors for the next generation.
+            fitness_comparator (FitnessComparator): Component for comparing fitness values (mono- or multi-objective). (Default value = ScalarFitnessComparator())
+            rng (random.Random | None): Optional random number generator for reproducibility. (Default value = None)
         """
         self.solution_space = solution_space
         self.start = start
@@ -99,10 +98,26 @@ class Evolutionary(ABC, Generic[NT, T, G]):
 
     @staticmethod
     def _deduplicate_population(population: Iterable[Tree[T]]) -> list[Tree[T]]:
+        """_summary_.
+
+        Args:
+            population (Iterable[Tree[T]]): _description_
+
+        Returns:
+            list[Tree[T]]: _description_
+        """
         return list(dict.fromkeys(population))
 
     @staticmethod
     def _looks_like_batch_fitness_function(fitness_function: Callable[..., Any]) -> bool:
+        """_summary_.
+
+        Args:
+            fitness_function (Callable[..., Any]): _description_
+
+        Returns:
+            bool: _description_
+        """
         try:
             signature = inspect.signature(fitness_function)
             type_hints = get_type_hints(fitness_function)
@@ -137,6 +152,22 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         *,
         fitness_function_mode: FitnessFunctionMode = "auto",
     ) -> dict[Tree[T], Fitness]:
+        """_summary_.
+
+        Args:
+            fitness_function (Callable[..., Any]): _description_
+            population (Iterable[Tree[T]]): _description_
+            fitness_cache (dict[Tree[T], Fitness]): _description_
+            fitness_function_mode (FitnessFunctionMode): _description_ (Default value = 'auto')
+
+        Returns:
+            dict[Tree[T], Fitness]: _description_
+
+        Raises:
+            ValueError: _description_
+            TypeError: _description_
+            ValueError: _description_
+        """
         unique_population = self._deduplicate_population(population)
         missing = [tree for tree in unique_population if tree not in fitness_cache]
 
@@ -181,18 +212,18 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         """Yield successive EA states until the termination condition is met.
 
         Args:
-            fitness_function: Function mapping individuals to fitness values. Also supports a batch
+            fitness_function (Callable[..., Any]): Function mapping individuals to fitness values. Also supports a batch
                 variant that accepts a list of trees and returns a mapping from tree to fitness.
-            population_size: Target population size for each generation.
-            mutation_rate: Probability of applying mutation during variation [0, 1].
-            recombination_rate: Probability of applying recombination during variation [0, 1].
-                               mutation_rate + recombination_rate should be <= 1.
-            fitness_function_mode: How to interpret fitness_function. "single" expects a tree at
+            population_size (int): Target population size for each generation.
+            mutation_rate (float): Probability of applying mutation during variation [0, 1].
+            recombination_rate (float): Probability of applying recombination during variation [0, 1].
+                mutation_rate + recombination_rate should be <= 1.
+            fitness_function_mode (FitnessFunctionMode): How to interpret fitness_function. "single" expects a tree at
                 a time, "batch" expects a list of trees, and "auto" tries batch first and falls
-                back to single-tree evaluation.
+                back to single-tree evaluation. (Default value = 'auto')
 
         Yields:
-            EAState: Snapshots of each generation until termination_condition returns True.
+            EAState[T]: Snapshots of each generation until termination_condition returns True.
         """
 
     def evolutionary_last_generation(
@@ -207,15 +238,15 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         """Return the final generation, sorted by fitness (best first).
 
         Args:
-            fitness_function: Function to evaluate individuals. Also supports a batch variant.
-            population_size: Population size for the evolutionary run.
-            mutation_rate: Mutation probability during variation.
-            recombination_rate: Recombination probability during variation.
-            verbose: Print generation numbers during the run if True (default: False).
-            fitness_function_mode: How to interpret fitness_function (see evolutionary_stream).
+            fitness_function (Callable[..., Any]): Function to evaluate individuals. Also supports a batch variant.
+            population_size (int): Population size for the evolutionary run.
+            mutation_rate (float): Mutation probability during variation.
+            recombination_rate (float): Recombination probability during variation.
+            verbose (bool): Print generation numbers during the run if True (default: False).
+            fitness_function_mode (FitnessFunctionMode): How to interpret fitness_function (see evolutionary_stream). (Default value = 'auto')
 
         Returns:
-            A list of individuals from the final generation, sorted by fitness (best first).
+            list[Tree[T]]: A list of individuals from the final generation, sorted by fitness (best first).
         """
         last_state: EAState[T] | None = None
         for state in self.evolutionary_stream(
@@ -248,15 +279,15 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         """Return the best individual from the final generation, if any.
 
         Args:
-            fitness_function: Function to evaluate individuals. Also supports a batch variant.
-            population_size: Population size for the evolutionary run.
-            mutation_rate: Mutation probability during variation.
-            recombination_rate: Recombination probability during variation.
-            verbose: Print generation numbers during the run if True (default: False).
-            fitness_function_mode: How to interpret fitness_function (see evolutionary_stream).
+            fitness_function (Callable[..., Any]): Function to evaluate individuals. Also supports a batch variant.
+            population_size (int): Population size for the evolutionary run.
+            mutation_rate (float): Mutation probability during variation.
+            recombination_rate (float): Recombination probability during variation.
+            verbose (bool): Print generation numbers during the run if True (default: False).
+            fitness_function_mode (FitnessFunctionMode): How to interpret fitness_function (see evolutionary_stream). (Default value = 'auto')
 
         Returns:
-            The best individual from the final generation, or None if no individuals were generated.
+            Tree[T] | None: The best individual from the final generation, or None if no individuals were generated.
         """
         last_generation = self.evolutionary_last_generation(
             fitness_function,
@@ -280,15 +311,15 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         """Backward-compatible alias for returning the final generation.
 
         Args:
-            fitness_function: Function to evaluate individuals. Also supports a batch variant.
-            population_size: Population size for the evolutionary run.
-            mutation_rate: Mutation probability during variation.
-            recombination_rate: Recombination probability during variation.
-            verbose: Print generation numbers during the run if True (default: False).
-            fitness_function_mode: How to interpret fitness_function (see evolutionary_stream).
+            fitness_function (Callable[..., Any]): Function to evaluate individuals. Also supports a batch variant.
+            population_size (int): Population size for the evolutionary run.
+            mutation_rate (float): Mutation probability during variation.
+            recombination_rate (float): Recombination probability during variation.
+            verbose (bool): Print generation numbers during the run if True (default: False).
+            fitness_function_mode (FitnessFunctionMode): How to interpret fitness_function (see evolutionary_stream). (Default value = 'auto')
 
         Returns:
-            An iterable of individuals from the final generation, sorted by fitness (best first).
+            Iterable[Tree[T]]: An iterable of individuals from the final generation, sorted by fitness (best first).
         """
         return self.evolutionary_last_generation(
             fitness_function,
@@ -336,25 +367,25 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
         """Initialize a Simple Genetic Programming search strategy.
 
         Args:
-            solution_space: Defines the search space and constraint satisfaction.
-            start: The start non-terminal for generating new individuals.
-            termination_condition: A function that returns True when the EA should stop.
-            initialization: Component for creating initial populations.
-            mutation: Component for applying mutations to individuals.
-            recombination: Component for recombining individuals.
-            parent_selection: Component for selecting parents for variation.
-            survivor_selection: Component for selecting survivors for the next generation.
-            fitness_comparator: Component for comparing fitness values (mono- or multi-objective).
-            rng: Optional random number generator for reproducibility (default: new unseeded Random()).
-            elite_count: Number of best individuals to preserve unchanged each generation (default: 1).
-            max_attempts_factor: Maximum attempts = population_size * this factor (default: 5).
-            min_attempts: Minimum number of variation attempts per generation (default: 10).
-            rng_factory: Optional RNGFactory for producing independent child RNGs for components.
-                        If None, one is created from self.rng automatically. Each child RNG is
-                        deterministically seeded, ensuring reproducibility and independence.
-            distribute_rngs: If True (default), attempt to assign child RNGs from rng_factory to
-                            components that expose an 'rng' attribute. Gracefully skips components
-                            without 'rng' attribute. Set to False to disable distribution.
+            solution_space (SolutionSpace[NT, T, G]): Defines the search space and constraint satisfaction.
+            start (NT): The start non-terminal for generating new individuals.
+            termination_condition (Callable[[EAState[T]], bool]): A function that returns True when the EA should stop.
+            initialization (Initialization[NT, T, G]): Component for creating initial populations.
+            mutation (Mutation[NT, T, G]): Component for applying mutations to individuals.
+            recombination (Recombination[NT, T, G]): Component for recombining individuals.
+            parent_selection (Selection[NT, T, G]): Component for selecting parents for variation.
+            survivor_selection (Selection[NT, T, G]): Component for selecting survivors for the next generation.
+            fitness_comparator (FitnessComparator): Component for comparing fitness values (mono- or multi-objective). (Default value = ScalarFitnessComparator())
+            rng (random.Random | None): Optional random number generator for reproducibility (default: new unseeded Random()).
+            elite_count (int): Number of best individuals to preserve unchanged each generation (default: 1).
+            max_attempts_factor (int): Maximum attempts = population_size * this factor (default: 5).
+            min_attempts (int): Minimum number of variation attempts per generation (default: 10).
+            rng_factory (RNGFactory | None): Optional RNGFactory for producing independent child RNGs for components.
+                If None, one is created from self.rng automatically. Each child RNG is
+                deterministically seeded, ensuring reproducibility and independence. (Default value = None)
+            distribute_rngs (bool): If True (default), attempt to assign child RNGs from rng_factory to
+                components that expose an 'rng' attribute. Gracefully skips components
+                without 'rng' attribute. Set to False to disable distribution.
         """
         super().__init__(
             solution_space=solution_space,
@@ -420,17 +451,17 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
            e. Yield the new state
 
         Args:
-            fitness_function: Function mapping individuals to fitness values. Also supports a batch
+            fitness_function (Callable[..., Any]): Function mapping individuals to fitness values. Also supports a batch
                 variant that accepts a list of trees and returns a mapping from tree to fitness.
-            population_size: Target population size for each generation.
-            mutation_rate: Probability of applying mutation [0, 1].
-            recombination_rate: Probability of applying recombination [0, 1].
-            fitness_function_mode: How to interpret fitness_function. "single" expects a tree at
+            population_size (int): Target population size for each generation.
+            mutation_rate (float): Probability of applying mutation [0, 1].
+            recombination_rate (float): Probability of applying recombination [0, 1].
+            fitness_function_mode (FitnessFunctionMode): How to interpret fitness_function. "single" expects a tree at
                 a time, "batch" expects a list of trees, and "auto" tries batch first and falls
-                back to single-tree evaluation.
+                back to single-tree evaluation. (Default value = 'auto')
 
         Yields:
-            EAState: Snapshots of each generation until termination_condition returns True.
+            EAState[T]: Snapshots of each generation until termination_condition returns True.
 
         Raises:
             ValueError: If mutation_rate + recombination_rate > 1.
@@ -476,7 +507,11 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
             iterator = iter(mating_pool)
 
             def next_parent() -> Tree[T] | None:
-                """Get next parent from current pool or resample if pool is exhausted."""
+                """Get next parent from current pool or resample if pool is exhausted.
+
+                Returns:
+                    Tree[T] | None: _description_
+                """
                 nonlocal iterator, mating_pool
                 try:
                     return next(iterator)

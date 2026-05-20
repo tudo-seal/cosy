@@ -1,3 +1,5 @@
+"""_summary_."""
+
 # test for missing iter implementation in a Group subclass
 import re
 
@@ -9,17 +11,34 @@ from cosy.core.types import Constructor, Group
 
 
 def test_infinite_enumeration() -> None:
+    """_summary_."""
+
     def c(x) -> str:
+        """_summary_.
+
+        Args:
+            x (_type_): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"(C {x})"
 
     # group with missing iter method
     class Contains(Group):
+        """_summary_."""
+
         name = "contains"
 
         def __iter__(self):
-            pass
+            """_summary_."""
 
         def __contains__(self, _value: object) -> bool:
+            """_summary_.
+
+            Returns:
+                bool: _description_
+            """
             return True
 
     component_specifications = {

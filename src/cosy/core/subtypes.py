@@ -1,5 +1,5 @@
-"""
-This module provides a `Subtypes` class, which is used to check subtyping relationships
+"""This module provides a `Subtypes` class, which is used to check subtyping relationships.
+
 between types in the intersection type system.
 """
 
@@ -14,7 +14,18 @@ Taxonomy = Mapping[str, set[str]]
 
 
 class Subtypes:
+    """_summary_.
+
+    Attributes:
+        taxonomy (_type_): _description_
+    """
+
     def __init__(self, taxonomy: Taxonomy):
+        """_summary_.
+
+        Args:
+            taxonomy (Taxonomy): _description_
+        """
         self.taxonomy = self._transitive_closure(self._reflexive_closure(taxonomy))
 
     def _check_subtype_rec(
@@ -23,6 +34,19 @@ class Subtypes:
         supertype: Type,
         substitutions: Mapping[str, Literal],
     ) -> bool:
+        """_summary_.
+
+        Args:
+            subtypes (deque[Type]): _description_
+            supertype (Type): _description_
+            substitutions (Mapping[str, Literal]): _description_
+
+        Returns:
+            bool: _description_
+
+        Raises:
+            TypeError: _description_
+        """
         if not supertype.organized:
             return True
         match supertype:
@@ -81,12 +105,32 @@ class Subtypes:
         supertype: Type,
         substitutions: Mapping[str, Literal],
     ) -> bool:
-        """Decides whether subtype <= supertype with respect to intersection type subtyping."""
+        """Decides whether subtype <= supertype with respect to intersection type subtyping.
+
+        Args:
+            subtype (Type): _description_
+            supertype (Type): _description_
+            substitutions (Mapping[str, Literal]): _description_
+
+        Returns:
+            bool: _description_
+        """
 
         return self._check_subtype_rec(deque((subtype,)), supertype, substitutions)
 
     def infer_substitution(self, subtype: Type, path: Type) -> dict[str, Any] | None:
-        """Infers a unique substitution S such that S(subtype) <= path where path is closed. Returns None is no solution exists or multiple solutions exist. Does not respect groups."""
+        """Infers a unique substitution S such that S(subtype) <= path where path is closed. Returns None is no solution exists or multiple solutions exist. Does not respect groups.
+
+        Args:
+            subtype (Type): _description_
+            path (Type): _description_
+
+        Returns:
+            dict[str, Any] | None: _description_
+
+        Raises:
+            TypeError: _description_
+        """
 
         if not subtype.organized:
             return None
@@ -141,6 +185,14 @@ class Subtypes:
 
     @staticmethod
     def _reflexive_closure(env: Mapping[str, set[str]]) -> dict[str, set[str]]:
+        """_summary_.
+
+        Args:
+            env (Mapping[str, set[str]]): _description_
+
+        Returns:
+            dict[str, set[str]]: _description_
+        """
         all_types: set[str] = set(env.keys())
         for v in env.values():
             all_types.update(v)
@@ -149,6 +201,14 @@ class Subtypes:
 
     @staticmethod
     def _transitive_closure(env: Mapping[str, set[str]]) -> dict[str, set[str]]:
+        """_summary_.
+
+        Args:
+            env (Mapping[str, set[str]]): _description_
+
+        Returns:
+            dict[str, set[str]]: _description_
+        """
         result: dict[str, set[str]] = {subtype: supertypes.copy() for (subtype, supertypes) in env.items()}
         has_changed = True
 
@@ -170,7 +230,15 @@ class Subtypes:
         subst1: dict[str, Any],
         subst2: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Computes the greatest lower bound of two substitutions. Returns None if no glb exists."""
+        """Computes the greatest lower bound of two substitutions. Returns None if no glb exists.
+
+        Args:
+            subst1 (dict[str, Any]): _description_
+            subst2 (dict[str, Any]): _description_
+
+        Returns:
+            dict[str, Any] | None: _description_
+        """
         glb_subst: dict[str, Any] = {}
         for key in subst1.keys() & subst2.keys():
             if subst1[key] != subst2[key]:
@@ -183,7 +251,15 @@ class Subtypes:
         subst1: dict[str, Any],
         subst2: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Computes the least upper bound of two substitutions."""
+        """Computes the least upper bound of two substitutions.
+
+        Args:
+            subst1 (dict[str, Any]): _description_
+            subst2 (dict[str, Any]): _description_
+
+        Returns:
+            dict[str, Any] | None: _description_
+        """
         lub_subst: dict[str, Any] = {}
         for key in subst1.keys() | subst2.keys():
             if key in subst1:

@@ -1,8 +1,5 @@
 ##Symbolic Regression##
-"""
-Shows how to do a symbolic regression using cosy.
-"""
-
+"""Shows how to do a symbolic regression using cosy."""
 
 import random
 import time
@@ -22,12 +19,32 @@ from cosy.evolutionary_algorithms.selection import AgeBasedReplacement, FitnessP
 
 
 class SymbolicRegression:
+    """_summary_.
+
+    Attributes:
+        max_depth (int): _description_
+        variables (list[str]): _description_
+        constants (list[float]): _description_
+    """
+
     def __init__(self, max_depth: int, variables: list[str], constants: list[float]) -> None:
+        """_summary_.
+
+        Args:
+            max_depth (int): _description_
+            variables (list[str]): _description_
+            constants (list[float]): _description_
+        """
         self.max_depth = max_depth
         self.variables = variables
         self.constants = constants
 
     def specification(self) -> dict[str, Any]:
+        """_summary_.
+
+        Returns:
+            dict[str, Any]: _description_
+        """
         depth: Group = DataGroup("depth", range(self.max_depth + 1))
         variable: Group = DataGroup("variable", self.variables)
         constant: Group = DataGroup("constant", self.constants)
@@ -95,6 +112,11 @@ class SymbolicRegression:
 
     @staticmethod
     def pretty_term_algebra() -> dict[str, Any]:
+        """_summary_.
+
+        Returns:
+            dict[str, Any]: _description_
+        """
         return {
             "Const": lambda c: f"{c}",
             "Var": lambda v: f"{v}",
@@ -110,6 +132,11 @@ class SymbolicRegression:
         # Implements a term assignment. Therefore, the evaluation algebra takes a variable assignment as an additional
         # input and evaluates the term in floating point arithmetic with respect to this variable assignment.
         # The variable assignment is a mapping from variable names to their values, e.g., {"x": 1.0}.
+        """_summary_.
+
+        Returns:
+            dict[str, Any]: _description_
+        """
         return {
             "Const": lambda c, x: c,
             "Var": lambda v, x: x[v],
@@ -122,6 +149,14 @@ class SymbolicRegression:
 
 
 def target_function(x: float) -> float:
+    """_summary_.
+
+    Args:
+        x (float): _description_
+
+    Returns:
+        float: _description_
+    """
     return 2.5382 * x * x + 1.2345 * x - 0.5678
 
 
@@ -147,15 +182,18 @@ def run_symbolic_regression(
     non-deterministic iteration order without this.
 
     Args:
-        seed: Random seed for reproducibility (default: 0).
-        train_values: Training data points (default: [-2, -1, 0, 1, 2]).
-        test_values: Test data points (default: [-3, -0.5, 0.5, 3]).
-        population_size: EA population size (default: 12).
-        max_generations: Maximum GA generations (default: 6).
-        max_depth: Maximum tree depth (default: 4).
+        seed (int): Random seed for reproducibility (default: 0).
+        train_values (list[float] | None): Training data points (default: [-2, -1, 0, 1, 2]).
+        test_values (list[float] | None): Test data points (default: [-3, -0.5, 0.5, 3]).
+        population_size (int): EA population size (default: 12).
+        max_generations (int): Maximum GA generations (default: 6).
+        max_depth (int): Maximum tree depth (default: 4).
 
     Returns:
-        (best_tree, train_mse, test_mse): Best-of-run solution and its MSE values.
+        tuple[Tree[str], float, float]: (best_tree, train_mse, test_mse): Best-of-run solution and its MSE values.
+
+    Raises:
+        RuntimeError: _description_
     """
     train_values = train_values if train_values is not None else [-2.0, -1.0, 0.0, 1.0, 2.0]
     test_values = test_values if test_values is not None else [-3.0, -0.5, 0.5, 3.0]
@@ -184,19 +222,52 @@ def run_symbolic_regression(
     solution_space = synthesizer.construct_solution_space(target).prune()
 
     def mean_squared_error(y_true: list[float], y_pred: list[float]) -> float:
+        """_summary_.
+
+        Args:
+            y_true (list[float]): _description_
+            y_pred (list[float]): _description_
+
+        Returns:
+            float: _description_
+        """
         return sum((yt - yp) ** 2 for yt, yp in zip(y_true, y_pred, strict=False)) / len(y_true)
 
     def fitness_function(tree: Tree[str]) -> float:
+        """_summary_.
+
+        Args:
+            tree (Tree[str]): _description_
+
+        Returns:
+            float: _description_
+        """
         substitute_in_tree = tree.interpret(repo.evaluation_algebra())
         y_pred = [substitute_in_tree({"x": x}) for x in train_values]
         return mean_squared_error(y_train, y_pred)
 
     def test_function(tree: Tree[str]) -> float:
+        """_summary_.
+
+        Args:
+            tree (Tree[str]): _description_
+
+        Returns:
+            float: _description_
+        """
         substitute_in_tree = tree.interpret(repo.evaluation_algebra())
         y_pred = [substitute_in_tree({"x": x}) for x in test_values]
         return mean_squared_error(y_test, y_pred)
 
     def termination(state: EAState[str]) -> bool:
+        """_summary_.
+
+        Args:
+            state (EAState[str]): _description_
+
+        Returns:
+            bool: _description_
+        """
         return state.generation >= max_generations
 
     # Pass seeded RNGs to all components at construction time for determinism

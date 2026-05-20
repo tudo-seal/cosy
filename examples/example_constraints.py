@@ -1,7 +1,5 @@
 ##Constraints##
-"""
-Demonstrates constraints in CoSy.
-"""
+"""Demonstrates constraints in CoSy."""
 
 import re
 
@@ -11,43 +9,50 @@ from cosy.maestro import Maestro
 
 
 def empty() -> str:
-    """
-    Return an empty string.
+    """Return an empty string.
 
-    :return: An empty string.
+    Returns:
+        str: An empty string.
     """
     return ""
 
 
 def zero(s: str) -> str:
-    """
-    Append the string "0" to the input string.
+    """Append the string "0" to the input string.
 
-    :param s: The input string to which "0" will be appended.
-    :return: The input string with "0" appended.
+    Args:
+        s (str): The input string to which "0" will be appended.
+
+    Returns:
+        str: The input string with "0" appended.
     """
     return s + "0"
 
 
 def one(s: str) -> str:
-    """
-    Append the string "1" to the input string.
+    """Append the string "1" to the input string.
 
-    :param s: The input string to which "1" will be appended.
-    :return: The input string with "1" appended.
+    Args:
+        s (str): The input string to which "1" will be appended.
+
+    Returns:
+        str: The input string with "1" appended.
     """
     return s + "1"
 
 
 def fin(_r: str, s: str) -> str:
-    """
-    Return the input string. The input regular expression is not used in this function as it does not contribute to
+    """Return the input string. The input regular expression is not used in this function as it does not contribute to.
+
     the resulting string interpretation of synthesized results. However, it can not be omitted, as the type of the
     combinator specifies its presence.
 
-    :param _r: The input regular expression.
-    :param s: The input string.
-    :return: The unmodified input string.
+    Args:
+        _r (_type_): The input regular expression.
+        s (str): The input string.
+
+    Returns:
+        str: The unmodified input string.
     """
     return s
 
@@ -55,13 +60,23 @@ def fin(_r: str, s: str) -> str:
 def main():
     # regular expressions
     class RegularExpression(Group):
+        """_summary_."""
+
         name = "regex"
 
         def __contains__(self, value: object) -> bool:
+            """_summary_.
+
+            Args:
+                value (object): _description_
+
+            Returns:
+                bool: _description_
+            """
             return isinstance(value, str)
 
         def __iter__(self):
-            pass
+            """_summary_."""
 
     named_components_with_specifications = [
         (

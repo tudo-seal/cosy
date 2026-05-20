@@ -268,6 +268,14 @@ class TestComponentIntegration:
         """Same factory seed reproduces same component sequences."""
 
         def run_simulation(seed: int) -> tuple:
+            """_summary_.
+
+            Args:
+                seed (int): _description_
+
+            Returns:
+                tuple: _description_
+            """
             factory = RNGFactory.from_seed(seed)
 
             init_rng = factory.child_named("initialization")
@@ -289,6 +297,14 @@ class TestComponentIntegration:
         """Different factory seeds produce different component sequences."""
 
         def run_simulation(seed: int) -> list:
+            """_summary_.
+
+            Args:
+                seed (int): _description_
+
+            Returns:
+                list: _description_
+            """
             factory = RNGFactory.from_seed(seed)
             init_rng = factory.child_named("initialization")
             return init_rng.sample(range(1000), 5)

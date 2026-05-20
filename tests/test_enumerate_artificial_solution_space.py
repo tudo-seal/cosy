@@ -1,3 +1,4 @@
+"""_summary_."""
 # Tests enumeration with multiple non-terminal arguments and cross-argument constraints.
 # Verifies that constants are satisfied and no duplicates or extra trees are produced.
 
@@ -5,6 +6,7 @@ from cosy.core.solution_space import ConstantArgument, NonTerminalArgument, Solu
 
 
 def test_andrej():
+    """_summary_."""
     solution_space = SolutionSpace()
     arguments = (
         ConstantArgument("x", 0, None),

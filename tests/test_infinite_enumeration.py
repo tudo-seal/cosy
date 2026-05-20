@@ -1,3 +1,4 @@
+"""_summary_."""
 # test of the SpecificationBuilder for non-inferrable infinite parameter spaces
 
 from collections.abc import Iterator
@@ -13,29 +14,79 @@ from cosy.core.types import Constructor, Group, Var
 
 def test_infinite_enumeration() -> None:
     # literal varibles can be assigned computed values
+    """_summary_."""
+
     def c(x: int, y: int, t1: str, t2: str, t3: str) -> str:
+        """_summary_.
+
+        Args:
+            x (int): _description_
+            y (int): _description_
+            t1 (str): _description_
+            t2 (str): _description_
+            t3 (str): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"(C {x} {y} {t1} {t2} {t3})"
 
     def d(x: int) -> str:
+        """_summary_.
+
+        Args:
+            x (int): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"(D {x})"
 
     def e(x: int) -> str:
+        """_summary_.
+
+        Args:
+            x (int): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"(E {x})"
 
     def f() -> str:
+        """_summary_.
+
+        Returns:
+            str: _description_
+        """
         return "F"
 
     # infinite enumeration of natural numbers
     class Nat(Group):
+        """_summary_."""
+
         name = "nat"
 
         def __iter__(self) -> Iterator[int]:
+            """_summary_.
+
+            Yields:
+                int: _description_
+            """
             i: int = 0
             while True:
                 yield i
                 i += 1
 
         def __contains__(self, value: object) -> bool:
+            """_summary_.
+
+            Args:
+                value (object): _description_
+
+            Returns:
+                bool: _description_
+            """
             return isinstance(value, int) and value >= 0
 
     component_specifications = {

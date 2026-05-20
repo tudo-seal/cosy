@@ -1,4 +1,5 @@
 """Auxiliary functions for inspecting the specification.
+
 The method `inspect` analyses the given  component specifications, parameter space, and taxonomy,
 and provides info, warnings, and reports errors if any.
 """
@@ -32,6 +33,11 @@ class Inspector:
     _logger: logging.Logger
 
     def __init__(self, logger=None):
+        """_summary_.
+
+        Args:
+            logger (_type_): _description_ (Default value = None)
+        """
         if logger is None:
             self._logger = logging.getLogger(__name__)
             self._logger.setLevel(logging.DEBUG)
@@ -43,8 +49,13 @@ class Inspector:
 
     @staticmethod
     def _constructors(ty: Type) -> set[str]:
-        """
-        Get the constructors of a type.
+        """Get the constructors of a type.
+
+        Args:
+            ty (Type): _description_
+
+        Returns:
+            set[str]: _description_
         """
         constructors = set()
         stack: deque[Type] = deque([ty])
@@ -65,8 +76,8 @@ class Inspector:
         component_specifications: Mapping[C, Specification],
         taxonomy: Taxonomy | None = None,
     ):
-        """
-        Inspect the component specifications, parameter space, and taxonomy.
+        """Inspect the component specifications, parameter space, and taxonomy.
+
         A `ValueError` is raised if the specifications are not well-formed, which includes:
         - a component has two parameters/arguments with the same name (shadowing)
         - a parameter name is used in the specification of a component but not abstracted via a parameter
@@ -78,6 +89,14 @@ class Inspector:
         - a group is not used in any component
         - a concept is used only in one component
         - a concept in the taxonomy is not used in any component
+
+        Args:
+            component_specifications (Mapping[C, Specification]): _description_
+            taxonomy (Taxonomy | None): _description_ (Default value = None)
+
+        Raises:
+            ValueError: _description_
+            ValueError: _description_
         """
 
         if taxonomy is None:

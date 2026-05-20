@@ -1,5 +1,4 @@
-"""
-Component-oriented evolutionary algorithms framework.
+"""Component-oriented evolutionary algorithms framework.
 
 This package provides a flexible, modular framework for building evolutionary algorithms by
 composing independent, reusable components. Instead of implementing specific algorithms from scratch,

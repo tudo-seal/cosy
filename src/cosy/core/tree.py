@@ -1,3 +1,5 @@
+"""_summary_."""
+
 # Literature
 # [1] Van Der Rest, Cas, and Wouter Swierstra. "A completely unique account of enumeration."
 #     Proceedings of the ACM on Programming Languages 6.ICFP (2022): 105.
@@ -18,9 +20,7 @@ Path = tuple[int, ...]
 
 
 class Tree(Generic[T]):
-    """
-    Please only use immutably.
-    """
+    """Please only use immutably."""
 
     root: T
     children: tuple["Tree[T]", ...]
@@ -30,23 +30,58 @@ class Tree(Generic[T]):
     _leaf_positions: set[Path] | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
+        """_summary_.
+
+        Args:
+            root (T): _description_
+            children (Sequence['Tree[T]']): _description_ (Default value = ())
+        """
         self.root = root
         self.children = tuple(children)
         self.size = 1 + sum(child.size for child in self.children)
         self._hash = hash((self.root, self.children))
 
     def __hash__(self) -> int:
+        """_summary_.
+
+        Returns:
+            int: _description_
+        """
         return self._hash
 
     def __lt__(self, other: "Tree[T]") -> bool:
+        """_summary_.
+
+        Args:
+            other (Tree[T]): _description_
+
+        Returns:
+            bool: _description_
+        """
         return self.size < other.size
 
     def __eq__(self, other: object) -> bool:
+        """_summary_.
+
+        Args:
+            other (object): _description_
+
+        Returns:
+            bool: _description_
+        """
         if not isinstance(other, Tree):
             return False
         return self.size == other.size and self.root == other.root and self.children == other.children
 
     def __rec_to_str__(self, *, outermost: bool) -> str:
+        """_summary_.
+
+        Args:
+            outermost (bool): _description_
+
+        Returns:
+            str: _description_
+        """
         str_root = [f"{self.root!s}"]
         str_args = [f"{subtree.__rec_to_str__(outermost=False)}" for subtree in self.children]
 
@@ -56,9 +91,19 @@ class Tree(Generic[T]):
         return " ".join(strings)
 
     def __str__(self) -> str:
+        """_summary_.
+
+        Returns:
+            str: _description_
+        """
         return self.__rec_to_str__(outermost=True)
 
     def __copy__(self) -> "Tree[T]":
+        """_summary_.
+
+        Returns:
+            Tree[T]: _description_
+        """
         children_copy = tuple(copy(child) for child in self.children)
         return Tree(
             root=self.root,
@@ -66,7 +111,18 @@ class Tree(Generic[T]):
         )
 
     def interpret(self, interpretation: dict[T, Any] | None = None) -> Any:
-        """Recursively evaluate given term."""
+        """Recursively evaluate given term.
+
+        Args:
+            interpretation (dict[T, Any] | None): _description_ (Default value = None)
+
+        Returns:
+            Any: _description_
+
+        Raises:
+            TypeError: _description_
+            TypeError: _description_
+        """
 
         terms: deque[Tree[T]] = deque((self,))
         combinators: deque[tuple[T, int]] = deque()
@@ -154,7 +210,11 @@ class Tree(Generic[T]):
         return results.pop()
 
     def positions(self) -> set[Path]:
-        """Return all positions in the tree."""
+        """Return all positions in the tree.
+
+        Returns:
+            set[Path]: _description_
+        """
         if self._positions is not None:
             return self._positions
         result: set[Path] = set()
@@ -168,7 +228,11 @@ class Tree(Generic[T]):
         return result
 
     def leaf_positions(self) -> set[Path]:
-        """Return all leaf positions in the tree."""
+        """Return all leaf positions in the tree.
+
+        Returns:
+            set[Path]: _description_
+        """
         if self._leaf_positions is not None:
             return self._leaf_positions
         result: set[Path] = set()
@@ -182,7 +246,17 @@ class Tree(Generic[T]):
         return result
 
     def subtree_at(self, pos: Path) -> "Tree[T]":
-        """Return subtree at given position."""
+        """Return subtree at given position.
+
+        Args:
+            pos (Path): _description_
+
+        Returns:
+            Tree[T]: _description_
+
+        Raises:
+            IndexError: _description_
+        """
         if pos == ():
             return self
         for i, child in enumerate(self.children):
@@ -192,7 +266,19 @@ class Tree(Generic[T]):
         raise IndexError(msg)
 
     def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
-        """Return replaced subtree at given position."""
+        """Return replaced subtree at given position.
+
+        Args:
+            pos (Path): _description_
+            tree (Tree[T]): _description_
+
+        Returns:
+            Tree[T]: _description_
+
+        Raises:
+            IndexError: _description_
+            ValueError: _description_
+        """
         if pos == ():
             return tree
 
