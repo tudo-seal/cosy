@@ -2,14 +2,14 @@
 <div class="grid" markdown>
 ![CoSy logo](assets/images/logo.svg){ role="img" }
 
-|                    |                                                                                                                                                                                                                                        |
-|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Package            | [![PyPI - Version](https://img.shields.io/pypi/v/combinatory-synthesizer.svg?style=for-the-badge&logo=pypi&label=&labelColor=grey&logoColor=gold&pypiBaseUrl=https://test.pypi.org)](https://pypi.org/project/combinatory-synthesizer) |
-| License            | [![License](https://img.shields.io/github/license/tudo-seal/cosy?style=for-the-badge&color=9E2165&logo=apache&label=&labelColor=grey)](https://opensource.org/licenses/Apache-2.0)                                               |
-| Coverage           | [![codecov](https://img.shields.io/codecov/c/github/tudo-seal/cosy?style=for-the-badge&token=40E83ABJV4&logo=codecov&label=&labelColor=grey)](https://codecov.io/github/tudo-seal/cosy)                                    |
-| Typed/Type-Checked | [![Checked with mypy](https://img.shields.io/badge/endpoint?style=for-the-badge&url=https://raw.githubusercontent.com/tudo-seal/cosy/main/docs/assets/badges/mypy.json)](http://mypy-lang.org/)                                  |
-| Linted/Formatted   | [![Checked with Ruff](https://img.shields.io/endpoint?style=for-the-badge&url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&color=4051b5)](https://github.com/astral-sh/ruff)                             |
-| Managed with       | [![Hatch project](https://img.shields.io/badge/%F0%9F%A5%9A-Hatch-4051b5.svg?style=for-the-badge)](https://hatch.pypa.io/latest/)                                                                                                      |
+|                    |                                                                                                                                                                                                               |
+|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Package            | [![PyPI - Version](https://img.shields.io/pypi/v/combinatory-synthesizer.svg?&style=for-the-badge&logo=pypi&label=&labelColor=grey&logoColor=gold)](https://pypi.org/project/combinatory-synthesizer)         |
+| License            | [![License](https://img.shields.io/github/license/tudo-seal/cosy?style=for-the-badge&color=9E2165&logo=apache&label=&labelColor=grey)](https://opensource.org/licenses/Apache-2.0)                            |
+| Coverage           | [![codecov](https://img.shields.io/codecov/c/github/tudo-seal/cosy?style=for-the-badge&token=40E83ABJV4&logo=codecov&label=&labelColor=grey)](https://codecov.io/github/tudo-seal/cosy)                       |
+| Typed/Type-Checked | [![Checked with mypy](https://img.shields.io/endpoint?style=for-the-badge&url=https%3A%2F%2Fraw.githubusercontent.com%2Ftudo-seal%2Fcosy%2Fmain%2Fdocs%2Fassets%2Fbadges%2Fmypy.json)](http://mypy-lang.org/) |
+| Linted/Formatted   | [![Checked with Ruff](https://img.shields.io/endpoint?style=for-the-badge&url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&color=4051b5)](https://github.com/astral-sh/ruff)    |
+| Managed with       | [![Hatch project](https://img.shields.io/badge/%F0%9F%A5%9A-Hatch-4051b5.svg?style=for-the-badge)](https://hatch.pypa.io/latest/)                                                                             |
 
 </div>
 

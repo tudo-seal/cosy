@@ -23,8 +23,6 @@ for path in sorted(src.rglob("*.py")):
 
     if parts[-1] == "__init__":
         parts = parts[:-1]
-    elif parts[-1] == "__main__":
-        continue
 
     if override_name:
         nav[override_name] = doc_path.as_posix()

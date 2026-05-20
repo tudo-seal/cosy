@@ -84,11 +84,13 @@ plugins:
       python:
         paths: [src, examples]
         options:
+          show_source: true
           show_root_heading: true
           show_root_full_path: false
           show_if_no_docstring: true
           show_signature_annotations: true
           show_bases: false
+          backlinks: tree
   git-revision-date-localized:
     type: date
     strict: false

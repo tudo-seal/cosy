@@ -1,3 +1,9 @@
+##Symbolic Regression##
+"""
+Shows how to do a symbolic regression using cosy.
+"""
+
+
 import random
 import time
 from math import cos, sin
