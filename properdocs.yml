@@ -91,6 +91,11 @@ plugins:
           show_signature_annotations: true
           show_bases: false
           backlinks: tree
+          show_inheritance_diagram: true
+          extensions:
+            - dataclasses
+            - unpack_typeddict
+            - griffe_generics
   git-revision-date-localized:
     type: date
     strict: false

@@ -4,6 +4,7 @@ dependencies = [
   "mkdocs-material",
   "mkdocs-minify-plugin",
   "mkdocstrings-python",
+  "griffe-generics",
   "mkdocs-gen-files",
   "mkdocs-literate-nav",
   "mkdocs-git-revision-date-localized-plugin",
