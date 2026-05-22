@@ -53,20 +53,43 @@ resultSelector.append("button")
     .style("margin-right", "5px")
     .on("click", () => {
         if (selectedResult > 0) {
-            refreshSelectedResult(-1);
+            refreshSelectedResult(selectedResult - 1);
         }
     });
 
-const selectedResultText = resultSelector.append("span")
+const selectedResultInput = resultSelector.append("input")
+    .attr("type", "number")
     .attr("class", "counter")
+    .attr("min", "0")
     .style("margin", "0 5px")
-    .text(selectedResult);
+    .style("width", "40px")
+    .style("padding", "4px")
+    .property("value", selectedResult)
+    .on("change", function() {
+        const newValue = parseInt(this.value);
+        if (!isNaN(newValue)) {
+            refreshSelectedResult(newValue);
+        }
+    });
+
+// Add CSS to hide number input spinners
+d3.select("head").append("style")
+    .text(`
+        input.counter::-webkit-outer-spin-button,
+        input.counter::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input.counter {
+            -moz-appearance: textfield;
+        }
+    `);
 
 resultSelector.append("button")
     .text("+")
     .style("margin-left", "5px")
     .on("click", () => {
-        refreshSelectedResult(1);
+        refreshSelectedResult(selectedResult + 1);
     });
 
 // Checkboxes
@@ -198,15 +221,17 @@ function refreshColorMapDisplay() {
     });
 }
 
-function refreshSelectedResult(change) {
-    selectedResult += change;
+function refreshSelectedResult(newResult) {
+    oldResult = selectedResult;
+    selectedResult = newResult;
     const successful = loadResult(selectedResult);
-    console.log("Selected result: " + selectedResult + " (change: " + change + ", successful: " + successful + ")");
+    console.log("Selected result: " + selectedResult + " (successful: " + successful + ")");
     if (successful) {
-        selectedResultText.text(selectedResult);
+        selectedResultInput.property("value", selectedResult);
         refreshColorMapDisplay();
     } else {
-        selectedResult -= change;
+        selectedResult = oldResult;
+        selectedResultInput.property("value", selectedResult);
     }
 }
 

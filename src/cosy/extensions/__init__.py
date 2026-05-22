@@ -1,6 +1,6 @@
 __all__ = [
-    "MaestroSolutions",
     "Solutions",
+    "_MaestroSolutions",
 ]
 
-from cosy.extensions.solutions import MaestroSolutions, Solutions
+from cosy.extensions.solutions import Solutions, _MaestroSolutions

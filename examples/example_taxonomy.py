@@ -4,70 +4,54 @@ Demonstrates constraints in CoSy.
 """
 
 from cosy.core.specification_builder import SpecificationBuilder
-from cosy.core.types import Constructor, Group, Literal, Type, Var, DataGroup
+from cosy.core.types import Constructor, Type
 from cosy.maestro import Maestro
 
-def herd_nil(typ) -> list[str]:
+
+def herd_nil() -> list[str]:
     return []
 
-def herd_cons(typ, animal: str, tail: list[str]) -> list[str]:
-    return [animal] + tail
+
+def herd_cons(animal: str, tail: list[str]) -> list[str]:
+    return [animal, *tail]
+
 
 def main():
-
-    types = DataGroup("types", ["Cat", "Dog", "Animal"])
     named_components_with_specifications = [
         (
             "Dog",
             lambda: "A Dog",
-            SpecificationBuilder().suffix(Constructor("CDog")),
+            SpecificationBuilder().suffix(Constructor("CDog") & Constructor("Walking")),
         ),
         (
             "Cat",
             lambda: "A Cat",
-            SpecificationBuilder().suffix(Constructor("CCat")),
+            SpecificationBuilder().suffix(Constructor("CCat") & Constructor("Walking")),
         ),
         (
             "Generic Animal",
             lambda: "A Generic Animal",
-            SpecificationBuilder().suffix(Constructor("CAnimal")),
+            SpecificationBuilder().suffix(Constructor("CAnimal") & Constructor("Walking")),
         ),
         (
-            "WrapAnimal",
-            lambda x: x,
+            "Add Wings",
+            lambda x: f"{x} with wings!",
             SpecificationBuilder()
-            .argument("x", Constructor("CAnimal"))
-            .suffix(Constructor("Typ", Literal("Animal"))),
-        ),
-        (
-            "WrapDog",
-            lambda x: x,
-            SpecificationBuilder()
-            .argument("x", Constructor("CDog"))
-            .suffix(Constructor("Typ", Literal("Dog"))),
-        ),
-        (
-            "WrapCat",
-            lambda x: x,
-            SpecificationBuilder()
-            .argument("x", Constructor("CCat"))
-            .suffix(Constructor("Typ", Literal("Cat"))),
+            .argument("animal", Constructor("CAnimal") & Constructor("Walking"))
+            .suffix(Constructor("CAnimal") & Constructor("Flying")),
         ),
         (
             "HerdNil",
             herd_nil,
-            SpecificationBuilder()
-            .parameter("typ", types)
-            .suffix(Constructor("Herd", Var("typ"))),
+            SpecificationBuilder().suffix(Constructor("Herd")),
         ),
         (
             "HerdCons",
             herd_cons,
             SpecificationBuilder()
-            .parameter("typ", types)
-            .argument("animal", Constructor("Typ", Var("typ")))
-            .argument("tail", Constructor("Herd", Var("typ")))
-            .suffix(Constructor("Herd", Var("typ"))),
+            .argument("animal", Constructor("CAnimal"))
+            .argument("tail", Constructor("Herd"))
+            .suffix(Constructor("Herd")),
         ),
     ]
     taxonomy = {
@@ -82,12 +66,12 @@ def main():
     target: Type = Constructor("Herd")
 
     # Query the Maestro with the target, then visualize and print results
-    results = maestro.query(target, max_count=20)
+    results = maestro.query(target, max_count=40)
 
-    for (i, result) in enumerate(results):
+    for i, result in enumerate(results):
         print(f"{i}. -----------------")
         print(result)
-    results.visualize(amount=20)
+    results.visualize()
     # print("Now printing all infinite results in order:")
 
 
