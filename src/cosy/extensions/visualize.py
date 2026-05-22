@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from typing import TypeAlias, TypeVar
 
+from cosy.core.subtypes import Taxonomy
 from cosy.core.tree import Tree
 from cosy.core.types import (
     Abstraction,
@@ -109,7 +110,7 @@ def inspect_spec(specification: Abstraction | Implication | Type) -> SpecInfo:
             # TODO: Collect information about the possible values of the group
             collection.groups.add(param.group)
         elif isinstance(param, TermParameter):
-            collection.constructors.update(collect_constructors(param.group))
+            pass  # collection.constructors.update(collect_constructors(param.group))
         return collection
     if isinstance(specification, Implication):
         return inspect_spec(specification.body)
@@ -122,28 +123,62 @@ def inspect_specifications(
     return {name: inspect_spec(spec) for name, (interpretation, spec) in component_specifications.items()}
 
 
-def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecifications) -> dict:
-    spec_info = inspect_specifications(component_specifications)
-    all_constructors: set[ConstructorName] = set.union(*[i.constructors for i in spec_info.values()])
-    color_map: dict[ConstructorName, Colour]
-    if len(all_constructors) <= len(KELLY_COLOURS):
-        color_map = dict(zip(all_constructors, KELLY_COLOURS, strict=False))
+def build_color_map(
+    all_constructors: set[ConstructorName], taxonomy: Taxonomy | None
+) -> dict[ConstructorName, set[Colour]]:
+    atomic_concepts: set[ConstructorName]
+    non_atomic_concepts: set[ConstructorName]
+    if taxonomy is None:
+        atomic_concepts = all_constructors
+        non_atomic_concepts = set()
+    else:
+        non_atomic_concepts = {k for k, v in taxonomy.items() if len(v) == 1}
+        atomic_concepts = {c for c in all_constructors if c not in non_atomic_concepts}
+    atomic_colors: dict[ConstructorName, Colour]
+    if len(atomic_concepts) <= len(KELLY_COLOURS):
+        atomic_colors = dict(zip(atomic_concepts, KELLY_COLOURS, strict=False))
     else:
         # more than len(KELLY_COLOURS) different constructors. Defaulting them all to white
-        color_map = dict.fromkeys(all_constructors, "#000000")
+        atomic_colors = dict.fromkeys(atomic_concepts, "#000000")
+    atomic_mapping: dict[ConstructorName, set[ConstructorName]] = {}  # Maps a Constructor to all of its atomic subtypes
+    for c in non_atomic_concepts:
+        if taxonomy is None:
+            msg = "Should not happen: taxonomy==None => non_atomic_concepts == {}"
+            raise AssertionError(msg)
+        atomic_mapping[c] = set()
+        for k, v in taxonomy.items():
+            if c in v and k in atomic_concepts:
+                atomic_mapping[c].add(k)
+
+    color_map: dict[ConstructorName, set[Colour]] = {}
+    for c in all_constructors:
+        if c in atomic_concepts:
+            color_map[c] = {atomic_colors[c]}
+        else:
+            color_map[c] = {atomic_colors[atom] for atom in atomic_mapping[c]}
+    for cs in color_map.values():
+        if len(cs) == 0:
+            cs.add("#000000")
+    return color_map
+
+
+def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecifications, taxonomy: Taxonomy | None) -> dict:
+    spec_info = inspect_specifications(component_specifications)
+    all_constructors: set[ConstructorName] = set.union(*[i.constructors for i in spec_info.values()])
+    color_map: dict[ConstructorName, set[Colour]] = build_color_map(all_constructors, taxonomy)
     result: dict = {}
     stack: list[tuple[Tree[T], dict, Parameter | None, T | None]] = [(tree, result, None, None)]
     while len(stack) > 0:
         current_tree, the_dict, param, parent = stack.pop()
         parameters: deque[Parameter] | None
-        colors: list[Colour]
+        colors: list[list[Colour]]
         interpretations = {name: interpretation for name, (interpretation, spec) in component_specifications.items()}
         root_is_combinator = current_tree.root in component_specifications
         if root_is_combinator:
             _interpretation, specification = component_specifications[current_tree.root]
             things = inspect_spec(specification)
             parameters = things.parameters
-            colors = [color_map[c] for c in things.constructors]
+            colors = [list(color_map[c]) for c in things.constructors]
             the_dict["colors"] = colors
         else:
             parameters = None
@@ -157,20 +192,18 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
             name += combinator
 
         the_dict["parent"] = "" if parent is None else str(parent)
-        the_dict["val"] = current_tree.interpret(interpretation=interpretations)
+        the_dict["val"] = str(current_tree.interpret(interpretation=interpretations))
         the_dict["parameter"] = "" if param is None else str(param)
         the_dict["combinator"] = "" if (combinator is None or not root_is_combinator) else combinator
         the_dict["is_combinator"] = root_is_combinator
+        # the_dict["group"]
         children: list[dict] = []
         the_dict["children"] = children
         for i, c in enumerate(current_tree.children):
             child_dict: dict = {}
             children.append(child_dict)
             stack.append((c, child_dict, (parameters[i] if parameters is not None else None), tree.root))
-    return {
-        "tree": result,
-        "color_map": color_map,
-    }
+    return {"tree": result, "color_map": {k: list(v) for k, v in color_map.items()}}
 
 
 class MyServer(threading.Thread):
@@ -186,6 +219,7 @@ def visualize(
     amount: int,
     trees: Iterable[Tree[T]],
     named_components_with_specifications: Sequence[tuple[T, Callable, Abstraction | Implication | Type]],
+    taxonomy: Taxonomy | None,
 ):
     visualization_file_path = pathlib.Path(__file__).parent / "visualization/results.json"
     with open(visualization_file_path, "w", encoding="utf-8") as visualization_file:
@@ -195,6 +229,7 @@ def visualize(
                     tree_to_dict(
                         tree,
                         component_specifications={n: (i, s) for n, i, s in named_components_with_specifications},
+                        taxonomy=taxonomy,
                     )
                     for tree in itertools.islice(trees, amount + 1)
                 ]

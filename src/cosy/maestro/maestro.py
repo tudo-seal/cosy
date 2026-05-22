@@ -5,7 +5,7 @@ from typing import Generic, TypeVar
 from cosy.core.subtypes import Taxonomy
 from cosy.core.synthesizer import Specification, Synthesizer
 from cosy.core.types import Type
-from cosy.extensions.solutions import MaestroSolutions
+from cosy.extensions.solutions import _MaestroSolutions
 
 T = TypeVar("T", bound=Hashable)
 
@@ -48,7 +48,7 @@ class Maestro(Generic[T]):
 
         self._synthesizer = Synthesizer(self.component_specifications, self.taxonomy)
 
-    def query(self, target: Type, max_count: int = 100) -> MaestroSolutions[T]:
+    def query(self, target: Type, max_count: int | None = 100) -> _MaestroSolutions[T]:
         """
         Query the Maestro for solutions that fulfill given target; by constructing a solution space and enumerating and interpreting the resulting trees.
 
@@ -64,8 +64,12 @@ class Maestro(Generic[T]):
         trees = solution_space.enumerate_trees(
             target, max_count=max_count, interpretation=self.component_interpretations
         )
-        return MaestroSolutions(
+        return _MaestroSolutions(
             trees,
             component_interpretations=self.component_interpretations,
             named_components_with_specifications=self.named_components_with_specifications,
+            taxonomy=None
+            if self.taxonomy is None
+            else self._synthesizer.subtypes.taxonomy,  # This way we get the closure of the taxonomy
+            max_count=max_count,
         )

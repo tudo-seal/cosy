@@ -1,6 +1,7 @@
 from collections.abc import Callable, Generator, Hashable, Iterable, Sequence
 from typing import Any, Generic, TypeVar
 
+from cosy.core.subtypes import Taxonomy
 from cosy.core.tree import Tree
 from cosy.core.types import Abstraction, Implication, Type
 from cosy.extensions import visualize
@@ -29,24 +30,36 @@ class Solutions(Generic[T]):
             yield tree
 
 
-class MaestroSolutions(Solutions[T]):
+class _MaestroSolutions(Solutions[T]):
     def __init__(
         self,
         trees: Iterable[Tree[T]],
         component_interpretations: dict[T, Callable[..., Any]],
         named_components_with_specifications: Sequence[tuple[T, Callable, Abstraction | Implication | Type]],
+        max_count: int | None,
+        taxonomy: Taxonomy | None,
     ):
         super().__init__(trees)
         self.component_interpretations = component_interpretations
         self.named_components_with_specifications = named_components_with_specifications
+        self.taxonomy = taxonomy
+        self.max_count = max_count
 
     def __iter__(self) -> Generator[Any, None, None]:
         for result in self.trees():
             yield result.interpret(interpretation=self.component_interpretations)
 
-    def visualize(self, amount: int = 10):
+    def visualize(self, amount: int | None = None):
+        if amount is None:
+            if self.max_count is not None:
+                amount = self.max_count
+            else:
+                msg = "No max_count provided to maestro.query(), so you must provide a specific amount of results to visualize"
+                raise ValueError(msg)
+
         visualize.visualize(
             amount=amount,
             trees=self.trees(),
             named_components_with_specifications=self.named_components_with_specifications,
+            taxonomy=self.taxonomy,
         )
