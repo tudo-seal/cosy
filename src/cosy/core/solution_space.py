@@ -58,7 +58,7 @@ class RHSRule(Generic[NT, T, G]):
         predicates (tuple[Callable[[dict[str, Any]], bool], ...]): _description_
         terminal (T): _description_
         non_terminals (frozenset[NT]): _description_
-        literal_substitution (_type_): _description_
+        literal_substitution (dict[str, T]): _description_
     """
 
     arguments: tuple[Argument, ...]
@@ -79,7 +79,7 @@ class RHSRule(Generic[NT, T, G]):
         """_summary_.
 
         Returns:
-            dict[str,T]: _description_
+            dict[str, T]: _description_
         """
         return {n.name: n.value for n in self.arguments if isinstance(n, ConstantArgument)}
 
