@@ -1,5 +1,4 @@
-"""
-Selection operators for evolutionary algorithms.
+"""Selection operators for evolutionary algorithms.
 
 Selection operators are responsible for choosing individuals from a population based on their fitness.
 They are used for both parent selection (choosing individuals for reproduction) and survivor selection
@@ -43,15 +42,15 @@ class Selection(ABC, Generic[NT, T, G]):
         """Select population_size individuals from the given population.
 
         Args:
-            population_fitness: Mapping from individuals to their fitness values.
-            population_size: The number of individuals to select.
-            comparator: The fitness comparator for comparing individuals.
-            previous_generation_fitness: Optional fitness values from the previous generation (for survivor selection).
-            ages: Optional ages of individuals (for age-aware selection).
-            previous_generation_ages: Optional ages from the previous generation.
+            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to their fitness values.
+            population_size (int): The number of individuals to select.
+            comparator (FitnessComparator): The fitness comparator for comparing individuals.
+            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Optional fitness values from the previous generation (for survivor selection). (Default value = None)
+            ages (Mapping[Tree[T], int] | None): Optional ages of individuals (for age-aware selection). (Default value = None)
+            previous_generation_ages (Mapping[Tree[T], int] | None): Optional ages from the previous generation. (Default value = None)
 
         Yields:
-            Selected individuals up to population_size.
+            Tree[T]: Selected individuals up to population_size.
         """
 
 
@@ -65,7 +64,7 @@ class TournamentSelection(Selection[NT, T, G]):
     and diversity without requiring global fitness rankings.
 
     Attributes:
-        tournament_size: The number of individuals in each tournament.
+        tournament_size (int): The number of individuals in each tournament.
     """
 
     _TIE_PROBABILITY = 0.5
@@ -74,8 +73,8 @@ class TournamentSelection(Selection[NT, T, G]):
         """Initialize tournament selection.
 
         Args:
-            tournament_size: Number of individuals per tournament (typically 2-5).
-            rng: Optional random number generator for reproducibility.
+            tournament_size (int): Number of individuals per tournament (typically 2-5).
+            rng (random.Random | None): Optional random number generator for reproducibility. (Default value = None)
         """
         self.tournament_size = tournament_size
         self.rng = rng if rng is not None else random.Random()
@@ -92,15 +91,15 @@ class TournamentSelection(Selection[NT, T, G]):
         """Conduct population_size tournaments and yield the winner of each.
 
         Args:
-            population_fitness: Mapping from individuals to fitness values.
-            population_size: Number of individuals to select.
-            comparator: The fitness comparator.
-            previous_generation_fitness: Unused (for interface compatibility).
-            ages: Unused (for interface compatibility).
-            previous_generation_ages: Unused (for interface compatibility).
+            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to fitness values.
+            population_size (int): Number of individuals to select.
+            comparator (FitnessComparator): The fitness comparator.
+            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Unused (for interface compatibility). (Default value = None)
+            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
+            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
 
         Yields:
-            Winners of each tournament.
+            Tree[T]: Winners of each tournament.
         """
         population = list(population_fitness.keys())
         if not population_size or not population:
@@ -139,7 +138,7 @@ class FitnessProportionalSelection(Selection[NT, T, G]):
         """Initialize fitness proportional selection.
 
         Args:
-            rng: Optional random number generator for reproducibility.
+            rng (random.Random | None): Optional random number generator for reproducibility. (Default value = None)
         """
         self.rng = rng if rng is not None else random.Random()
 
@@ -151,11 +150,11 @@ class FitnessProportionalSelection(Selection[NT, T, G]):
         If all weights are zero, uses uniform weights.
 
         Args:
-            fitness_values: The fitness values.
-            comparator: The fitness comparator.
+            fitness_values (Sequence[Fitness]): The fitness values.
+            comparator (FitnessComparator): The fitness comparator.
 
         Returns:
-            A list of non-negative weights usable for weighted selection.
+            list[float]: A list of non-negative weights usable for weighted selection.
         """
         values = [comparator.scalarize(fitness) for fitness in fitness_values]
         minimum = min(values)
@@ -177,15 +176,15 @@ class FitnessProportionalSelection(Selection[NT, T, G]):
         """Select individuals proportional to their fitness.
 
         Args:
-            population_fitness: Mapping from individuals to fitness values.
-            population_size: Number of individuals to select.
-            comparator: The fitness comparator.
-            previous_generation_fitness: Unused (for interface compatibility).
-            ages: Unused (for interface compatibility).
-            previous_generation_ages: Unused (for interface compatibility).
+            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to fitness values.
+            population_size (int): Number of individuals to select.
+            comparator (FitnessComparator): The fitness comparator.
+            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Unused (for interface compatibility). (Default value = None)
+            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
+            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
 
         Yields:
-            population_size individuals selected proportional to fitness.
+            Tree[T]: population_size individuals selected proportional to fitness.
         """
         population = list(population_fitness.keys())
         if not population_size or not population:
@@ -206,8 +205,8 @@ class RankBasedSelection(Selection[NT, T, G]):
     it doesn't depend on absolute fitness differences.
 
     Attributes:
-        selection_pressure: Controls the pressure toward higher-ranked individuals (1.0-2.0).
-                          1.0 = uniform selection, 2.0 = maximum pressure toward best.
+        selection_pressure (_type_): Controls the pressure toward higher-ranked individuals (1.0-2.0).
+            1.0 = uniform selection, 2.0 = maximum pressure toward best.
     """
 
     _SELECTION_PRESSURE_LOWER_BOUND = 1.0
@@ -217,8 +216,8 @@ class RankBasedSelection(Selection[NT, T, G]):
         """Initialize rank-based selection.
 
         Args:
-            selection_pressure: Strength of preference for better-ranked individuals (1.0-2.0).
-            rng: Optional random number generator for reproducibility.
+            selection_pressure (float): Strength of preference for better-ranked individuals (1.0-2.0). (Default value = 1.7)
+            rng (random.Random | None): Optional random number generator for reproducibility. (Default value = None)
 
         Raises:
             ValueError: If selection_pressure is not in [1.0, 2.0].
@@ -241,15 +240,15 @@ class RankBasedSelection(Selection[NT, T, G]):
         """Select individuals based on their fitness rank.
 
         Args:
-            population_fitness: Mapping from individuals to fitness values.
-            population_size: Number of individuals to select.
-            comparator: The fitness comparator.
-            previous_generation_fitness: Unused (for interface compatibility).
-            ages: Unused (for interface compatibility).
-            previous_generation_ages: Unused (for interface compatibility).
+            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to fitness values.
+            population_size (int): Number of individuals to select.
+            comparator (FitnessComparator): The fitness comparator.
+            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Unused (for interface compatibility). (Default value = None)
+            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
+            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
 
         Yields:
-            population_size individuals selected according to their rank.
+            Tree[T]: population_size individuals selected according to their rank.
         """
         population = list(population_fitness.keys())
         if not population_size or not population:
@@ -300,15 +299,15 @@ class FitnessBasedReplacement(Selection[NT, T, G]):
         """Select the population_size best individuals from the current and previous generation.
 
         Args:
-            population_fitness: Mapping from offspring to fitness values.
-            population_size: Number of individuals to select.
-            comparator: The fitness comparator.
-            previous_generation_fitness: Fitness values from the previous generation (combined with current).
-            ages: Unused (for interface compatibility).
-            previous_generation_ages: Unused (for interface compatibility).
+            population_fitness (Mapping[Tree[T], Fitness]): Mapping from offspring to fitness values.
+            population_size (int): Number of individuals to select.
+            comparator (FitnessComparator): The fitness comparator.
+            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Fitness values from the previous generation (combined with current). (Default value = None)
+            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
+            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
 
         Yields:
-            The population_size best individuals by fitness.
+            Tree[T]: The population_size best individuals by fitness.
         """
         if not population_size:
             return
@@ -348,15 +347,15 @@ class AgeBasedReplacement(Selection[NT, T, G]):
         """Select population_size individuals primarily by age, secondarily by fitness.
 
         Args:
-            population_fitness: Mapping from offspring to fitness values.
-            population_size: Number of individuals to select.
-            comparator: The fitness comparator.
-            previous_generation_fitness: Optional fitness values from previous generation.
-            ages: Ages of current generation individuals.
-            previous_generation_ages: Ages from the previous generation.
+            population_fitness (Mapping[Tree[T], Fitness]): Mapping from offspring to fitness values.
+            population_size (int): Number of individuals to select.
+            comparator (FitnessComparator): The fitness comparator.
+            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Optional fitness values from previous generation. (Default value = None)
+            ages (Mapping[Tree[T], int] | None): Ages of current generation individuals. (Default value = None)
+            previous_generation_ages (Mapping[Tree[T], int] | None): Ages from the previous generation. (Default value = None)
 
         Yields:
-            population_size individuals selected by age (younger first) and fitness.
+            Tree[T]: population_size individuals selected by age (younger first) and fitness.
         """
         if not population_size:
             return

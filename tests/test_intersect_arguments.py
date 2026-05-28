@@ -1,9 +1,12 @@
+"""_summary_."""
+
 # regression test for position-wise intersection of arguments
 from cosy.core.synthesizer import Synthesizer
 from cosy.core.types import Constructor, Type
 
 
 def test_intersect_arguments() -> None:
+    """_summary_."""
     component_specifications = {
         # the specification is an intersection of multi-arrows (arguments will be point-wise intersected)
         lambda x, y: f"f({x}, {y})": Type.intersect(

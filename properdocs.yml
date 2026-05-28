@@ -84,17 +84,21 @@ plugins:
       python:
         paths: [src, examples]
         options:
+          show_source: true
           show_root_heading: true
           show_root_full_path: false
           show_if_no_docstring: true
           show_signature_annotations: true
           show_bases: false
+          backlinks: tree
+          show_inheritance_diagram: true
+          extensions:
+            - dataclasses
+            - unpack_typeddict
+            - griffe_generics
   git-revision-date-localized:
     type: date
     strict: false
-  bibtex:
-    bib_dir: "docs/bibliographies"
-    csl_file: "https://raw.githubusercontent.com/citation-style-language/styles/refs/heads/master/modern-language-association.csl"
 
 markdown_extensions:
   - attr_list:

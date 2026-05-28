@@ -1,3 +1,5 @@
+"""_summary_."""
+
 # regression test for contains_tree
 from collections.abc import Callable
 
@@ -10,15 +12,35 @@ from cosy.core.types import DataGroup, Literal, Var
 
 
 def leaf() -> str:
+    """_summary_.
+
+    Returns:
+        str: _description_
+    """
     return "."
 
 
 def branch(depth: int, _new_depth: int, left: str, right: str) -> str:
+    """_summary_.
+
+    Args:
+        depth (int): _description_
+        left (str): _description_
+        right (str): _description_
+
+    Returns:
+        str: _description_
+    """
     return f"(B {depth} {left} {right})"
 
 
 @pytest.fixture
 def component_specifications():
+    """_summary_.
+
+    Returns:
+        _type_: _description_
+    """
     return {
         # recursive unproductive specification
         leaf: SpecificationBuilder().suffix(Literal(0)),
@@ -34,6 +56,11 @@ def component_specifications():
 
 @pytest.fixture
 def query():
+    """_summary_.
+
+    Returns:
+        _type_: _description_
+    """
     return Literal(2)
 
 
@@ -41,6 +68,12 @@ T = int | Callable
 
 
 def test_contains_tree(query, component_specifications) -> None:
+    """_summary_.
+
+    Args:
+        query (_type_): _description_
+        component_specifications (_type_): _description_
+    """
     solution_space = Synthesizer(component_specifications).construct_solution_space(query)
 
     tree_correct = Tree[T](

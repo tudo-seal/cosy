@@ -1,7 +1,5 @@
 ##Fibonacci Linear##
-"""
-Overall description of this example goes here.
-"""
+"""Overall description of this example goes here."""
 
 from cosy.core.specification_builder import SpecificationBuilder
 from cosy.core.types import Constructor, Group, Literal, Var
@@ -9,33 +7,39 @@ from cosy.maestro import Maestro
 
 
 def fst(_x: int, f: tuple[int, int]) -> int:
-    """
-    Get the first element of a pair.
+    """Get the first element of a pair.
 
-    :param x: A pair containing two integers.
-    :return: The first element of the pair.
+    Args:
+        _x (int): The passed through current index of the fibonacci number.
+        f (tuple[int, int]): A pair containing two integers.
+
+    Returns:
+        int: The first element of the pair.
     """
     return f[0]
 
 
 def fib_zero_one() -> tuple[int, int]:
-    """
-    The pair of Fibonacci numbers at indices 0 and 1.
+    """The pair of Fibonacci numbers at indices 0 and 1.
 
-    :return: The pair of Fibonacci numbers at indices 0 and 1.
+    Returns:
+        tuple[int, int]: The pair of Fibonacci numbers at indices 0 and 1.
     """
     return (0, 1)
 
 
 def fib_next(_y: int, _x: int, f: tuple[int, int]) -> tuple[int, int]:
-    """
-    Calculate the pair Fibonacci numbers at a given indices y and y + 1
+    """Calculate the pair Fibonacci numbers at a given indices y and y + 1.
+
     using the pair of Fibonacci numbers at indices x = y - 1 and y.
 
-    :param _y: The indices for which the Fibonacci number is calculated.
-    :param _x: The indices decremented by 1.
-    :param f: The pair of Fibonacci numbers at indices y - 1 and y.
-    :return: The pair of Fibonacci numbers at indices y and y + 1.
+    Args:
+        _y (_type_): The indices for which the Fibonacci number is calculated.
+        _x (_type_): The indices decremented by 1.
+        f (tuple[int, int]): The pair of Fibonacci numbers at indices y - 1 and y.
+
+    Returns:
+        tuple[int, int]: The pair of Fibonacci numbers at indices y and y + 1.
     """
     return (f[1], f[0] + f[1])
 
@@ -43,13 +47,28 @@ def fib_next(_y: int, _x: int, f: tuple[int, int]) -> tuple[int, int]:
 def main():
     # range of relevant indices for Fibonacci numbers
     class Int(Group):
+        """_summary_."""
+
         name = "int"
         _bound = 6000
 
         def __contains__(self, item: object) -> bool:
+            """_summary_.
+
+            Args:
+                item (object): _description_
+
+            Returns:
+                bool: _description_
+            """
             return isinstance(item, int) and 0 <= item < self._bound
 
         def __iter__(self):
+            """_summary_.
+
+            Yields:
+                _type_: _description_
+            """
             yield from frozenset(range(self._bound))
 
     component_specifications = [

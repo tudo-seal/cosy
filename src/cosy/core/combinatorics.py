@@ -1,3 +1,5 @@
+"""_summary_."""
+
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from typing import TypeVar
@@ -9,7 +11,15 @@ E = TypeVar("E")  # Type of Elements
 def partition(predicate: Callable[[E], bool], elements: Iterable[E]) -> tuple[deque[E], deque[E]]:
     """Partition elements of an Iterable according to a predicate. Narrowing types.
 
-    Returns: (elements not satisfying predicate, elements satisfying predicate)."""
+    Returns: (elements not satisfying predicate, elements satisfying predicate).
+
+    Args:
+        predicate (Callable[[E], bool]): _description_
+        elements (Iterable[E]): _description_
+
+    Returns:
+        tuple[deque[E], deque[E]]: _description_
+    """
 
     partitioning: tuple[deque[E], deque[E]] = (deque[E](), deque[E]())
     for element in elements:
@@ -24,6 +34,13 @@ def maximal_elements(elements: Iterable[E], compare: Callable[[E, E], bool]) -> 
     """Enumerate maximal elements with respect to compare.
 
     `compare(e1, e2) == True` iff `e1` smaller or equal to `e2`.
+
+    Args:
+        elements (Iterable[E]): _description_
+        compare (Callable[[E, E], bool]): _description_
+
+    Returns:
+        Sequence[E]: _description_
     """
     candidates: deque[E] = deque(elements)
     if len(candidates) <= 1:
@@ -54,6 +71,14 @@ def minimal_covers(sets: Sequence[S], to_cover: Iterable[E], contains: Callable[
     - for every `e: E` in `to_cover` there is at least one `s: S` in `cover` such that
       `contains(s, e) == True`
     - no `s: S` can be removed from `cover`
+
+    Args:
+        sets (Sequence[S]): _description_
+        to_cover (Iterable[E]): _description_
+        contains (Callable[[S, E], bool]): _description_
+
+    Returns:
+        list[list[S]]: _description_
     """
     # sets necessarily included in any cover
     necessary_sets: set[int] = set()

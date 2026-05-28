@@ -1,13 +1,13 @@
 [envs.docs]
 dependencies = [
-  "mkdocs",
+  "properdocs",
   "mkdocs-material",
   "mkdocs-minify-plugin",
   "mkdocstrings-python",
+  "griffe-generics",
   "mkdocs-gen-files",
   "mkdocs-literate-nav",
   "mkdocs-git-revision-date-localized-plugin",
-  "mkdocs-bibtex",
   "pypandoc_binary",
   "linkchecker",
   "pygments",
@@ -17,18 +17,18 @@ packages = ["examples", "docs/lexers"]
 
 
 [envs.docs.env-vars]
-MKDOCS_CONFIG = "mkdocs.yml"
+PROPERDOCS_CONFIG = "properdocs.yml"
 
 
 [envs.docs.scripts]
-build = "mkdocs build --config-file {env:MKDOCS_CONFIG} --clean --strict {args}"
+build = "properdocs build --config-file {env:PROPERDOCS_CONFIG} --clean --strict {args}"
 validate = "linkchecker site"
 check = [
   "build --no-directory-urls",
   "validate",
 ]
-serve = "mkdocs serve --config-file {env:MKDOCS_CONFIG} --dev-addr localhost:8000 {args}"
-deploy = "mkdocs gh-deploy --force --config-file {env:MKDOCS_CONFIG} --clean {args}"
+serve = "properdocs serve --config-file {env:PROPERDOCS_CONFIG} --dev-addr localhost:8000 {args}"
+deploy = "properdocs gh-deploy --force --config-file {env:PROPERDOCS_CONFIG} --clean {args}"
 
 
 [envs.types]

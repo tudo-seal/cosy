@@ -1,7 +1,5 @@
 ##Constraints with Inlined Interpretations##
-"""
-Demonstrates constraints in CoSy, highlighting how the Component class can be used to inline the interpretation.
-"""
+"""Demonstrates constraints in CoSy, highlighting how the Component class can be used to inline the interpretation."""
 
 import re
 
@@ -13,13 +11,23 @@ from cosy.maestro import Maestro
 def main():
     # regular expressions
     class RegularExpression(Group):
+        """_summary_."""
+
         name = "regex"
 
         def __contains__(self, value: object) -> bool:
+            """_summary_.
+
+            Args:
+                value (object): _description_
+
+            Returns:
+                bool: _description_
+            """
             return isinstance(value, str)
 
         def __iter__(self):
-            pass
+            """_summary_."""
 
     named_components_with_specifications = [
         (

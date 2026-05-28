@@ -1,9 +1,11 @@
 """Synthesizer implementing Finite Combinatory Logic with Predicates.
+
 It constructs a logic program via `constructSolutionSpace` from the following ingredients:
 - collection of component specifications
 - parameter space
 - optional specification taxonomy
-- target specification"""
+- target specification
+"""
 
 from collections import deque
 from collections.abc import (
@@ -54,10 +56,22 @@ Specification = Abstraction | Implication | Type
 @dataclass(frozen=True)
 class MultiArrow:
     # type of shape arg1 -> arg2 -> ... -> argN -> target
+    """_summary_.
+
+    Attributes:
+        args (tuple[Type, ...]): _description_
+        target (Type): _description_
+    """
+
     args: tuple[Type, ...]
     target: Type
 
     def __str__(self) -> str:
+        """_summary_.
+
+        Returns:
+            str: _description_
+        """
         if len(self.args) > 0:
             return f"{[str(a) for a in self.args]} -> {self.target!s}"
         return str(self.target)
@@ -66,17 +80,38 @@ class MultiArrow:
 @dataclass()
 class SpecificationInfo:
     # container for auxiliary information about a specification
+    """_summary_.
+
+    Attributes:
+        prefix (list[LiteralParameter | TermParameter | Predicate]): _description_
+        term_predicates (tuple[Callable[[dict[str, Any]], bool], ...]): _description_
+        type (list[list[MultiArrow]]): _description_
+    """
+
     prefix: list[LiteralParameter | TermParameter | Predicate]
     term_predicates: tuple[Callable[[dict[str, Any]], bool], ...]
     type: list[list[MultiArrow]]
 
 
 class Synthesizer(Generic[C]):
+    """_summary_.
+
+    Attributes:
+        repository (tuple[tuple[C, SpecificationInfo], ...]): _description_
+        subtypes (_type_): _description_
+    """
+
     def __init__(
         self,
         component_specifications: Mapping[C, Specification],
         taxonomy: Taxonomy | None = None,
     ):
+        """_summary_.
+
+        Args:
+            component_specifications (Mapping[C, Specification]): _description_
+            taxonomy (Taxonomy | None): _description_ (Default value = None)
+        """
         self.repository: tuple[tuple[C, SpecificationInfo], ...] = tuple(
             (c, Synthesizer._function_types(c, ty)) for c, ty in component_specifications.items()
         )
@@ -87,9 +122,32 @@ class Synthesizer(Generic[C]):
         combinator: C,
         parameterized_type: Specification,
     ) -> SpecificationInfo:
-        """Presents a type as a list of 0-ary, 1-ary, ..., n-ary function types."""
+        """Presents a type as a list of 0-ary, 1-ary, ..., n-ary function types.
+
+        Args:
+            combinator (C): _description_
+            parameterized_type (Specification): _description_
+
+        Returns:
+            SpecificationInfo: _description_
+
+        Raises:
+            ValueError: _description_
+            TypeError: _description_
+            ValueError: _description_
+            TypeError: _description_
+            ValueError: _description_
+        """
 
         def unary_function_types(ty: Type) -> Iterable[tuple[Type, Type]]:
+            """_summary_.
+
+            Args:
+                ty (Type): _description_
+
+            Yields:
+                tuple[Type, Type]: _description_
+            """
             tys: deque[Type] = deque((ty,))
             while tys:
                 match tys.pop():
@@ -162,7 +220,19 @@ class Synthesizer(Generic[C]):
         substitution: dict[str, Any],
     ) -> Iterable[dict[str, Any]]:
         """Enumerate all substitutions for the given parameters fairly.
-        Take initial_substitution with inferred literals into account."""
+
+        Take initial_substitution with inferred literals into account.
+
+        Args:
+            prefix (list[LiteralParameter | TermParameter | Predicate]): _description_
+            substitution (dict[str, Any]): _description_
+
+        Yields:
+            dict[str, Any]: _description_
+
+        Raises:
+            ValueError: _description_
+        """
 
         stack: deque[tuple[dict[str, Any], int, Iterator[Any] | None]] = deque([(substitution, 0, None)])
 
@@ -216,7 +286,27 @@ class Synthesizer(Generic[C]):
         substitution: dict[str, Any],
     ) -> Sequence[list[Type]]:
         # does the target of a multi-arrow contain a given type?
+        """_summary_.
+
+        Args:
+            nary_types (list[MultiArrow]): _description_
+            paths (Iterable[Type]): _description_
+            substitution (dict[str, Any]): _description_
+
+        Returns:
+            Sequence[list[Type]]: _description_
+        """
+
         def target_contains(m: MultiArrow, t: Type) -> bool:
+            """_summary_.
+
+            Args:
+                m (MultiArrow): _description_
+                t (Type): _description_
+
+            Returns:
+                bool: _description_
+            """
             return self.subtypes.check_subtype(m.target, t, substitution)
 
         # cover target using targets of multi-arrows in nary_types
@@ -226,12 +316,29 @@ class Synthesizer(Generic[C]):
 
         # intersect arguments of multi-arrows at same positions
         def intersect_args(arg_tuples: Iterable[tuple[Type, ...]]) -> list[Type]:
+            """_summary_.
+
+            Args:
+                arg_tuples (Iterable[tuple[Type, ...]]): _description_
+
+            Returns:
+                list[Type]: _description_
+            """
             return [Type.intersect(arg_tuple) for arg_tuple in zip(*arg_tuples, strict=True)]
 
         intersected_args: Generator[list[Type]] = (intersect_args(m.args for m in ms) for ms in covers)
 
         # consider only maximal argument vectors
         def compare_args(args1, args2) -> bool:
+            """_summary_.
+
+            Args:
+                args1 (_type_): _description_
+                args2 (_type_): _description_
+
+            Returns:
+                bool: _description_
+            """
             return all(
                 map(
                     lambda a, b: self.subtypes.check_subtype(a, b, substitution),
@@ -247,11 +354,18 @@ class Synthesizer(Generic[C]):
         paths: Iterable[Type],
         combinator_type: list[list[MultiArrow]],
     ) -> dict[str, Any] | None:
-        """
-        Computes a substitution that needs to be part of every substitution S such that
+        """Computes a substitution that needs to be part of every substitution S such that.
+
         S(combinator_type) <= paths.
 
         If no substitution can make this valid, None is returned.
+
+        Args:
+            paths (Iterable[Type]): _description_
+            combinator_type (list[list[MultiArrow]]): _description_
+
+        Returns:
+            dict[str, Any] | None: _description_
         """
 
         result: dict[str, Any] = {}
@@ -291,7 +405,17 @@ class Synthesizer(Generic[C]):
         return result
 
     def construct_solution_space_rules(self, *targets: Type) -> Generator[tuple[Type, RHSRule]]:
-        """Generate logic program rules for the given target types."""
+        """Generate logic program rules for the given target types.
+
+        Args:
+            *targets (Type): _description_
+
+        Yields:
+            _type_: _description_
+
+        Raises:
+            ValueError: _description_
+        """
 
         # current target types
         stack: deque[tuple[Type, tuple[C, SpecificationInfo, Iterator] | None]] = deque(
@@ -387,7 +511,14 @@ class Synthesizer(Generic[C]):
                                 stack.extendleft((q.origin, None) for q in anonymous_arguments)
 
     def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, Group]:
-        """Constructs a logic program in the current environment for the given target types."""
+        """Constructs a logic program in the current environment for the given target types.
+
+        Args:
+            *targets (Type): _description_
+
+        Returns:
+            SolutionSpace[Type, C, Group]: _description_
+        """
 
         solution_space: SolutionSpace[Type, C, Group] = SolutionSpace()
         for nt, rule in self.construct_solution_space_rules(*targets):

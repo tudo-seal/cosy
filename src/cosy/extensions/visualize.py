@@ -1,3 +1,5 @@
+"""_summary_."""
+
 import itertools
 import json
 import os
@@ -63,6 +65,17 @@ ComponentSpecifications: TypeAlias = dict[T, tuple[Callable, (Abstraction | Impl
 def collect_parameters(
     specification: Abstraction | Implication | Type,
 ) -> list[Parameter]:
+    """_summary_.
+
+    Args:
+        specification (Abstraction | Implication | Type): _description_
+
+    Returns:
+        list[Parameter]: _description_
+
+    Raises:
+        TypeError: _description_
+    """
     if isinstance(specification, Type):
         return []
     if isinstance(specification, Abstraction):
@@ -77,12 +90,31 @@ ConstructorName: TypeAlias = str
 
 @dataclass
 class SpecInfo:
+    """_summary_.
+
+    Attributes:
+        groups (set[Group]): _description_
+        parameters (deque[Parameter]): _description_
+        constructors (set[ConstructorName]): _description_
+    """
+
     groups: set[Group]
     parameters: deque[Parameter]
     constructors: set[ConstructorName]
 
 
 def collect_constructors(typ: Type) -> set[ConstructorName]:
+    """_summary_.
+
+    Args:
+        typ (Type): _description_
+
+    Returns:
+        set[ConstructorName]: _description_
+
+    Raises:
+        TypeError: _description_
+    """
     if isinstance(typ, Constructor):
         return {typ.name}
     if isinstance(typ, Arrow):
@@ -96,6 +128,17 @@ def collect_constructors(typ: Type) -> set[ConstructorName]:
 
 
 def inspect_spec(specification: Abstraction | Implication | Type) -> SpecInfo:
+    """_summary_.
+
+    Args:
+        specification (Abstraction | Implication | Type): _description_
+
+    Returns:
+        SpecInfo: _description_
+
+    Raises:
+        TypeError: _description_
+    """
     if isinstance(specification, Type):
         return SpecInfo(
             groups=set(),
@@ -120,12 +163,32 @@ def inspect_spec(specification: Abstraction | Implication | Type) -> SpecInfo:
 def inspect_specifications(
     component_specifications: ComponentSpecifications[T],
 ) -> dict[T, SpecInfo]:
+    """_summary_.
+
+    Args:
+        component_specifications (ComponentSpecifications[T]): _description_
+
+    Returns:
+        dict[T, SpecInfo]: _description_
+    """
     return {name: inspect_spec(spec) for name, (interpretation, spec) in component_specifications.items()}
 
 
 def build_color_map(
     all_constructors: set[ConstructorName], taxonomy: Taxonomy | None
 ) -> dict[ConstructorName, set[Colour]]:
+    """_summary_.
+
+    Args:
+        all_constructors (set[ConstructorName]): _description_
+        taxonomy (Taxonomy | None): _description_
+
+    Returns:
+        dict[ConstructorName, set[Colour]]: _description_
+
+    Raises:
+        AssertionError: _description_
+    """
     atomic_concepts: set[ConstructorName]
     non_atomic_concepts: set[ConstructorName]
     if taxonomy is None:
@@ -163,6 +226,16 @@ def build_color_map(
 
 
 def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecifications, taxonomy: Taxonomy | None) -> dict:
+    """_summary_.
+
+    Args:
+        tree (Tree[T]): _description_
+        component_specifications (ComponentSpecifications): _description_
+        taxonomy (Taxonomy | None): _description_
+
+    Returns:
+        dict: _description_
+    """
     spec_info = inspect_specifications(component_specifications)
     all_constructors: set[ConstructorName] = set.union(*[i.constructors for i in spec_info.values()])
     color_map: dict[ConstructorName, set[Colour]] = build_color_map(all_constructors, taxonomy)
@@ -207,11 +280,15 @@ def tree_to_dict(tree: Tree[T], component_specifications: ComponentSpecification
 
 
 class MyServer(threading.Thread):
+    """_summary_."""
+
     def run(self):
+        """_summary_."""
         self.server = ThreadingHTTPServer(("localhost", 8000), SimpleHTTPRequestHandler)
         self.server.serve_forever()
 
     def stop(self):
+        """_summary_."""
         self.server.shutdown()
 
 
@@ -221,6 +298,14 @@ def visualize(
     named_components_with_specifications: Sequence[tuple[T, Callable, Abstraction | Implication | Type]],
     taxonomy: Taxonomy | None,
 ):
+    """_summary_.
+
+    Args:
+        amount (int): _description_
+        trees (Iterable[Tree[T]]): _description_
+        named_components_with_specifications (Sequence[tuple[T, Callable, Abstraction | Implication | Type]]): _description_
+        taxonomy (Taxonomy | None): _description_
+    """
     visualization_file_path = pathlib.Path(__file__).parent / "visualization/results.json"
     with open(visualization_file_path, "w", encoding="utf-8") as visualization_file:
         visualization_file.write(

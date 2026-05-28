@@ -45,8 +45,8 @@ class RNGFactory:
         """Initialize the factory with a master RNG.
 
         Args:
-            master: The master random.Random instance. If None, a new unseeded
-                   random.Random() is created.
+            master (random.Random | None): The master random.Random instance. If None, a new unseeded
+                random.Random() is created. (Default value = None)
         """
         self.master = master if master is not None else random.Random()
 
@@ -55,10 +55,10 @@ class RNGFactory:
         """Create a factory seeded from an integer seed.
 
         Args:
-            seed: Integer seed for reproducible child RNG streams.
+            seed (int): Integer seed for reproducible child RNG streams.
 
         Returns:
-            A new RNGFactory with a seeded master RNG.
+            RNGFactory: A new RNGFactory with a seeded master RNG.
 
         Example:
             factory = RNGFactory.from_seed(42)
@@ -71,10 +71,10 @@ class RNGFactory:
         """Create a factory from an existing random.Random instance.
 
         Args:
-            rng: An existing random.Random instance to use as the master.
+            rng (random.Random): An existing random.Random instance to use as the master.
 
         Returns:
-            A new RNGFactory wrapping the provided RNG.
+            RNGFactory: A new RNGFactory wrapping the provided RNG.
         """
         return cls(rng)
 
@@ -86,12 +86,7 @@ class RNGFactory:
         from the master, ensuring reproducibility.
 
         Returns:
-            A fresh random.Random instance independent from any previous/future children.
-
-        Note:
-            The returned RNG is not seeded via random.seed(); it is initialized
-            with a specific seed value. Calling this method multiple times with the
-            same master produces distinct child RNGs (they do not share state).
+            random.Random: A fresh random.Random instance independent from any previous/future children.
         """
         return random.Random(self.master.randint(0, 2**32 - 1))
 
@@ -102,11 +97,11 @@ class RNGFactory:
         for debugging and logging purposes only and does not affect the RNG's behaviour.
 
         Args:
-            name: A descriptive label for the child RNG (e.g., "initialization", "mutation").
-                 Used for debugging only; does not affect reproducibility.
+            name (str): A descriptive label for the child RNG (e.g., "initialization", "mutation").
+                Used for debugging only; does not affect reproducibility.
 
         Returns:
-            A fresh random.Random instance independent from any previous/future children.
+            random.Random: A fresh random.Random instance independent from any previous/future children.
 
         Example:
             factory = RNGFactory.from_seed(42)
@@ -124,19 +119,15 @@ class RNGFactory:
         deterministically from the master RNG.
 
         Args:
-            n: Number of child RNGs to produce. If n <= 0, returns an empty list.
+            n (int): Number of child RNGs to produce. If n <= 0, returns an empty list.
 
         Returns:
-            A list of n fresh, independent random.Random instances.
+            list[random.Random]: A list of n fresh, independent random.Random instances.
 
         Example:
             factory = RNGFactory.from_seed(42)
             init_rng, mut_rng, cross_rng, sel_rng = factory.split(4)
             # All RNGs are independent and reproducible from seed=42.
-
-        Note:
-            This is equivalent to calling child() n times, but more convenient
-            and efficient when you need multiple RNGs at once.
         """
         if n <= 0:
             return []
@@ -146,7 +137,7 @@ class RNGFactory:
         """Alias for child(); allows factory to be used as a callable.
 
         Returns:
-            A fresh random.Random instance, same as child().
+            random.Random: A fresh random.Random instance, same as child().
 
         Example:
             factory = RNGFactory.from_seed(42)

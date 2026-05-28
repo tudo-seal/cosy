@@ -1,5 +1,4 @@
-"""
-Mutation operators for evolutionary algorithms.
+"""Mutation operators for evolutionary algorithms.
 
 Mutation operators modify individual solutions to explore the search space.
 They are crucial for maintaining genetic diversity and escaping local optima.
@@ -37,10 +36,11 @@ class Mutation(ABC, Generic[NT, T, G]):
         """Initialize the mutation operator.
 
         Args:
-            solution_space: The search space that defines valid individuals.
-            start: The start non-terminal for generating new subtrees.
-            max_depth: Optional maximum depth constraint for generated subtrees.
-                      If None, no depth constraint is applied.
+            solution_space (SolutionSpace[NT, T, G]): The search space that defines valid individuals.
+            start (NT): The start non-terminal for generating new subtrees.
+            max_depth (int | None): Optional maximum depth constraint for generated subtrees.
+                If None, no depth constraint is applied. (Default value = None)
+            rng (random.Random | None): _description_ (Default value = None)
         """
         self.solution_space = solution_space
         self.start = start
@@ -52,14 +52,14 @@ class Mutation(ABC, Generic[NT, T, G]):
         """Apply mutation to an individual tree.
 
         Args:
-            tree: The individual to mutate.
-            trim: Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
-                  For example, trim=1 means only consider positions that are not leaves.
-            min_trim_length: Optional minimum depth of a path that is allowed to be trimmed.
+            tree (Tree[T]): The individual to mutate.
+            trim (int): Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
+                For example, trim=1 means only consider positions that are not leaves. (Default value = 1)
+            min_trim_length (int): Optional minimum depth of a path that is allowed to be trimmed. (Default value = 1)
 
         Yields:
-            One or more mutated variants of the input tree,
-            or nothing if mutation is not possible.
+            _type_: One or more mutated variants of the input tree,
+                or nothing if mutation is not possible.
         """
 
 
@@ -82,13 +82,13 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
         4. If sampling fails, retry with other positions up to the pool limit
 
         Args:
-            tree: The tree to mutate.
-            trim: Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
-                  For example, trim=1 means only consider positions that are not leaves.
-            min_trim_length: Optional minimum depth of a path that is allowed to be trimmed.
+            tree (Tree[T]): The tree to mutate.
+            trim (int): Enforce mutation points nearer to the root by removing a suffix of length n from the leaf-paths.
+                For example, trim=1 means only consider positions that are not leaves. (Default value = 1)
+            min_trim_length (int): Optional minimum depth of a path that is allowed to be trimmed. (Default value = 1)
 
         Returns:
-            A list containing the mutated tree, or an empty list if mutation failed.
+            list[Tree[T]]: A list containing the mutated tree, or an empty list if mutation failed.
         """
         # Get all non-leaf positions (excluding root and leaves)
         positions = list(tree.positions())

@@ -1,3 +1,5 @@
+"""_summary_."""
+
 # regression tests combinatorics.py
 from itertools import combinations
 from random import Random
@@ -9,12 +11,22 @@ from cosy.core.combinatorics import maximal_elements, minimal_covers
 
 @pytest.fixture
 def elements():
+    """_summary_.
+
+    Returns:
+        _type_: _description_
+    """
     bound = 10
     dimension = 4
     count = 200
     rand = Random(0)
 
     def random_element() -> tuple[int, ...]:
+        """_summary_.
+
+        Returns:
+            tuple[int, ...]: _description_
+        """
         return tuple(rand.randint(0, bound) for _ in range(dimension))
 
     return [random_element() for _ in range(count)]
@@ -22,12 +34,22 @@ def elements():
 
 @pytest.fixture
 def sets():
+    """_summary_.
+
+    Returns:
+        _type_: _description_
+    """
     bound = 10
     size = 4
     count = 13
     rand = Random(0)
 
     def random_set() -> frozenset[int]:
+        """_summary_.
+
+        Returns:
+            frozenset[int]: _description_
+        """
         return frozenset(rand.randint(0, bound) for _ in range(size))
 
     return {random_set() for _ in range(count)}
@@ -35,14 +57,32 @@ def sets():
 
 @pytest.fixture
 def to_cover():
+    """_summary_.
+
+    Returns:
+        _type_: _description_
+    """
     bound = 10
     return set(range(bound))
 
 
 def test_maximal_elements(elements) -> None:
-    """Test maximal_elements function."""
+    """Test maximal_elements function.
+
+    Args:
+        elements (_type_): _description_
+    """
 
     def compare(x, y):
+        """_summary_.
+
+        Args:
+            x (_type_): _description_
+            y (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
         return all(a <= b for a, b in zip(x, y, strict=False))
 
     maximal = maximal_elements(elements, compare)
@@ -57,7 +97,12 @@ def test_maximal_elements(elements) -> None:
 
 
 def test_minimal_covers(sets, to_cover) -> None:
-    """Test minimal_covers function."""
+    """Test minimal_covers function.
+
+    Args:
+        sets (_type_): _description_
+        to_cover (_type_): _description_
+    """
     covers = minimal_covers(
         list(sets),
         to_cover,

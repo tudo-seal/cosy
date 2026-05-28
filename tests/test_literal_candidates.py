@@ -1,5 +1,5 @@
+"""_summary_."""
 # test for candidate generation for assigning values to literal variables
-
 
 from cosy.core.specification_builder import SpecificationBuilder
 from cosy.core.synthesizer import Synthesizer
@@ -8,16 +8,43 @@ from cosy.core.types import Constructor, Group, Literal, Omega, Type, Var
 
 def test_candidates() -> None:
     # literal varibles can be assigned computed values
+    """_summary_."""
+
     def c(x: bool, y: bool, z: bool) -> str:
+        """_summary_.
+
+        Args:
+            x (bool): _description_
+            y (bool): _description_
+            z (bool): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"C {x} {y} {z}"
 
     class Bool(Group):
+        """_summary_."""
+
         name = "bool"
 
         def __contains__(self, x):
+            """_summary_.
+
+            Args:
+                x (_type_): _description_
+
+            Returns:
+                _type_: _description_
+            """
             return super().__contains__(x)
 
         def __iter__(self):
+            """_summary_.
+
+            Yields:
+                _type_: _description_
+            """
             yield from [True, False]
 
     component_specifications = {
@@ -30,6 +57,16 @@ def test_candidates() -> None:
     }
 
     def xyz(x: bool | None, y: bool | None, z: bool | None) -> Type:
+        """_summary_.
+
+        Args:
+            x (bool | None): _description_
+            y (bool | None): _description_
+            z (bool | None): _description_
+
+        Returns:
+            Type: _description_
+        """
         return (
             Constructor("a", Omega() if x is None else Literal(x))
             & Constructor("b", Omega() if y is None else Literal(y))
@@ -62,16 +99,42 @@ def test_candidates() -> None:
 
 def test_multi_values1() -> None:
     # a literal varible can be assigned multiple computed values
+    """_summary_."""
+
     def c(a: int, b: int) -> str:
+        """_summary_.
+
+        Args:
+            a (int): _description_
+            b (int): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"C {a} {b}"
 
     class Int(Group):
+        """_summary_."""
+
         name = "int"
 
         def __contains__(self, x):
+            """_summary_.
+
+            Args:
+                x (_type_): _description_
+
+            Returns:
+                _type_: _description_
+            """
             return super().__contains__(x)
 
         def __iter__(self):
+            """_summary_.
+
+            Yields:
+                _type_: _description_
+            """
             yield from [0, 1, 2, 3]
 
     component_specifications = {
@@ -91,16 +154,42 @@ def test_multi_values1() -> None:
 
 def test_multi_values2() -> None:
     # a literal varible can be assigned multiple computed values
+    """_summary_."""
+
     def c(a: int, b: int) -> str:
+        """_summary_.
+
+        Args:
+            a (int): _description_
+            b (int): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"C {a} {b}"
 
     class Int(Group):
+        """_summary_."""
+
         name = "int"
 
         def __contains__(self, x):
+            """_summary_.
+
+            Args:
+                x (_type_): _description_
+
+            Returns:
+                _type_: _description_
+            """
             return super().__contains__(x)
 
         def __iter__(self):
+            """_summary_.
+
+            Yields:
+                _type_: _description_
+            """
             yield from [0, 1, 2, 3]
 
     component_specifications = {
@@ -129,17 +218,38 @@ def test_multi_values2() -> None:
 
 def test_infinite_values() -> None:
     # the number of values for a literal variable can be infinite
+    """_summary_."""
+
     class Nat(Group):
+        """_summary_."""
+
         name = "nat"
 
         # represents the set of (arbitrary large) natural numbers
         def __contains__(self, value: object) -> bool:
+            """_summary_.
+
+            Args:
+                value (object): _description_
+
+            Returns:
+                bool: _description_
+            """
             return isinstance(value, int) and value >= 0
 
         def __iter__(self):
-            pass
+            """_summary_."""
 
     def c(x: int, _y: int, b: str) -> str:
+        """_summary_.
+
+        Args:
+            x (int): _description_
+            b (str): _description_
+
+        Returns:
+            str: _description_
+        """
         return f"C {x} ({b})"
 
     target = "c" @ Literal(3)

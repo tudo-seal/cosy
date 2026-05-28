@@ -20,6 +20,14 @@ G = TypeVar("G", bound=Hashable)  # type of constants
 
 @dataclass(frozen=True)
 class ConstantArgument(Generic[T, G]):
+    """_summary_.
+
+    Attributes:
+        name (str): _description_
+        value (T): _description_
+        origin (G): _description_
+    """
+
     name: str
     value: T
     origin: G
@@ -27,6 +35,13 @@ class ConstantArgument(Generic[T, G]):
 
 @dataclass(frozen=True)
 class NonTerminalArgument(Generic[NT]):
+    """_summary_.
+
+    Attributes:
+        name (str | None): _description_
+        origin (NT): _description_
+    """
+
     name: str | None
     origin: NT
 
@@ -36,17 +51,36 @@ Argument = ConstantArgument[T, G] | NonTerminalArgument[NT]
 
 @dataclass(frozen=True)
 class RHSRule(Generic[NT, T, G]):
+    """_summary_.
+
+    Attributes:
+        arguments (tuple[Argument, ...]): _description_
+        predicates (tuple[Callable[[dict[str, Any]], bool], ...]): _description_
+        terminal (T): _description_
+        non_terminals (frozenset[NT]): _description_
+        literal_substitution (dict[str, T]): _description_
+    """
+
     arguments: tuple[Argument, ...]
     predicates: tuple[Callable[[dict[str, Any]], bool], ...]
     terminal: T
 
     @property
     def non_terminals(self) -> frozenset[NT]:
-        """Set of non-terminals occurring in the body of the rule."""
+        """Set of non-terminals occurring in the body of the rule.
+
+        Returns:
+            frozenset[NT]: _description_
+        """
         return frozenset(arg.origin for arg in self.arguments if isinstance(arg, NonTerminalArgument))
 
     @property
-    def literal_substitution(self):
+    def literal_substitution(self) -> dict[str, T]:
+        """_summary_.
+
+        Returns:
+            dict[str, T]: _description_
+        """
         return {n.name: n.value for n in self.arguments if isinstance(n, ConstantArgument)}
 
 
@@ -54,8 +88,8 @@ Path = tuple[int, ...]
 
 
 class Goal(Generic[NT, T, G]):
-    """
-    A goal models a Tree/Combinatory Term with variables.
+    """A goal models a Tree/Combinatory Term with variables.
+
     To enable non-recursive algorithms, a goal models a Tree with several mappings from positions in a tree
     (indexed by their paths) to the information stored at this position.
     A position is either a variable/non-terminal or a grounded subtree.
@@ -79,6 +113,15 @@ class Goal(Generic[NT, T, G]):
         constraints: dict[tuple[Path, ...], tuple[tuple[Callable[[dict[str, Any]], bool], ...], dict[str, T]]],
         success,
     ):
+        """_summary_.
+
+        Args:
+            root (dict[Path, T]): _description_
+            subgoals (dict[Path, NonTerminalArgument[NT]]): _description_
+            grounded (dict[Path, tuple[str, Tree[T]]]): _description_
+            constraints (dict[tuple[Path, ...], tuple[tuple[Callable[[dict[str, Any]], bool], ...], dict[str, T]]]): _description_
+            success (_type_): _description_
+        """
         self.constructors = root
         self.subgoals = subgoals
         self.grounded = grounded
@@ -87,14 +130,23 @@ class Goal(Generic[NT, T, G]):
 
     @classmethod
     def from_rhs_rule(cls, rhs: RHSRule[NT, T, G]) -> Goal[NT, T, G] | None:
-        """
-        Create a goal from an RHSRule.
+        """Create a goal from an RHSRule.
+
         The terminal becomes the combinator applied at the root.
         The arguments become the children of the root and are either grounded (ConstantArgument)
         or ungrounded (NonTerminalArgument).
         The constraints are the predicates from the RHSRule and to ensure a correct substitution of variable names,
         the local variable names from the RHSRule are stored additionally to the predicates that are applied at
         the given positions.
+
+        Args:
+            rhs (RHSRule[NT, T, G]): _description_
+
+        Returns:
+            Goal[NT, T, G] | None: _description_
+
+        Raises:
+            TypeError: _description_
         """
         subgoals: dict[Path, NonTerminalArgument[NT]] = {}
         grounded: dict[Path, tuple[str, Tree[T]]] = {}
@@ -120,9 +172,21 @@ class Goal(Generic[NT, T, G]):
         return Goal(root, subgoals, grounded, constraints, success=False)
 
     def update(self, rhs: RHSRule[NT, T, G], position: Path) -> Goal[NT, T, G] | None:
-        """
-        Update the goal by applying the given rule at the given position.
+        """Update the goal by applying the given rule at the given position.
+
         If the rule cannot be applied (because a constraint/predicate is violated) at the given position, return None.
+
+        Args:
+            rhs (RHSRule[NT, T, G]): _description_
+            position (Path): _description_
+
+        Returns:
+            Goal[NT, T, G] | None: _description_
+
+        Raises:
+            TypeError: _description_
+            ValueError: _description_
+            AssertionError: _description_
         """
         new_subgoals: dict[Path, NonTerminalArgument[NT]] = self.subgoals.copy()
         new_grounded: dict[Path, tuple[str, Tree[T]]] = self.grounded.copy()
@@ -233,23 +297,56 @@ class Goal(Generic[NT, T, G]):
 
 
 class SolutionSpace(Generic[NT, T, G]):
+    """_summary_."""
+
     _rules: defaultdict[NT, deque[RHSRule[NT, T, G]]]
 
     def __init__(self, rules: dict[NT, deque[RHSRule[NT, T, G]]] | None = None) -> None:
+        """_summary_.
+
+        Args:
+            rules (dict[NT, deque[RHSRule[NT, T, G]]] | None): _description_ (Default value = None)
+        """
         if rules is None:
             rules = defaultdict(deque)
         self._rules = defaultdict(deque, rules)
 
     def get(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]] | None:
+        """_summary_.
+
+        Args:
+            nonterminal (NT): _description_
+
+        Returns:
+            deque[RHSRule[NT, T, G]] | None: _description_
+        """
         return self._rules.get(nonterminal)
 
     def __getitem__(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]]:
+        """_summary_.
+
+        Args:
+            nonterminal (NT): _description_
+
+        Returns:
+            deque[RHSRule[NT, T, G]]: _description_
+        """
         return self._rules[nonterminal]
 
     def nonterminals(self) -> Iterable[NT]:
+        """_summary_.
+
+        Returns:
+            Iterable[NT]: _description_
+        """
         return self._rules.keys()
 
     def as_tuples(self) -> Iterable[tuple[NT, deque[RHSRule[NT, T, G]]]]:
+        """_summary_.
+
+        Returns:
+            Iterable[tuple[NT, deque[RHSRule[NT, T, G]]]]: _description_
+        """
         return self._rules.items()
 
     def add_rule(
@@ -259,15 +356,32 @@ class SolutionSpace(Generic[NT, T, G]):
         arguments: tuple[Argument, ...],
         predicates: tuple[Callable[[dict[str, Any]], bool], ...],
     ) -> None:
+        """_summary_.
+
+        Args:
+            nonterminal (NT): _description_
+            terminal (T): _description_
+            arguments (tuple[Argument, ...]): _description_
+            predicates (tuple[Callable[[dict[str, Any]], bool], ...]): _description_
+        """
         self._rules[nonterminal].append(RHSRule(arguments, predicates, terminal))
 
     def show(self) -> str:
+        """_summary_.
+
+        Returns:
+            str: _description_
+        """
         return "\n".join(
             f"{nt!s} ~> {' | '.join([str(subrule) for subrule in rule])}" for nt, rule in self._rules.items()
         )
 
     def prune(self) -> SolutionSpace[NT, T, G]:
-        """Keep only productive rules."""
+        """Keep only productive rules.
+
+        Returns:
+            SolutionSpace[NT, T, G]: _description_
+        """
 
         ground_types: set[NT] = set()
         queue: set[NT] = set()
@@ -309,7 +423,16 @@ class SolutionSpace(Generic[NT, T, G]):
         existing_terms: Mapping[NT, set[Tree[T]]],
         nt_term: tuple[NT, Tree[T]] | None = None,
     ) -> Iterable[tuple[Tree[T] | None, ...]]:
-        """Enumerate possible term vectors for a given list of non-terminals and existing terms. Use nt_term at least once (if given)."""
+        """Enumerate possible term vectors for a given list of non-terminals and existing terms. Use nt_term at least once (if given).
+
+        Args:
+            non_terminals (Sequence[NT | None]): _description_
+            existing_terms (Mapping[NT, set[Tree[T]]]): _description_
+            nt_term (tuple[NT, Tree[T]] | None): _description_ (Default value = None)
+
+        Yields:
+            tuple[Tree[T] | None, ...]: _description_
+        """
         if nt_term is None:
             yield from product(*([n] if n is None else existing_terms[n] for n in non_terminals))
         else:
@@ -333,6 +456,18 @@ class SolutionSpace(Generic[NT, T, G]):
         # Genererate new terms for rule `rule` from existing terms up to `max_count`
         # the term `old_term` should be a subterm of all resulting terms, at a position, that corresponds to `nt`
 
+        """_summary_.
+
+        Args:
+            rule (RHSRule[NT, T, G]): _description_
+            existing_terms (Mapping[NT, set[Tree[T]]]): _description_
+            interpretation (dict[T, Any] | None): _description_ (Default value = None)
+            max_count (int | None): _description_ (Default value = None)
+            nt_old_term (tuple[NT, Tree[T]] | None): _description_ (Default value = None)
+
+        Returns:
+            set[Tree[T]]: _description_
+        """
         output_set: set[Tree[T]] = set()
         if max_count == 0:
             return output_set
@@ -350,7 +485,19 @@ class SolutionSpace(Generic[NT, T, G]):
             literal_arguments: Sequence[Tree[T] | None],
             arguments: Sequence[Tree[T] | None],
         ) -> Iterable[Tree[T]]:
-            """Interleave parameters, literal arguments and arguments."""
+            """Interleave parameters, literal arguments and arguments.
+
+            Args:
+                parameters (Sequence[Tree[T] | None]): _description_
+                literal_arguments (Sequence[Tree[T] | None]): _description_
+                arguments (Sequence[Tree[T] | None]): _description_
+
+            Yields:
+                Tree[T]: _description_
+
+            Raises:
+                ValueError: _description_
+            """
             for parameter, literal_argument, argument in zip(parameters, literal_arguments, arguments, strict=True):
                 if parameter is not None:
                     yield parameter
@@ -368,13 +515,31 @@ class SolutionSpace(Generic[NT, T, G]):
             literal_arguments: Sequence[Tree[T] | None],
             arguments: Sequence[Tree[T] | None],
         ) -> Tree[T]:
-            """Construct a new tree from the rule and the given specific arguments."""
+            """Construct a new tree from the rule and the given specific arguments.
+
+            Args:
+                rule (RHSRule[NT, T, G]): _description_
+                parameters (Sequence[Tree[T] | None]): _description_
+                literal_arguments (Sequence[Tree[T] | None]): _description_
+                arguments (Sequence[Tree[T] | None]): _description_
+
+            Returns:
+                Tree[T]: _description_
+            """
             return Tree(
                 rule.terminal,
                 tuple(interleave(parameters, literal_arguments, arguments)),
             )
 
         def specific_substitution(parameters: Sequence[Tree[T] | None]):
+            """_summary_.
+
+            Args:
+                parameters (Sequence[Tree[T] | None]): _description_
+
+            Returns:
+                _type_: _description_
+            """
             return {
                 a.name: p if interpretation is None else p.interpret(interpretation)
                 for p, a in zip(parameters, rule.arguments, strict=True)
@@ -384,7 +549,14 @@ class SolutionSpace(Generic[NT, T, G]):
         def valid_parameters(
             nt_term: tuple[NT, Tree[T]] | None,
         ) -> Iterable[tuple[Tree[T] | None, ...]]:
-            """Enumerate all valid parameters for the rule."""
+            """Enumerate all valid parameters for the rule.
+
+            Args:
+                nt_term (tuple[NT, Tree[T]] | None): _description_
+
+            Yields:
+                tuple[Tree[T] | None, ...]: _description_
+            """
             for parameters in self._enumerate_tree_vectors(named_non_terminals, existing_terms, nt_term):
                 if rule.predicates:
                     # compute the specific substitution only if there are predicates
@@ -417,8 +589,16 @@ class SolutionSpace(Generic[NT, T, G]):
         max_bucket_size: int | None = None,
         interpretation: dict[T, Any] | None = None,
     ) -> Iterable[Tree[T]]:
-        """
-        Enumerate terms as an iterator efficiently - all terms are enumerated, no guaranteed term order.
+        """Enumerate terms as an iterator efficiently - all terms are enumerated, no guaranteed term order.
+
+        Args:
+            start (NT): _description_
+            max_count (int | None): _description_ (Default value = None)
+            max_bucket_size (int | None): _description_ (Default value = None)
+            interpretation (dict[T, Any] | None): _description_ (Default value = None)
+
+        Yields:
+            Tree[T]: _description_
         """
         if start not in self.nonterminals():
             return
@@ -479,7 +659,15 @@ class SolutionSpace(Generic[NT, T, G]):
 
     # --- helpers for goal_from_tree / contains_tree ---------------------------------
     def _rule_matches_subtree(self, rhs: RHSRule[NT, T, G], subtree: Tree[T]) -> bool:
-        """Return True if rhs can match the given subtree head (arity, terminal and constant leaf args)."""
+        """Return True if rhs can match the given subtree head (arity, terminal and constant leaf args).
+
+        Args:
+            rhs (RHSRule[NT, T, G]): _description_
+            subtree (Tree[T]): _description_
+
+        Returns:
+            bool: _description_
+        """
         if len(rhs.arguments) != len(subtree.children):
             return False
         if rhs.terminal != subtree.root:
@@ -496,6 +684,13 @@ class SolutionSpace(Generic[NT, T, G]):
         """Build initial goals from rules for `start` that match the root `tree`.
 
         Filters out None results from Goal.from_rhs_rule.
+
+        Args:
+            start (NT): _description_
+            tree (Tree[T]): _description_
+
+        Returns:
+            list[Goal[NT, T, G]]: _description_
         """
         goals: list[Goal[NT, T, G]] = []
         for rhs in self._rules[start]:
@@ -510,6 +705,14 @@ class SolutionSpace(Generic[NT, T, G]):
 
         This calls `goal.update(...)` for every rule that matches the corresponding subtree and
         filters out None results.
+
+        Args:
+            goal (Goal[NT, T, G]): _description_
+            child_pos (Path): _description_
+            tree (Tree[T]): _description_
+
+        Returns:
+            list[Goal[NT, T, G]]: _description_
         """
         try:
             subtree = tree.subtree_at(child_pos)
@@ -530,6 +733,14 @@ class SolutionSpace(Generic[NT, T, G]):
         This is true if:
         - pos is a nonterminal combinator (exactly one open subgoal at pos), or
         - pos is a leaf literal (goal is successful with no open subgoals)
+
+        Args:
+            goal (Goal[NT, T, G]): _description_
+            pos (Path): _description_
+            is_pos_leaf (bool): _description_
+
+        Returns:
+            bool: _description_
         """
         valid_children = [
             p for p in goal.subgoals if not any(p != other and p == other[: len(p)] for other in goal.subgoals)
@@ -543,11 +754,18 @@ class SolutionSpace(Generic[NT, T, G]):
         return has_open_at_pos or is_complete_leaf
 
     def goal_from_tree(self, start: NT, tree: Tree[T], pos: Path) -> Iterable[Goal[NT, T, G]]:
-        """
-        Constructs the goal ?- Start(T(X)) where T(X) is `tree` with variable X at position `pos`.
+        """Constructs the goal ?- Start(T(X)) where T(X) is `tree` with variable X at position `pos`.
 
         Yields all valid goals that result from resolving `start` to a goal that contains exactly
         one open subgoal at `pos`. The algorithm performs a depth-first search.
+
+        Args:
+            start (NT): _description_
+            tree (Tree[T]): _description_
+            pos (Path): _description_
+
+        Yields:
+            Goal[NT, T, G]: _description_
         """
 
         if start not in self.nonterminals():
@@ -605,8 +823,8 @@ class SolutionSpace(Generic[NT, T, G]):
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
-        """
-        Enumerate terms implemented via SLD-Resolution.
+        """Enumerate terms implemented via SLD-Resolution.
+
         The NT start is the request/ first goal.
 
         If the solution space is not pruned, resolution may lead to unexpected behavior.
@@ -654,6 +872,19 @@ class SolutionSpace(Generic[NT, T, G]):
         Termination: If there are no more non-terminals (or NonTerminalArguments) in the current goal,
         we have derived a grounded tree, which is a solution. If there are still non-terminals,
         we continue with the selection step.
+
+        Args:
+            start (NT): _description_
+            variance_strategy_push (Callable[[deque[Goal], Iterable[Goal]], deque[Goal]]): _description_
+            variance_strategy_pop (Callable[[deque[Goal]], tuple[deque[Goal], Goal]]): _description_
+            subgoal_selection_strategy (Callable[[Goal], tuple[Path, NonTerminalArgument[NT]]]): _description_
+            max_count (int | None): _description_ (Default value = None)
+            max_depth (int | None): _description_ (Default value = None)
+            tree (Tree[T] | None): _description_ (Default value = None)
+            pos (Path | None): _description_ (Default value = None)
+
+        Yields:
+            Tree[T]: _description_
         """
 
         if start not in self.nonterminals():
@@ -726,17 +957,53 @@ class SolutionSpace(Generic[NT, T, G]):
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
-        """A simple implementation of SLD-Resolution with leftmost goal selection and depth-first search in the SLD-Derivation-Tree."""
+        """A simple implementation of SLD-Resolution with leftmost goal selection and depth-first search in the SLD-Derivation-Tree.
+
+        Args:
+            start (NT): _description_
+            max_count (int | None): _description_ (Default value = None)
+            max_depth (int | None): _description_ (Default value = None)
+            tree (Tree[T] | None): _description_ (Default value = None)
+            pos (Path | None): _description_ (Default value = None)
+
+        Returns:
+            Iterable[Tree[T]]: _description_
+        """
 
         def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
+            """_summary_.
+
+            Args:
+                queue (deque[Goal]): _description_
+                new_goals (Iterable[Goal]): _description_
+
+            Returns:
+                deque[Goal]: _description_
+            """
             sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
             queue.extendleft(new_goals)  # depth-first search <~> LIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
+            """_summary_.
+
+            Args:
+                queue (deque[Goal]): _description_
+
+            Returns:
+                tuple[deque[Goal], Goal]: _description_
+            """
             return queue, queue.popleft()  # depth-first search <~> LIFO
 
         def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
+            """_summary_.
+
+            Args:
+                goal (Goal): _description_
+
+            Returns:
+                tuple[Path, NonTerminalArgument[NT]]: _description_
+            """
             max_len = max(len(p) for p in goal.subgoals)
             filtered = filter(lambda x: len(x[0]) == max_len, goal.subgoals.items())
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
@@ -761,8 +1028,7 @@ class SolutionSpace(Generic[NT, T, G]):
         pos: Path | None = None,
         rng: random.Random | None = None,
     ) -> Tree[T] | None:
-        """
-        This method samples a tree top-down with possibly limited depth.
+        """This method samples a tree top-down with possibly limited depth.
 
         Be aware, that this method is not guaranteed to terminate if the solution space contains recursive rules and
         max_depth is None, as it may get stuck in an infinite branch of the SLD-Derivation-Tree.
@@ -771,20 +1037,55 @@ class SolutionSpace(Generic[NT, T, G]):
 
         TODO: Because resolution directly returns all successful goals after the first derivation step without pushing
               goals to the stack, this method currently doens't work with requests, were depth 0 terms are allowed!
+
+        Args:
+            start (NT): _description_
+            max_depth (int | None): _description_ (Default value = None)
+            tree (Tree[T] | None): _description_ (Default value = None)
+            pos (Path | None): _description_ (Default value = None)
+            rng (random.Random | None): _description_ (Default value = None)
+
+        Returns:
+            Tree[T] | None: _description_
         """
         # allow deterministic sampling by providing an RNG instance
         rndm: random.Random = rng if rng is not None else random.Random()
 
         def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
+            """_summary_.
+
+            Args:
+                queue (deque[Goal]): _description_
+                new_goals (Iterable[Goal]): _description_
+
+            Returns:
+                deque[Goal]: _description_
+            """
             goals = list(new_goals)
             rndm.shuffle(goals)
             queue.extendleft(goals)  # depth-first search <~> LIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
+            """_summary_.
+
+            Args:
+                queue (deque[Goal]): _description_
+
+            Returns:
+                tuple[deque[Goal], Goal]: _description_
+            """
             return queue, queue.popleft()  # depth-first search <~> LIFO
 
         def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
+            """_summary_.
+
+            Args:
+                goal (Goal): _description_
+
+            Returns:
+                tuple[Path, NonTerminalArgument[NT]]: _description_
+            """
             max_len = max(len(p) for p in goal.subgoals)
             filtered = list(filter(lambda x: len(x[0]) == max_len, goal.subgoals.items()))
             return rndm.choice(filtered)
@@ -816,17 +1117,53 @@ class SolutionSpace(Generic[NT, T, G]):
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
-        """A simple implementation of SLD-Resolution with leftmost goal selection and breadth-first search in the SLD-Derivation-Tree."""
+        """A simple implementation of SLD-Resolution with leftmost goal selection and breadth-first search in the SLD-Derivation-Tree.
+
+        Args:
+            start (NT): _description_
+            max_count (int | None): _description_ (Default value = None)
+            max_depth (int | None): _description_ (Default value = None)
+            tree (Tree[T] | None): _description_ (Default value = None)
+            pos (Path | None): _description_ (Default value = None)
+
+        Returns:
+            Iterable[Tree[T]]: _description_
+        """
 
         def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
+            """_summary_.
+
+            Args:
+                queue (deque[Goal]): _description_
+                new_goals (Iterable[Goal]): _description_
+
+            Returns:
+                deque[Goal]: _description_
+            """
             sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
             queue.extend(new_goals)  # breadth-first search <~> FIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
+            """_summary_.
+
+            Args:
+                queue (deque[Goal]): _description_
+
+            Returns:
+                tuple[deque[Goal], Goal]: _description_
+            """
             return queue, queue.popleft()  # breadth-first search <~> FIFO
 
         def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
+            """_summary_.
+
+            Args:
+                goal (Goal): _description_
+
+            Returns:
+                tuple[Path, NonTerminalArgument[NT]]: _description_
+            """
             max_len = max(len(p) for p in goal.subgoals)
             filtered = filter(lambda x: len(x[0]) == max_len, goal.subgoals.items())
             return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
@@ -844,7 +1181,19 @@ class SolutionSpace(Generic[NT, T, G]):
         )
 
     def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
-        """Check if the solution space contains a given `tree` derivable from `start`."""
+        """Check if the solution space contains a given `tree` derivable from `start`.
+
+        Args:
+            start (NT): _description_
+            tree (Tree[T]): _description_
+            interpretation (dict[T, Any] | None): _description_ (Default value = None)
+
+        Returns:
+            bool: _description_
+
+        Raises:
+            ValueError: _description_
+        """
         if start not in self.nonterminals():
             return False
 
@@ -852,6 +1201,14 @@ class SolutionSpace(Generic[NT, T, G]):
         results: deque[bool] = deque()
 
         def get_inputs(count: int) -> list[bool]:
+            """_summary_.
+
+            Args:
+                count (int): _description_
+
+            Returns:
+                list[bool]: _description_
+            """
             return [results.pop() for _ in range(count)]
 
         while stack:
@@ -863,6 +1220,11 @@ class SolutionSpace(Generic[NT, T, G]):
 
                 # disjunction of the results for individual rules
                 def or_inputs(count: int = len(relevant_rhss)) -> None:
+                    """_summary_.
+
+                    Args:
+                        count (int): _description_ (Default value = len(relevant_rhss))
+                    """
                     results.append(any(get_inputs(count)))
 
                 stack.append(or_inputs)
@@ -882,6 +1244,13 @@ class SolutionSpace(Generic[NT, T, G]):
                         substitution: dict[str, Any] = substitution,
                         predicates=rhs.predicates,
                     ) -> None:
+                        """_summary_.
+
+                        Args:
+                            count (int): _description_ (Default value = sum((1 for argument in rhs.arguments if isinstance(argument, NonTerminalArgument))))
+                            substitution (dict[str, Any]): _description_ (Default value = substitution)
+                            predicates (_type_): _description_ (Default value = rhs.predicates)
+                        """
                         results.append(
                             all(get_inputs(count)) and all(predicate(substitution) for predicate in predicates)
                         )

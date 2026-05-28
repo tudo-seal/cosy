@@ -1,3 +1,4 @@
+"""_summary_."""
 # regression test for literal substitution inference on overlapping substitutions
 
 from cosy.core import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
@@ -9,39 +10,96 @@ T = int | str | None | bool
 
 
 def test_param() -> None:
+    """_summary_."""
+
     class Nat(Group):
+        """_summary_."""
+
         name = "Nat"
 
         def __init__(self):
+            """_summary_."""
             super().__init__()
 
         def __iter__(self):
+            """_summary_.
+
+            Yields:
+                _type_: _description_
+            """
             yield from []
 
         def __contains__(self, item):
+            """_summary_.
+
+            Args:
+                item (_type_): _description_
+
+            Returns:
+                _type_: _description_
+            """
             return isinstance(item, int) and item >= 0
 
     class Bool(Group):
+        """_summary_.
+
+        Attributes:
+            values (_type_): _description_
+        """
+
         name = "Bool"
 
         def __init__(self):
+            """_summary_."""
             super().__init__()
             self.values = [True, False, None]
 
         def __iter__(self):
+            """_summary_.
+
+            Yields:
+                _type_: _description_
+            """
             yield from self.values
 
         def __contains__(self, item):
+            """_summary_.
+
+            Args:
+                item (_type_): _description_
+
+            Returns:
+                _type_: _description_
+            """
             return item in self.values
 
     # assert that only the value 42 is tried for n
     def assert_42(vs):
+        """_summary_.
+
+        Args:
+            vs (_type_): _description_
+
+        Returns:
+            _type_: _description_
+
+        Raises:
+            ValueError: _description_
+        """
         if vs["n"] != 42:
             raise ValueError
         return True
 
     # assert that m is not None
     def assert_m(vs):
+        """_summary_.
+
+        Args:
+            vs (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
         return vs["m"] is not None
 
     repo: dict[T, Specification] = {

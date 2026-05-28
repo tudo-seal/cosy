@@ -1,3 +1,5 @@
+"""Contains the Maestro-related functionality."""
+
 __all__ = [
     "Maestro",
 ]
