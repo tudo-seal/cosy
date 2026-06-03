@@ -4,7 +4,8 @@ Demonstrates constraints in CoSy.
 """
 
 from cosy.core.specification_builder import SpecificationBuilder
-from cosy.core.types import Constructor, Type
+from cosy.core.types import Constructor, Type, Literal
+from cosy.extensions.debug_helpers import debug_note_repository, Hashabledict
 from cosy.maestro import Maestro
 
 
@@ -58,12 +59,19 @@ def main():
         "CDog": {"CAnimal"},
         "CCat": {"CAnimal"},
     }
+    debug_repository = debug_note_repository(named_components_with_specifications)
 
+    arguments = (
+        "_DEBUG_argument_HerdCons", Hashabledict({
+            "animal": None,
+            "tail": None,
+        })
+    )
     # Tell the Maestro about the component specifications
-    maestro = Maestro(named_components_with_specifications, taxonomy=taxonomy)
+    maestro = Maestro(debug_repository, taxonomy=taxonomy)
 
     # Query for heavy strings
-    target: Type = Constructor("Herd")
+    target: Type = Constructor("Herd") & (Constructor("_DEBUG_Args", Literal(arguments)))
 
     # Query the Maestro with the target, then visualize and print results
     results = maestro.query(target, max_count=40)

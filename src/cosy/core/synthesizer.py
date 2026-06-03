@@ -422,6 +422,7 @@ class Synthesizer(Generic[C]):
             (target, None) for target in targets
         )
         seen: set[Type] = set()
+        unmatched_targets: list[Type] = []
 
         while stack:
             current_target, current_target_info = stack.pop()
@@ -435,6 +436,7 @@ class Synthesizer(Generic[C]):
                 if current_target_info is None:
                     seen.add(current_target)
                     # try each combinator
+                    matched_target = False
                     for combinator, specification_info in self.repository:
                         # Compute necessary substitutions
                         substitution = self._necessary_substitution(
@@ -445,7 +447,7 @@ class Synthesizer(Generic[C]):
                         # If there cannot be a suitable substitution, ignore this combinator
                         if substitution is None:
                             continue
-
+                        matched_target = True
                         # Keep necessary substitutions and enumerate the rest
                         selected_instantiations = self._enumerate_substitutions(specification_info.prefix, substitution)
                         stack.appendleft(
@@ -458,6 +460,8 @@ class Synthesizer(Generic[C]):
                                 ),
                             )
                         )
+                    if not matched_target:
+                        unmatched_targets.append(current_target)
                 else:
                     combinator, specification_info, selected_instantiations = current_target_info
                     instantiation = next(selected_instantiations, None)
@@ -509,6 +513,7 @@ class Synthesizer(Generic[C]):
                                     ),
                                 )
                                 stack.extendleft((q.origin, None) for q in anonymous_arguments)
+        print("Unmatched targets: ", [str(t) for t in unmatched_targets])
 
     def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, Group]:
         """Constructs a logic program in the current environment for the given target types.
