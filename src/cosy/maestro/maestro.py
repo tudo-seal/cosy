@@ -6,7 +6,8 @@ from typing import Generic, TypeVar
 
 from cosy.core.subtypes import Taxonomy
 from cosy.core.synthesizer import Specification, Synthesizer
-from cosy.core.types import Type
+from cosy.core.types import Type, Constructor, Literal
+from cosy.extensions.debug_helpers import PartialTerm, debug_note_repository, DEBUG_VALUES_CONSTRUCTOR
 from cosy.extensions.solutions import _MaestroSolutions
 
 T = TypeVar("T", bound=Hashable)
@@ -24,7 +25,6 @@ class Maestro(Generic[T]):
 
     named_components_with_specifications: Sequence[tuple[T, Callable, Specification]]
     taxonomy: Taxonomy | None = None
-    _synthesizer: Synthesizer
 
     def __init__(
         self,
@@ -60,21 +60,15 @@ class Maestro(Generic[T]):
         self.named_components_with_specifications = named_components_with_specifications
         self.taxonomy = taxonomy if taxonomy is not None else {}
 
-        self.component_specifications = {
-            name: specification for name, _, specification in self.named_components_with_specifications
-        }
-        self.component_interpretations = {
-            name: interpretation for name, interpretation, _ in self.named_components_with_specifications
-        }
 
-        self._synthesizer = Synthesizer(self.component_specifications, self.taxonomy)
-
-    def query(self, target: Type, max_count: int | None = 100) -> _MaestroSolutions[T]:
+    def query(self, target: Type, max_count: int | None = 100, partial_term: PartialTerm | None = None
+              ) -> _MaestroSolutions[T]:
         """Query the Maestro for solutions that fulfill given target; by constructing a solution space and enumerating and interpreting the resulting trees.
 
         Args:
             target (Type): The target for which solutions should be queried.
             max_count (int): The maximum number of trees to enumerate. (Default value = 100)
+            partial_term (PartialTerm): An Optional PartialTerm which the generated results should conform to
 
         Returns:
             MaestroSolutions[T]: An iterable of interpreted trees, the results.
@@ -82,20 +76,37 @@ class Maestro(Generic[T]):
         Raises:
             TypeError: Raised if the request to the synthesizer is not a Type.
         """
+        repository: Sequence[tuple[T, Callable, Specification]]
+        if partial_term is None:
+            repository = self.named_components_with_specifications
+        else:
+            repository = debug_note_repository(self.named_components_with_specifications)
+            target = target & (Constructor(DEBUG_VALUES_CONSTRUCTOR, Literal(partial_term)))
+
+        component_specifications = {
+            name: specification for name, _, specification in repository
+        }
+        component_interpretations = {
+            name: interpretation for name, interpretation, _ in repository
+        }
+        synthesizer = Synthesizer(component_specifications, self.taxonomy)
+
         if not isinstance(target, Type):
             msg = "Target must be of type Type"
             raise TypeError(msg)
-        solution_space = self._synthesizer.construct_solution_space(target).prune()
+        solution_space = synthesizer.construct_solution_space(target).prune()
+
+        print("Unmatched targets: ", [str(t) for t in synthesizer.unmatched_targets])
 
         trees = solution_space.enumerate_trees(
-            target, max_count=max_count, interpretation=self.component_interpretations
+            target, max_count=max_count, interpretation=component_interpretations
         )
         return _MaestroSolutions(
             trees,
-            component_interpretations=self.component_interpretations,
-            named_components_with_specifications=self.named_components_with_specifications,
+            component_interpretations=component_interpretations,
+            named_components_with_specifications=repository,
             taxonomy=None
             if self.taxonomy is None
-            else self._synthesizer.subtypes.taxonomy,  # This way we get the closure of the taxonomy
+            else synthesizer.subtypes.taxonomy,  # This way we get the closure of the taxonomy
             max_count=max_count,
         )

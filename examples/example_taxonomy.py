@@ -4,8 +4,8 @@ Demonstrates constraints in CoSy.
 """
 
 from cosy.core.specification_builder import SpecificationBuilder
-from cosy.core.types import Constructor, Type, Literal
-from cosy.extensions.debug_helpers import debug_note_repository, Hashabledict
+from cosy.core.types import Constructor, Literal, Type, DataGroup
+from cosy.extensions.debug_helpers import DEBUG_VALUES_CONSTRUCTOR, debug_note_repository, partial_term_builder
 from cosy.maestro import Maestro
 
 
@@ -35,9 +35,17 @@ def main():
             SpecificationBuilder().suffix(Constructor("CAnimal") & Constructor("Walking")),
         ),
         (
-            "Add Wings",
-            lambda x: f"{x} with wings!",
+            "Wrap",
+            lambda x: f"<{x}>",
             SpecificationBuilder()
+            .argument("animal", Constructor("CAnimal") & Constructor("Walking"))
+            .suffix(Constructor("CAnimal")),
+        ),
+        (
+            "Add Wings",
+            lambda color, animal: f"{animal} with {color} wings!",
+            SpecificationBuilder()
+            .parameter("wing_color", DataGroup("color", ["blue", "red"]))
             .argument("animal", Constructor("CAnimal") & Constructor("Walking"))
             .suffix(Constructor("CAnimal") & Constructor("Flying")),
         ),
@@ -60,26 +68,40 @@ def main():
         "CCat": {"CAnimal"},
     }
     debug_repository = debug_note_repository(named_components_with_specifications)
-
-    arguments = (
-        "_DEBUG_argument_HerdCons", Hashabledict({
-            "animal": None,
-            "tail": None,
-        })
+    b = partial_term_builder
+    partial_term = b(
+        "HerdCons",
+        # animal=b("Add Wings"),
+        animal=b(
+            "Add Wings",
+            # animal=None,
+        ),
+        tail=b("HerdNil"),
     )
+    temp1 = b(
+            "Add Wings",
+            animal=None,
+        )
+    temp2 = b(
+            "Add Wings",
+        )
+
     # Tell the Maestro about the component specifications
-    maestro = Maestro(debug_repository, taxonomy=taxonomy)
+    maestro = Maestro(named_components_with_specifications, taxonomy=taxonomy)
+    # maestro = Maestro(debug_repository, taxonomy=taxonomy)
 
     # Query for heavy strings
-    target: Type = Constructor("Herd") & (Constructor("_DEBUG_Args", Literal(arguments)))
+    target: Type = Constructor("Herd")
+    # target: Type = Constructor("Herd") & (Constructor(DEBUG_VALUES_CONSTRUCTOR, Literal(partial_term)))
 
     # Query the Maestro with the target, then visualize and print results
-    results = maestro.query(target, max_count=40)
+    results = maestro.query(target, max_count=40, partial_term=partial_term)
 
     for i, result in enumerate(results):
         print(f"{i}. -----------------")
         print(result)
-    results.visualize()
+        pass
+    # results.visualize()
     # print("Now printing all infinite results in order:")
 
 

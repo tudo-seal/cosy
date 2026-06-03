@@ -116,6 +116,7 @@ class Synthesizer(Generic[C]):
             (c, Synthesizer._function_types(c, ty)) for c, ty in component_specifications.items()
         )
         self.subtypes = Subtypes(taxonomy if taxonomy is not None else {})
+        self.unmatched_targets: set[Type] = set()
 
     @staticmethod
     def _function_types(
@@ -422,8 +423,6 @@ class Synthesizer(Generic[C]):
             (target, None) for target in targets
         )
         seen: set[Type] = set()
-        unmatched_targets: list[Type] = []
-
         while stack:
             current_target, current_target_info = stack.pop()
             # if the target is omega, then the result is junk
@@ -461,7 +460,7 @@ class Synthesizer(Generic[C]):
                             )
                         )
                     if not matched_target:
-                        unmatched_targets.append(current_target)
+                        self.unmatched_targets.add(current_target)
                 else:
                     combinator, specification_info, selected_instantiations = current_target_info
                     instantiation = next(selected_instantiations, None)
@@ -513,7 +512,8 @@ class Synthesizer(Generic[C]):
                                     ),
                                 )
                                 stack.extendleft((q.origin, None) for q in anonymous_arguments)
-        print("Unmatched targets: ", [str(t) for t in unmatched_targets])
+            else:
+                self.unmatched_targets.add(current_target)
 
     def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, Group]:
         """Constructs a logic program in the current environment for the given target types.
