@@ -34,18 +34,19 @@ def main():
             lambda: "A Generic Animal",
             SpecificationBuilder().suffix(Constructor("CAnimal") & Constructor("Walking")),
         ),
-        (
-            "Wrap",
-            lambda x: f"<{x}>",
-            SpecificationBuilder()
-            .argument("animal", Constructor("CAnimal") & Constructor("Walking"))
-            .suffix(Constructor("CAnimal")),
-        ),
+        # (
+        #     "Wrap",
+        #     lambda x: f"<{x}>",
+        #     SpecificationBuilder()
+        #     .argument("animal", Constructor("CAnimal") & Constructor("Walking"))
+        #     .suffix(Constructor("CAnimal")),
+        # ),
         (
             "Add Wings",
-            lambda color, animal: f"{animal} with {color} wings!",
+            # lambda color, animal: f"{animal} with {color} wings!",
+            lambda animal: f"{animal} with wings!",
             SpecificationBuilder()
-            .parameter("wing_color", DataGroup("color", ["blue", "red"]))
+            # .parameter("wing_color", DataGroup("color", ["blue", "red"]))
             .argument("animal", Constructor("CAnimal") & Constructor("Walking"))
             .suffix(Constructor("CAnimal") & Constructor("Flying")),
         ),
@@ -78,24 +79,31 @@ def main():
         ),
         tail=b("HerdNil"),
     )
-    temp1 = b(
-            "Add Wings",
-            animal=None,
-        )
-    temp2 = b(
-            "Add Wings",
-        )
+
+    target: Type = Constructor("Herd")
+
+    # Manually do the debug
+    named_components_with_specifications = debug_note_repository(named_components_with_specifications)
+    target = target & (Constructor(DEBUG_VALUES_CONSTRUCTOR, Literal(partial_term)))
 
     # Tell the Maestro about the component specifications
     maestro = Maestro(named_components_with_specifications, taxonomy=taxonomy)
     # maestro = Maestro(debug_repository, taxonomy=taxonomy)
 
     # Query for heavy strings
-    target: Type = Constructor("Herd")
     # target: Type = Constructor("Herd") & (Constructor(DEBUG_VALUES_CONSTRUCTOR, Literal(partial_term)))
 
+
     # Query the Maestro with the target, then visualize and print results
-    results = maestro.query(target, max_count=40, partial_term=partial_term)
+    success_count = 0
+    first_results = []
+    for i in range(0, 100):
+        results = maestro.query(target, max_count=40)
+        first_results.append(next(iter(results), None))
+    # print(first_results)
+    print(len([x for x in first_results if x is not None]))
+
+    # results = maestro.query(target, max_count=40, partial_term=partial_term)
 
     for i, result in enumerate(results):
         print(f"{i}. -----------------")
