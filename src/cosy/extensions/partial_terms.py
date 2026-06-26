@@ -1,6 +1,7 @@
 from collections import defaultdict
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, TypeVar, Union
 
 from cosy.core import Constructor
@@ -85,22 +86,22 @@ def debug_note_repository(
                             forced_value_sequence = [forced_values]
                         else:
                             forced_value_sequence = forced_values
-                        if values is not None and not all(v in values for v in forced_value_sequence):
+                        if values is not None and not all(v in values(m) for v in forced_value_sequence):
                             error_msg = (
                                 f"Miss-formed partial term: {partial_term}\n"
                                 f"The specified values for the parameter {spec.parameter.name} are not all legal"
                                 f"values for this parameter. The following values are not legal candidates:\n"
-                                f"{[v for v in forced_value_sequence if v not in values]}\n"
+                                f"{[v for v in forced_value_sequence if v not in values(m)]}\n"
                                 f"In the context: {m}"
                             )
                             raise ValueError(error_msg)
                         return forced_value_sequence
 
-                modified_param = LiteralParameter(
+                modified_lit_param = LiteralParameter(
                     name=spec.parameter.name, group=spec.parameter.group, values=modified_values
                 )
                 call_map.append(True)
-                return Abstraction(modified_param, modifiy_specification(combinator, call_map, spec.body))
+                return Abstraction(modified_lit_param, modifiy_specification(combinator, call_map, spec.body))
             if isinstance(spec.parameter, TermParameter):
                 unpacking_param_name = debug_value_name(spec.parameter.name)
 
@@ -119,19 +120,20 @@ def debug_note_repository(
                     raise ValueError(error_msg)
 
                 unpacking_param = LiteralParameter(unpacking_param_name, ALL_GROUP, unpack)
-                modified_param = TermParameter(
+                modified_term_param = TermParameter(
                     spec.parameter.name,
                     spec.parameter.group & Constructor(DEBUG_VALUES_CONSTRUCTOR, Var(unpacking_param_name)),
                 )
                 call_map.append(False)
                 call_map.append(True)
                 return Abstraction(
-                    unpacking_param, Abstraction(modified_param, modifiy_specification(combinator, call_map, spec.body))
+                    unpacking_param,
+                    Abstraction(modified_term_param, modifiy_specification(combinator, call_map, spec.body)),
                 )
             msg = "Impossible case"
             raise RuntimeError(msg)
         if isinstance(spec, Implication):
-            return Specification(spec.predicate, modifiy_specification(combinator, call_map, spec.body))
+            return Implication(spec.predicate, modifiy_specification(combinator, call_map, spec.body))
         if isinstance(spec, Type):
             return spec & Constructor(DEBUG_VALUES_CONSTRUCTOR, Var(DEBUG_VALUES_ARGUMENT))
         msg = "Impossible case"
@@ -144,8 +146,11 @@ def debug_note_repository(
             LiteralParameter(DEBUG_VALUES_ARGUMENT, ALL_GROUP),
             Implication(
                 Predicate(
-                    constraint=lambda m, c=combinator: m[DEBUG_VALUES_ARGUMENT] is None
-                    or m[DEBUG_VALUES_ARGUMENT].combinator == debug_value_name(str(c)),
+                    constraint=partial(
+                        lambda m, c: m[DEBUG_VALUES_ARGUMENT] is None
+                        or m[DEBUG_VALUES_ARGUMENT].combinator == debug_value_name(str(c)),
+                        c=combinator,
+                    ),
                     only_literals=True,
                 ),
                 modifiy_specification(combinator, call_map, specification),
