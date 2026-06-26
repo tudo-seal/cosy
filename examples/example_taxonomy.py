@@ -3,10 +3,19 @@
 Demonstrates constraints in CoSy.
 """
 
+from typing import TYPE_CHECKING
+
 from cosy.core.specification_builder import SpecificationBuilder
-from cosy.core.types import Constructor, Literal, Type, DataGroup
-from cosy.extensions.debug_helpers import DEBUG_VALUES_CONSTRUCTOR, debug_note_repository, partial_term_builder
+from cosy.core.types import Constructor, Type
+from cosy.extensions.partial_terms import (
+    partial_term_builder,
+)
 from cosy.maestro import Maestro
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from cosy.core.synthesizer import Specification
 
 
 def herd_nil() -> list[str]:
@@ -18,7 +27,7 @@ def herd_cons(animal: str, tail: list[str]) -> list[str]:
 
 
 def main():
-    named_components_with_specifications = [
+    named_components_with_specifications: Sequence[tuple[str, Callable, Specification]] = [
         (
             "Dog",
             lambda: "A Dog",
@@ -68,49 +77,25 @@ def main():
         "CDog": {"CAnimal"},
         "CCat": {"CAnimal"},
     }
-    debug_repository = debug_note_repository(named_components_with_specifications)
+
     b = partial_term_builder
     partial_term = b(
         "HerdCons",
         # animal=b("Add Wings"),
-        animal=b(
-            "Add Wings",
-            # animal=None,
-        ),
+        animal=b("Add Wings", animal=None),
         tail=b("HerdNil"),
     )
 
     target: Type = Constructor("Herd")
 
-    # Manually do the debug
-    named_components_with_specifications = debug_note_repository(named_components_with_specifications)
-    target = target & (Constructor(DEBUG_VALUES_CONSTRUCTOR, Literal(partial_term)))
-
     # Tell the Maestro about the component specifications
     maestro = Maestro(named_components_with_specifications, taxonomy=taxonomy)
-    # maestro = Maestro(debug_repository, taxonomy=taxonomy)
 
-    # Query for heavy strings
-    # target: Type = Constructor("Herd") & (Constructor(DEBUG_VALUES_CONSTRUCTOR, Literal(partial_term)))
-
-
-    # Query the Maestro with the target, then visualize and print results
-    success_count = 0
-    first_results = []
-    for i in range(0, 100):
-        results = maestro.query(target, max_count=40)
-        first_results.append(next(iter(results), None))
-    # print(first_results)
-    print(len([x for x in first_results if x is not None]))
-
-    # results = maestro.query(target, max_count=40, partial_term=partial_term)
-
+    # Query the Maestro with the target, then print results
+    results = maestro.query(target, max_count=40, partial_term=partial_term)
     for i, result in enumerate(results):
         print(f"{i}. -----------------")
         print(result)
-        pass
-    # results.visualize()
-    # print("Now printing all infinite results in order:")
 
 
 if __name__ == "__main__":

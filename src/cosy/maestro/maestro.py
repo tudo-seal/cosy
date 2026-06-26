@@ -6,8 +6,8 @@ from typing import Generic, TypeVar
 
 from cosy.core.subtypes import Taxonomy
 from cosy.core.synthesizer import Specification, Synthesizer
-from cosy.core.types import Type, Constructor, Literal
-from cosy.extensions.debug_helpers import PartialTerm, debug_note_repository, DEBUG_VALUES_CONSTRUCTOR
+from cosy.core.types import Constructor, Literal, Type
+from cosy.extensions.partial_terms import DEBUG_VALUES_CONSTRUCTOR, PartialTerm, debug_note_repository
 from cosy.extensions.solutions import _MaestroSolutions
 
 T = TypeVar("T", bound=Hashable)
@@ -60,9 +60,9 @@ class Maestro(Generic[T]):
         self.named_components_with_specifications = named_components_with_specifications
         self.taxonomy = taxonomy if taxonomy is not None else {}
 
-
-    def query(self, target: Type, max_count: int | None = 100, partial_term: PartialTerm | None = None
-              ) -> _MaestroSolutions[T]:
+    def query(
+        self, target: Type, max_count: int | None = 100, partial_term: PartialTerm | None = None
+    ) -> _MaestroSolutions[T]:
         """Query the Maestro for solutions that fulfill given target; by constructing a solution space and enumerating and interpreting the resulting trees.
 
         Args:
@@ -83,24 +83,19 @@ class Maestro(Generic[T]):
             repository = debug_note_repository(self.named_components_with_specifications)
             target = target & (Constructor(DEBUG_VALUES_CONSTRUCTOR, Literal(partial_term)))
 
-        component_specifications = {
-            name: specification for name, _, specification in repository
-        }
-        component_interpretations = {
-            name: interpretation for name, interpretation, _ in repository
-        }
+        component_specifications = {name: specification for name, _, specification in repository}
+        component_interpretations = {name: interpretation for name, interpretation, _ in repository}
         synthesizer = Synthesizer(component_specifications, self.taxonomy)
 
         if not isinstance(target, Type):
             msg = "Target must be of type Type"
             raise TypeError(msg)
-        solution_space = synthesizer.construct_solution_space(target).prune()
+        solution_space = synthesizer.construct_solution_space(target)  # .prune()
+        # for k, v in solution_space._rules.items():
+        #     print(f"{k}: {v}")
+        # print("Unmatched targets: ", [str(t) for t in synthesizer.unmatched_targets])
 
-        print("Unmatched targets: ", [str(t) for t in synthesizer.unmatched_targets])
-
-        trees = solution_space.enumerate_trees(
-            target, max_count=max_count, interpretation=component_interpretations
-        )
+        trees = solution_space.enumerate_trees(target, max_count=max_count, interpretation=component_interpretations)
         return _MaestroSolutions(
             trees,
             component_interpretations=component_interpretations,

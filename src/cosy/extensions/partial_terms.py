@@ -8,16 +8,21 @@ from cosy.core.synthesizer import Specification
 from cosy.core.types import Abstraction, Group, Implication, LiteralParameter, Predicate, TermParameter, Type, Var
 
 T = TypeVar("T", bound=Hashable)
+K = TypeVar("K", bound=Hashable)
+V = TypeVar("V", bound=Hashable)
+
 
 class AllGroup(Group):
     def __init__(self) -> None:
         self.name = "All-Group"
 
     def __iter__(self):
-        raise NotImplementedError("Cannot iterate over the all group!")
+        msg = "Cannot iterate over the all group!"
+        raise NotImplementedError(msg)
 
     def __contains__(self, x: Any) -> bool:
         return True
+
 
 ALL_GROUP = AllGroup()
 
@@ -25,24 +30,29 @@ ALL_GROUP = AllGroup()
 def debug_value_name(argument: str) -> str:
     return "_DEBUG_values_" + argument
 
+
 DEBUG_VALUES_ARGUMENT = "_DEBUG_values_args"
 DEBUG_VALUES_CONSTRUCTOR = "_DEBUG_values_cons"
 
 
-class HashableDefaultDict(defaultdict):
+class HashableDefaultDict(defaultdict[K, V]):
+    def __init__(self, default_factory: Callable[[], Any], the_dict: dict[K, V]) -> None:
+        super().__init__(default_factory, the_dict)
+        self.my_hash = hash(frozenset({(k, hash(v)) for k, v in self.items()}))
+
     def __hash__(self):
-        return hash(frozenset(self.items()))
+        return self.my_hash
+
 
 @dataclass(frozen=True)
 class PartialTerm:
     combinator: str
-    params_and_named_args: dict[str, Union[None, Any, 'PartialTerm']]
-    unnamed_arguments: tuple['PartialTerm',...]
+    params_and_named_args: dict[str, Union[None, Any, "PartialTerm"]]
+    unnamed_arguments: tuple["PartialTerm", ...]
+
 
 def partial_term_builder(
-        combinator: str,
-        *unnamed_arguments: 'PartialTerm',
-        **params_and_named_args: Union[Any, None, 'PartialTerm']
+    combinator: str, *unnamed_arguments: "PartialTerm", **params_and_named_args: Union[Any, None, "PartialTerm"]
 ):
     return PartialTerm(
         combinator=debug_value_name(combinator),
@@ -50,14 +60,9 @@ def partial_term_builder(
         params_and_named_args=HashableDefaultDict(lambda: None, params_and_named_args),
     )
 
-class PartialTermBuilder:
-    def __init__(self, combinator: str):
-        self.combinator = combinator
-
-
 
 def debug_note_repository(
-        named_components_with_specifications: Sequence[tuple[T, Callable, Specification]]
+    named_components_with_specifications: Sequence[tuple[T, Callable, Specification]],
 ) -> Sequence[tuple[T, Callable, Specification]]:
     result: list[tuple[T, Callable, Specification]] = []
 
@@ -69,6 +74,7 @@ def debug_note_repository(
                 if values is None:
                     modified_values = None
                 else:
+
                     def modified_values(m: dict[str, PartialTerm]) -> Sequence[Any]:
                         partial_term = m[DEBUG_VALUES_ARGUMENT]
                         if partial_term is None:
@@ -91,14 +97,13 @@ def debug_note_repository(
                         return forced_value_sequence
 
                 modified_param = LiteralParameter(
-                    name=spec.parameter.name,
-                    group=spec.parameter.group,
-                    values=modified_values
+                    name=spec.parameter.name, group=spec.parameter.group, values=modified_values
                 )
                 call_map.append(True)
                 return Abstraction(modified_param, modifiy_specification(combinator, call_map, spec.body))
             if isinstance(spec.parameter, TermParameter):
                 unpacking_param_name = debug_value_name(spec.parameter.name)
+
                 def unpack(m: dict[str, PartialTerm]) -> Sequence[Any]:
                     partial_term = m[DEBUG_VALUES_ARGUMENT]
                     if partial_term is None:
@@ -113,21 +118,24 @@ def debug_note_repository(
                     )
                     raise ValueError(error_msg)
 
-                unpacking_param = LiteralParameter(
-                    unpacking_param_name, ALL_GROUP,
-                    unpack
+                unpacking_param = LiteralParameter(unpacking_param_name, ALL_GROUP, unpack)
+                modified_param = TermParameter(
+                    spec.parameter.name,
+                    spec.parameter.group & Constructor(DEBUG_VALUES_CONSTRUCTOR, Var(unpacking_param_name)),
                 )
-                modified_param = TermParameter(spec.parameter.name,
-                                               spec.parameter.group & Constructor(DEBUG_VALUES_CONSTRUCTOR, Var(unpacking_param_name)))
                 call_map.append(False)
                 call_map.append(True)
-                return Abstraction(unpacking_param, Abstraction(modified_param, modifiy_specification(combinator, call_map, spec.body)))
-            raise RuntimeError("Impossible case")
+                return Abstraction(
+                    unpacking_param, Abstraction(modified_param, modifiy_specification(combinator, call_map, spec.body))
+                )
+            msg = "Impossible case"
+            raise RuntimeError(msg)
         if isinstance(spec, Implication):
             return Specification(spec.predicate, modifiy_specification(combinator, call_map, spec.body))
         if isinstance(spec, Type):
             return spec & Constructor(DEBUG_VALUES_CONSTRUCTOR, Var(DEBUG_VALUES_ARGUMENT))
-        raise RuntimeError("Impossible case")
+        msg = "Impossible case"
+        raise RuntimeError(msg)
 
     for combinator, interpretation, specification in named_components_with_specifications:
         call_map: list[bool] = [False]
@@ -136,20 +144,25 @@ def debug_note_repository(
             LiteralParameter(DEBUG_VALUES_ARGUMENT, ALL_GROUP),
             Implication(
                 Predicate(
-                    constraint=lambda m, c=combinator: m[DEBUG_VALUES_ARGUMENT] is None or m[DEBUG_VALUES_ARGUMENT].combinator == debug_value_name(str(c)),
-                    only_literals=True
+                    constraint=lambda m, c=combinator: m[DEBUG_VALUES_ARGUMENT] is None
+                    or m[DEBUG_VALUES_ARGUMENT].combinator == debug_value_name(str(c)),
+                    only_literals=True,
                 ),
-                modifiy_specification(combinator, call_map, specification)
-            )
+                modifiy_specification(combinator, call_map, specification),
+            ),
         )
 
-        def modified_interpretation(*args,
-                                    the_call_map: tuple[bool, ...] = tuple(call_map),
-                                    the_interpretation = interpretation,
-                                    ):
-            assert len(args) == len(the_call_map)
+        def modified_interpretation(
+            *args,
+            the_call_map: tuple[bool, ...] = tuple(call_map),
+            the_interpretation=interpretation,
+        ):
+            if len(args) != len(the_call_map):
+                msg = "Impossible case"
+                raise RuntimeError(msg)
             args_to_pass: list = [arg for arg, keep in zip(args, the_call_map, strict=False) if keep]
 
             return the_interpretation(*args_to_pass)
+
         result.append((combinator, modified_interpretation, modified_spec))
     return result
