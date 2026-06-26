@@ -90,10 +90,7 @@ class Maestro(Generic[T]):
         if not isinstance(target, Type):
             msg = "Target must be of type Type"
             raise TypeError(msg)
-        solution_space = synthesizer.construct_solution_space(target)  # .prune()
-        # for k, v in solution_space._rules.items():
-        #     print(f"{k}: {v}")
-        # print("Unmatched targets: ", [str(t) for t in synthesizer.unmatched_targets])
+        solution_space = synthesizer.construct_solution_space(target).prune()
 
         trees = solution_space.enumerate_trees(target, max_count=max_count, interpretation=component_interpretations)
         return _MaestroSolutions(
