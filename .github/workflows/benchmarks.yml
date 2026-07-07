@@ -36,12 +36,12 @@ jobs:
           cosy
           cosy-benchmarks    
 
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         repository: tudo-seal/cosy-benchmarks
         ref: 'gh-pages'
 
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         # Full history for timestamps
         fetch-depth: 0

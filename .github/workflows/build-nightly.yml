@@ -18,7 +18,7 @@ jobs:
           app-id: ${{ secrets.TUDO_SEAL_WORKFLOW_CLIENT_ID }}
           private-key: ${{ secrets.TUDO_SEAL_WORKFLOW_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Full history for timestamps
           fetch-depth: 0
