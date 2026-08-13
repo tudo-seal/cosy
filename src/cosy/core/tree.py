@@ -28,6 +28,8 @@ class Tree(Generic[T]):
     _hash: int
     _positions: set[Path] | None = None
     _leaf_positions: set[Path] | None = None
+    # tuple[interpretation id, reference to interpretation dict (avoid GC, see test), cached interpretation result]
+    _interpreted: tuple[int, dict[T, Any] | None, Any] | None = None  # breaks for non-deterministic interpretations
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         """_summary_.
@@ -124,6 +126,11 @@ class Tree(Generic[T]):
             TypeError: _description_
         """
 
+        # if interpretation hasn't changed, skip interpreting, use cache
+        evaluated = self._interpreted
+        if evaluated is not None and evaluated[0] == id(interpretation):
+            return evaluated[2]
+
         terms: deque[Tree[T]] = deque((self,))
         combinators: deque[tuple[T, int]] = deque()
         # decompose terms
@@ -207,7 +214,11 @@ class Tree(Generic[T]):
                     current_combinator = current_combinator(*fixed_parameters, *var_parameters, *default_parameters)
 
             results.append(current_combinator)
-        return results.pop()
+        result = results.pop()
+
+        # no cache hit (first seen or interpretation changed), overwrite cache
+        self._interpreted = (id(interpretation), interpretation, result)
+        return result
 
     def positions(self) -> set[Path]:
         """Return all positions in the tree.
