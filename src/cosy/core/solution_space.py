@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from collections import defaultdict, deque
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import product
 from queue import PriorityQueue
 from types import FunctionType
@@ -296,6 +296,27 @@ class Goal(Generic[NT, T, G]):
         return Goal(new_constructors, new_subgoals, new_grounded, new_constraints, success=False)
 
 
+@dataclass
+class _RuleProgress(Generic[T]):
+    """_summary_.
+
+    Attributes:
+        done_parameters (list[tuple[Tree[T] | None, ...]]): _description_
+        seen_parameters (set[tuple[Tree[T] | None, ...]]): _description_
+        done_arguments (list[tuple[Tree[T] | None, ...]]): _description_
+        seen_arguments (set[tuple[Tree[T] | None, ...]]): _description_
+        pending_parameters (list[tuple[Tree[T] | None, ...]]): _description_
+        pending_arguments (list[tuple[Tree[T] | None, ...]]): _description_
+    """
+
+    done_parameters: list[tuple[Tree[T] | None, ...]] = field(default_factory=list)
+    seen_parameters: set[tuple[Tree[T] | None, ...]] = field(default_factory=set)
+    done_arguments: list[tuple[Tree[T] | None, ...]] = field(default_factory=list)
+    seen_arguments: set[tuple[Tree[T] | None, ...]] = field(default_factory=set)
+    pending_parameters: list[tuple[Tree[T] | None, ...]] = field(default_factory=list)
+    pending_arguments: list[tuple[Tree[T] | None, ...]] = field(default_factory=list)
+
+
 class SolutionSpace(Generic[NT, T, G]):
     """_summary_."""
 
@@ -452,6 +473,7 @@ class SolutionSpace(Generic[NT, T, G]):
         interpretation: dict[T, Any] | None = None,
         max_count: int | None = None,
         nt_old_term: tuple[NT, Tree[T]] | None = None,
+        progress: _RuleProgress[T] | None = None,
     ) -> set[Tree[T]]:
         # Genererate new terms for rule `rule` from existing terms up to `max_count`
         # the term `old_term` should be a subterm of all resulting terms, at a position, that corresponds to `nt`
@@ -464,6 +486,7 @@ class SolutionSpace(Generic[NT, T, G]):
             interpretation (dict[T, Any] | None): _description_ (Default value = None)
             max_count (int | None): _description_ (Default value = None)
             nt_old_term (tuple[NT, Tree[T]] | None): _description_ (Default value = None)
+            progress (_RuleProgress[T] | None): _description_ (Default value = None)
 
         Returns:
             set[Tree[T]]: _description_
@@ -566,20 +589,70 @@ class SolutionSpace(Generic[NT, T, G]):
                 else:
                     yield parameters
 
-        for parameters in valid_parameters(nt_old_term):
-            for arguments in self._enumerate_tree_vectors(unnamed_non_terminals, existing_terms):
-                output_set.add(construct_tree(rule, parameters, literal_arguments, arguments))
-                if max_count is not None and len(output_set) >= max_count:
-                    return output_set
-
-        if nt_old_term is not None:
-            all_parameters: deque[tuple[Tree[T] | None, ...]] | None = None
-            for arguments in self._enumerate_tree_vectors(unnamed_non_terminals, existing_terms):
-                all_parameters = all_parameters if all_parameters is not None else deque(valid_parameters(None))
-                for parameters in all_parameters:
+        # Legacy behaviour intact if no progress object passed
+        if progress is None:
+            for parameters in valid_parameters(nt_old_term):
+                for arguments in self._enumerate_tree_vectors(unnamed_non_terminals, existing_terms):
                     output_set.add(construct_tree(rule, parameters, literal_arguments, arguments))
                     if max_count is not None and len(output_set) >= max_count:
                         return output_set
+
+            if nt_old_term is not None:
+                all_parameters: deque[tuple[Tree[T] | None, ...]] | None = None
+                for arguments in self._enumerate_tree_vectors(unnamed_non_terminals, existing_terms):
+                    all_parameters = all_parameters if all_parameters is not None else deque(valid_parameters(None))
+                    for parameters in all_parameters:
+                        output_set.add(construct_tree(rule, parameters, literal_arguments, arguments))
+                        if max_count is not None and len(output_set) >= max_count:
+                            return output_set
+            return output_set
+
+        # NOTE: THIS WILL BREAK IF PREDICATES ARE NON-DETERMINISTIC
+
+        # seed with prior interrupted work
+        incoming_parameters = progress.pending_parameters
+        progress.pending_parameters = []
+
+        # only new parameters, old ones fetched from progress
+        for parameters in valid_parameters(nt_old_term):
+            if parameters not in progress.seen_parameters:
+                progress.seen_parameters.add(parameters)
+                incoming_parameters.append(parameters)
+        incoming_arguments = progress.pending_arguments
+        progress.pending_arguments = []
+
+        # only new arguments, old ones fetched from progress
+        for arguments in self._enumerate_tree_vectors(unnamed_non_terminals, existing_terms, nt_old_term):
+            if arguments not in progress.seen_arguments:
+                progress.seen_arguments.add(arguments)
+                incoming_arguments.append(arguments)
+
+        # Don't recompute combinations of previously seen arguments and parameters, they get deduped anyway later
+        # Instead only compute new combinations: new params with new args, new params with old args, and new args with old params.
+        known = len(progress.done_parameters)
+        if incoming_parameters:
+            # instead of recomputing this expensively, build it from progress
+            every_argument = progress.done_arguments + incoming_arguments
+            for index, parameters in enumerate(incoming_parameters):
+                for arguments in every_argument:
+                    output_set.add(construct_tree(rule, parameters, literal_arguments, arguments))
+                    if max_count is not None and len(output_set) >= max_count:
+                        # If max count interrupts, unprocessed but seen things are pending work next time around
+                        progress.pending_parameters = incoming_parameters[index:]
+                        progress.pending_arguments = incoming_arguments
+                        return output_set
+                progress.done_parameters.append(parameters)
+        if incoming_arguments:
+            # new_parameters are after known length snapshot, so old are before that
+            old_parameters = progress.done_parameters[:known]
+            for index, arguments in enumerate(incoming_arguments):
+                for parameters in old_parameters:
+                    output_set.add(construct_tree(rule, parameters, literal_arguments, arguments))
+                    if max_count is not None and len(output_set) >= max_count:
+                        # parameters are done already, only arguments can be pending
+                        progress.pending_arguments = incoming_arguments[index:]
+                        return output_set
+                progress.done_arguments.append(arguments)
         return output_set
 
     def enumerate_trees(
@@ -607,13 +680,19 @@ class SolutionSpace(Generic[NT, T, G]):
         existing_terms: dict[NT, set[Tree[T]]] = {n: set() for n in self.nonterminals()}
         inverse_grammar: dict[NT, deque[tuple[NT, RHSRule[NT, T, G]]]] = {n: deque() for n in self.nonterminals()}
         all_results: set[Tree[T]] = set()
+        progressed: dict[tuple[NT, int], _RuleProgress[T]] = {}
 
         for n, exprs in self._rules.items():
             for expr in exprs:
                 if all(m in self.nonterminals() for m in expr.non_terminals):
                     for m in expr.non_terminals:
                         inverse_grammar[m].append((n, expr))
-                    for new_term in self._generate_new_trees(expr, existing_terms, interpretation):
+                    for new_term in self._generate_new_trees(
+                        expr,
+                        existing_terms,
+                        interpretation,
+                        progress=progressed.setdefault((n, id(expr)), _RuleProgress()),
+                    ):
                         queues[n].put(new_term)
                         if n == start and new_term not in all_results:
                             if max_count is not None and len(all_results) >= max_count:
@@ -641,7 +720,12 @@ class SolutionSpace(Generic[NT, T, G]):
                             non_terminals.add(m)
                         if m == start:
                             for new_term in self._generate_new_trees(
-                                expr, existing_terms, interpretation, max_count, (n, term)
+                                expr,
+                                existing_terms,
+                                interpretation,
+                                max_count,
+                                (n, term),
+                                progressed.setdefault((m, id(expr)), _RuleProgress()),
                             ):
                                 if new_term not in all_results:
                                     if max_count is not None and len(all_results) >= max_count:
@@ -651,7 +735,12 @@ class SolutionSpace(Generic[NT, T, G]):
                                     queues[start].put(new_term)
                         else:
                             for new_term in self._generate_new_trees(
-                                expr, existing_terms, interpretation, max_bucket_size, (n, term)
+                                expr,
+                                existing_terms,
+                                interpretation,
+                                max_bucket_size,
+                                (n, term),
+                                progressed.setdefault((m, id(expr)), _RuleProgress()),
                             ):
                                 queues[m].put(new_term)
             current_bucket_size += 1
