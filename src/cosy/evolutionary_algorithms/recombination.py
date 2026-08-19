@@ -8,6 +8,7 @@ by combining good building blocks from different solutions.
 import random
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
+from collections.abc import Set as AbstractSet
 from itertools import product
 from typing import Generic, TypeVar
 
@@ -69,7 +70,7 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
     non-leaf positions to ensure meaningful recombination.
     """
 
-    def maximum_leaf_length(self, leaf_positions: set[Path], position: Path) -> int:
+    def maximum_leaf_length(self, leaf_positions: AbstractSet[Path], position: Path) -> int:
         """Calculate the maximum leaf length for a given position in the tree.
 
         This is used to ensure that when swapping subtrees, the resulting offspring
@@ -77,7 +78,8 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         determined by the distance from the position to the nearest leaf in the tree.
 
         Args:
-            leaf_positions (set[Path]): A list of paths to leaf nodes in the tree.
+            leaf_positions (AbstractSet[Path]): The paths to the leaf nodes of the tree. Any set
+                will do; the method only reads it.
             position (Path): The path to the current position being evaluated.
 
         Returns:
@@ -106,7 +108,9 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
         """
         # Collect valid crossover points in the primary parent
         # (exclude root and leaves to ensure meaningful swaps)
-        primary_positions = list(primary.positions())
+        # Sorted before shuffling, so that the crossover points are a function of the seed alone
+        # rather than of the order a set happens to iterate in.
+        primary_positions = sorted(primary.positions())
         primary_positions.remove(())  # Remove root
         for leaf in primary.leaf_positions():
             primary_positions.remove(leaf)  # Remove leaves
@@ -114,7 +118,7 @@ class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
             return []
 
         # Collect valid crossover points in the secondary parent
-        secondary_positions = list(secondary.positions())
+        secondary_positions = sorted(secondary.positions())
         secondary_positions.remove(())  # Remove root
         for leaf in secondary.leaf_positions():
             secondary_positions.remove(leaf)  # Remove leaves

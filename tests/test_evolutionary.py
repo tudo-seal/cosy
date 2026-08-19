@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from cosy.core.tree import Tree
+from cosy.core.solution_space import SolutionSpace
+from cosy.core.tree import Path, Tree
 from cosy.evolutionary_algorithms.evolutionary import EAState, SimpleGeneticProgramming
 from cosy.evolutionary_algorithms.fitness import ScalarFitnessComparator
+from cosy.evolutionary_algorithms.mutation import ResolutionMutation
+from cosy.evolutionary_algorithms.recombination import Crossover
 from examples.example_symbolic_regression import (
     SymbolicRegression,
     run_symbolic_regression,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import MutableSequence
 
 
 class StaticInitialization:
@@ -386,3 +392,165 @@ def test_symbolic_regression() -> None:
     assert math.isfinite(test_mse)
     assert train_mse >= 0
     assert test_mse >= 0
+
+
+class RecordingRandom(random.Random):
+    """A generator that remembers every sequence it was asked to draw from.
+
+    The operators below hand the pool of candidate positions to ``choice`` or ``shuffle``.  What
+    that pool contains, and in which order, is the whole of their randomness, so recording it
+    inspects the decision itself rather than the tree that comes out the other end.
+
+    Attributes:
+        pools (list[list[Path]]): One entry per draw, in the order the draws happened.
+    """
+
+    def __init__(self, seed: int) -> None:
+        """Seed the generator.
+
+        Args:
+            seed (int): The seed.
+        """
+        super().__init__(seed)
+        self.pools: list[list[Any]] = []
+
+    def shuffle(self, x: MutableSequence[Any], *args: Any) -> None:
+        """Record the sequence and shuffle it.
+
+        Args:
+            x (MutableSequence[Any]): The sequence to shuffle in place.
+            *args (Any): Never used. Kept so the signature stays compatible with the one typeshed
+                declares for Python 3.10, where ``Random.shuffle`` still carries the second
+                parameter that later versions removed.
+        """
+        self.pools.append(list(x))
+        super().shuffle(x)
+
+    def choice(self, seq: Any) -> Any:
+        """Record the sequence and draw from it.
+
+        Args:
+            seq (Any): The sequence to draw from.
+
+        Returns:
+            Any: The drawn element.
+        """
+        self.pools.append(list(seq))
+        return super().choice(seq)
+
+
+class PermissiveSolutionSpace(SolutionSpace[str, str, str]):
+    """A solution space that accepts everything and samples a constant.
+
+    The operators are under test here, not the space: accepting every candidate makes them run
+    their position bookkeeping to the end instead of bailing out on the first rejection, and a
+    constant sample makes the outcome depend on the chosen position alone.
+    """
+
+    def contains_tree(self, start: str, tree: Tree[str], interpretation: dict[str, Any] | None = None) -> bool:
+        """Accept every tree.
+
+        Args:
+            start (str): The start non-terminal.
+            tree (Tree[str]): The candidate.
+            interpretation (dict[str, Any] | None): Unused. (Default value = None)
+
+        Returns:
+            bool: Always ``True``.
+        """
+        return True
+
+    def sample_tree(
+        self,
+        start: str,
+        max_depth: int | None = None,
+        tree: Tree[str] | None = None,
+        pos: Path | None = None,
+        rng: random.Random | None = None,
+    ) -> Tree[str] | None:
+        """Return a fixed subtree.
+
+        Args:
+            start (str): The start non-terminal.
+            max_depth (int | None): Unused. (Default value = None)
+            tree (Tree[str] | None): Unused. (Default value = None)
+            pos (Path | None): Unused. (Default value = None)
+            rng (random.Random | None): Unused. (Default value = None)
+
+        Returns:
+            Tree[str] | None: A single node.
+        """
+        return Tree("SAMPLED")
+
+
+def sample_individual() -> Tree[str]:
+    """Return ``f(g(h(x), y), z)``.
+
+    Returns:
+        Tree[str]: A tree with one branch deeper than the other, so the pool of inner positions
+            has more than one element and its order is therefore observable.
+    """
+    return Tree("f", (Tree("g", (Tree("h", (Tree("x"),)), Tree("y"))), Tree("z")))
+
+
+def test_mutation_draws_from_a_pool_in_a_fixed_order() -> None:
+    """The mutation point is decided by the seed alone, not by set iteration order.
+
+    ``positions()`` answers with a set, and the order a set iterates in is an implementation
+    detail -- it shifts between interpreter versions, and it shifted when the position sets
+    changed shape.  Sorting the pool before drawing from it is what keeps a seeded run
+    reproducible across the whole test matrix.
+    """
+    rng = RecordingRandom(0)
+    mutation: ResolutionMutation[str, str, str] = ResolutionMutation(PermissiveSolutionSpace(), "S", rng=rng)
+
+    mutation.mutate(sample_individual())
+
+    assert rng.pools == [[(0,), (0, 0)]]
+
+
+def test_mutation_trims_one_level_of_leaves_per_trim_step() -> None:
+    """Each pass drops the leaves, then the positions that pass turned into leaves -- and only those.
+
+    Every pass after the first has to work out which of the remaining positions are childless
+    now; a pass that reused the leaves of the original term, or that came up with nothing at all,
+    would leave the pool one level too deep and offer a mutation point the caller excluded.  Of
+    ``f(g(h(x), y), z)`` the first pass leaves ``(0,)`` and ``(0, 0)``, the second only ``(0,)``.
+
+    The deeper term takes three passes, and that is what pins the other half: the positions a pass
+    trims are collected in a set that starts empty each time.  A set carried across the passes
+    would still hold what the pass before it trimmed and ask for those positions to be removed a
+    second time.  Two passes cannot show it, because the last pass collects nothing.
+    """
+    rng = RecordingRandom(0)
+    mutation: ResolutionMutation[str, str, str] = ResolutionMutation(PermissiveSolutionSpace(), "S", rng=rng)
+
+    mutation.mutate(sample_individual(), trim=2)
+
+    assert rng.pools == [[(0,)]]
+
+    deeper = Tree("f", (Tree("g", (Tree("h", (Tree("k", (Tree("x"),)), Tree("y"))), Tree("z"))), Tree("w")))
+    rng = RecordingRandom(0)
+    mutation = ResolutionMutation(PermissiveSolutionSpace(), "S", rng=rng)
+
+    mutation.mutate(deeper, trim=3)
+
+    assert rng.pools == [[(0,)]]
+
+
+def test_crossover_draws_from_pools_in_a_fixed_order() -> None:
+    """Both parents' crossover points are shuffled from a sorted pool -- each parent from its own.
+
+    Same reason as for mutation: the shuffle is reproducible from the seed only if the sequence
+    going into it does not depend on how a set happens to be laid out.  Each parent has more than
+    one inner position, because a pool of one element is in order whatever produced it, and the
+    two are shaped differently, because pools that read alike say nothing about which parent
+    either of them was collected from.
+    """
+    rng = RecordingRandom(0)
+    crossover: Crossover[str, str, str] = Crossover(PermissiveSolutionSpace(), "S", rng=rng)
+
+    second = Tree("F", (Tree("G", (Tree("H", (Tree("X"),)), Tree("Y"))), Tree("K", (Tree("Z"),))))
+    crossover.recombine(sample_individual(), second)
+
+    assert rng.pools == [[(0,), (0, 0)], [(0,), (0, 0), (1,)]]

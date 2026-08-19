@@ -133,6 +133,40 @@ def test_equality_is_an_equivalence_relation(sample: Tree[str]) -> None:
     assert sample != "not a tree"
 
 
+def test_positions_are_prefix_closed(rng: random.Random) -> None:
+    """Every prefix of a position is itself a position, and the root is always present.
+
+    Args:
+        rng (random.Random): Seeded RNG fixture.
+    """
+    for _ in range(30):
+        tree = random_tree(rng)
+        positions = tree.positions()
+        assert () in positions
+        assert len(positions) == tree.size
+        for pos in positions:
+            for cut in range(len(pos)):
+                assert pos[:cut] in positions
+
+
+def test_leaf_positions_are_exactly_the_childless_nodes(rng: random.Random) -> None:
+    """``leaf_positions`` holds every position whose node has no children, and nothing else.
+
+    Asked first, before anything else has been asked of the term: the two sets are filled by one
+    traversal, so every other question warms both of them and would leave this one answered from a
+    cache rather than computed.
+
+    Args:
+        rng (random.Random): Seeded RNG fixture.
+    """
+    for _ in range(30):
+        tree = random_tree(rng)
+        leaves = tree.leaf_positions()
+        expected = {pos for pos in tree.positions() if not node_at(tree, pos).children}
+        assert leaves == expected
+        assert leaves <= tree.positions()
+
+
 def test_subtree_at_rejects_invalid_paths(sample: Tree[str]) -> None:
     """An unreachable path raises ``IndexError`` rather than returning something wrong.
 

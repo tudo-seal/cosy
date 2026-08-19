@@ -91,23 +91,27 @@ class ResolutionMutation(Mutation[NT, T, G], Generic[NT, T, G]):
             list[Tree[T]]: A list containing the mutated tree, or an empty list if mutation failed.
         """
         # Get all non-leaf positions (excluding root and leaves)
-        positions = list(tree.positions())
+        # Sorted, so that the point drawn below is a function of the seed alone: the positions are
+        # held in a set, and the order a set iterates in is an implementation detail that shifts
+        # with the interpreter and with any change to how the set is built.
+        positions = sorted(tree.positions())
         positions.remove(())  # Remove root
-        leafs: set[Path] = tree.leaf_positions()
+        leafs: frozenset[Path] = tree.leaf_positions()
         for i in range(trim):
             for leaf in leafs:
                 positions.remove(leaf)  # Remove leaves
             if not positions:
                 return []
             if i < trim - 1:
-                leafs = set()
                 # leaf positions are all positions that are no prefix of another position
                 # a prefix of a position is defined as follows: p is a prefix of q if p == q or p is a prefix of q[:-1]
+                trimmable: set[Path] = set()
                 for pos in positions:
                     if (min_trim_length <= len(pos)) and not any(
                         pos != other and pos == other[: len(pos)] for other in positions
                     ):
-                        leafs.add(pos)
+                        trimmable.add(pos)
+                leafs = frozenset(trimmable)
 
         # Try to replace a random non-leaf position with a new subtree
         mutation_point = self.rng.choice(positions)

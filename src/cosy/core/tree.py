@@ -25,8 +25,8 @@ class Tree(Generic[T]):
     children: tuple["Tree[T]", ...]
     size: int
     _hash: int
-    _positions: set[Path] | None = None
-    _leaf_positions: set[Path] | None = None
+    _positions: frozenset[Path] | None = None
+    _leaf_positions: frozenset[Path] | None = None
     # tuple[interpretation id, reference to interpretation dict (avoid GC, see test), cached interpretation result]
     # Breaks for non-deterministic interpretations. The entry belongs to the node, and a node is
     # shared by every term built around it, so an interpretation dict that is changed in place --
@@ -224,41 +224,62 @@ class Tree(Generic[T]):
         self._interpreted = (id(interpretation), interpretation, result)
         return result
 
-    def positions(self) -> set[Path]:
-        """Return all positions in the tree.
+    def _walk(self) -> tuple[frozenset[Path], frozenset[Path]]:
+        """Fill both position caches in one traversal.
+
+        The leaves are read off the walk -- a node without children is a leaf -- rather than
+        filtered out of the position set afterwards.  Filtering compares every position against
+        every other, which is quadratic: a term of 32767 nodes took 84 seconds, and resolving a
+        term at a position asks for the leaves of that term on every call.
 
         Returns:
-            set[Path]: _description_
+            tuple[frozenset[Path], frozenset[Path]]: The positions and the leaf positions, in that
+                order, as they were stored.
         """
-        if self._positions is not None:
-            return self._positions
-        result: set[Path] = set()
+        positions: set[Path] = set()
+        leaves: set[Path] = set()
         queue: deque[tuple[Tree[T], Path]] = deque([(self, ())])
         while queue:
             current, path = queue.popleft()
-            result.add(path)
+            positions.add(path)
+            if not current.children:
+                leaves.add(path)
             for i, child in enumerate(current.children):
                 queue.append((child, (*path, i)))
-        self._positions = result
-        return result
+        self._positions = frozenset(positions)
+        self._leaf_positions = frozenset(leaves)
+        return self._positions, self._leaf_positions
 
-    def leaf_positions(self) -> set[Path]:
-        """Return all leaf positions in the tree.
+    def positions(self) -> frozenset[Path]:
+        """Return all positions in the tree.
+
+        The cached set is handed out as it is, frozen rather than copied.  It belongs to the node,
+        and a node is shared by every term built around it, so a caller who mutated what it got
+        back would change what every one of those terms reports.  Freezing makes that impossible
+        instead of merely inadvisable, and it costs nothing per call -- copying the set would be
+        linear in the size of the term on every read.
 
         Returns:
-            set[Path]: _description_
+            frozenset[Path]: The positions of every node.
         """
-        if self._leaf_positions is not None:
-            return self._leaf_positions
-        result: set[Path] = set()
-        all_positions: set[Path] = self.positions()
-        # leaf positions are all positions that are no prefix of another position
-        # a prefix of a position is defined as follows: p is a prefix of q if p == q or p is a prefix of q[:-1]
-        for pos in all_positions:
-            if not any(pos != other and pos == other[: len(pos)] for other in all_positions):
-                result.add(pos)
-        self._leaf_positions = result
-        return result
+        cached = self._positions
+        if cached is None:
+            cached, _ = self._walk()
+        return cached
+
+    def leaf_positions(self) -> frozenset[Path]:
+        """Return all leaf positions in the tree.
+
+        Handed out frozen and uncopied for the same reason ``positions`` is: the cache belongs to
+        the node, and the node is shared.
+
+        Returns:
+            frozenset[Path]: The positions without children.
+        """
+        cached = self._leaf_positions
+        if cached is None:
+            _, cached = self._walk()
+        return cached
 
     def subtree_at(self, pos: Path) -> "Tree[T]":
         """Return the subtree at the given position.
