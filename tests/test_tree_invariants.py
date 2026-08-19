@@ -7,12 +7,20 @@ replacement.  The consequences reached far beyond this class: an offspring assem
 compared unequal to the structurally identical tree built directly, and no ``set`` of trees
 recognized it.
 
-The tests below are in two groups.  The first fixes the properties that must hold whatever the
+The tests below are in three groups.  The first fixes the properties that must hold whatever the
 implementation does.  The second is about the cached fields specifically: a replacement has to
-recompute them.
+recompute them.  The third asks the same question about pickling, which is the other way a node can
+be asked what belongs to it: the derived fields must stay out of the stream.  ``_hash`` because a
+hash computed under another process's seed breaks the very contract the first group fixes, the
+interpretation cache because its key stops naming anything once it has travelled, and the position
+sets because carrying them is waste.
 """
 
+import os
+import pickle
 import random
+import subprocess
+import sys
 
 import pytest
 
@@ -293,3 +301,270 @@ def test_repeated_replacements_stay_consistent(rng: random.Random) -> None:
             replaced = tree.replace_subtree_at(pos, replacement)
             assert replaced == replaced_at(tree, pos, replacement)
             assert hash(replaced) == hash(rebuild(replaced))
+
+
+# ---------------------------------------------------------------------------
+# What a node carries into a pickle stream
+# ---------------------------------------------------------------------------
+
+
+class _TaggedTree(Tree[str]):
+    """A subclass of ``Tree``, used to check that loading does not change what an object is.
+
+    Defined at module level because pickle stores a class by reference and has to be able to
+    import it back.  There is no subclass of ``Tree`` in the package itself; this one exists so
+    that the choice between ``self.__class__`` and a named class in the reduction is pinned by a
+    test rather than left to whoever edits the line next.
+    """
+
+
+def _sum_of(left: int, right: int) -> int:
+    """Add two numbers.
+
+    Defined at module level, and named distinctly, so that a pickle stream carrying the
+    interpretation can be recognized by looking for this name in it.
+
+    Args:
+        left (int): First summand.
+        right (int): Second summand.
+
+    Returns:
+        int: Their sum.
+    """
+    return left + right
+
+
+def _one() -> int:
+    """Return one.
+
+    Returns:
+        int: The number one.
+    """
+    return 1
+
+
+def _two() -> int:
+    """Return two.
+
+    Returns:
+        int: The number two.
+    """
+    return 2
+
+
+def balanced(levels: int) -> Tree[str]:
+    """Build a perfect binary tree of the given depth.
+
+    Args:
+        levels (int): Number of levels below the root.
+
+    Returns:
+        Tree[str]: A term of ``2 ** (levels + 1) - 1`` nodes, large enough that a position set
+            travelling in a pickle stream would be plainly visible in its size.
+    """
+    if levels == 0:
+        return Tree("x")
+    return Tree("f", (balanced(levels - 1), balanced(levels - 1)))
+
+
+def _written_by_a_process_seeded_with(seed: str) -> tuple[int, bytes]:
+    """Build the sample term in a fresh interpreter and bring back the stream it wrote.
+
+    Args:
+        seed (str): The ``PYTHONHASHSEED`` that interpreter runs under.
+
+    Returns:
+        tuple[int, bytes]: What that interpreter computed for ``hash("alpha")``, so that the caller
+            can tell whether it hashes strings differently from this one at all, and the term as it
+            wrote it.
+    """
+    source = (
+        "import pickle, sys\n"
+        "from cosy.core.tree import Tree\n"
+        "term = Tree('f', (Tree('alpha'), Tree('beta')))\n"
+        "term.positions()\n"
+        "sys.stdout.buffer.write(pickle.dumps((hash('alpha'), pickle.dumps(term))))\n"
+    )
+    environment = dict(os.environ, PYTHONHASHSEED=seed, PYTHONPATH=os.pathsep.join(sys.path))
+    written = subprocess.run(
+        [sys.executable, "-c", source],
+        capture_output=True,
+        check=True,
+        env=environment,
+    ).stdout
+    return pickle.loads(written)
+
+
+def test_a_term_that_arrives_by_stream_hashes_like_one_built_here() -> None:
+    """Equal terms hash equally, even when one of them was written by another process.
+
+    ``_hash`` is ``hash((root, children))``, and hashing a string is randomized per process, so a
+    ``_hash`` that travels in the stream is the writing process's answer.  A term loaded from such
+    a stream compared equal to the same term built here and hashed differently, which is a broken
+    hash contract and not an abstract one: a ``set`` held both copies and a ``dict`` deduplicated
+    neither, so a pool of terms merged from two runs counted every shared term twice.
+
+    Two child processes rather than one, because this process's own seed is not known here; at
+    most one of the two can share it.
+    """
+    written = [_written_by_a_process_seeded_with(seed) for seed in ("1", "2")]
+    foreign = [blob for hash_of_alpha, blob in written if hash_of_alpha != hash("alpha")]
+    assert foreign, "no child process hashed strings differently from this one"
+
+    here = Tree("f", (Tree("alpha"), Tree("beta")))
+    for blob in foreign:
+        back = pickle.loads(blob)
+        assert back == here
+        assert hash(back) == hash(here)
+        assert len({back, here}) == 1
+
+
+def test_pickle_keeps_shared_subtrees_shared() -> None:
+    """A node that occurs several times in a term is one object again after a round trip.
+
+    Sharing is what this class buys by being immutable -- ``subtree_at`` hands out the node and
+    ``replace_subtree_at`` shares everything off the path it rebuilds -- so a term of a thousand
+    nodes can be a handful of distinct objects.  A round trip that unfolded the sharing would
+    silently turn that back into a thousand.  Pickle memoizes the objects it has already written
+    whichever way they are reduced; this test holds that property for whatever reduction the
+    class grows next.
+    """
+    shared = Tree("s", (Tree("a"), Tree("b")))
+    tree = Tree("f", (shared, Tree("g", (shared,)), shared))
+
+    back = pickle.loads(pickle.dumps(tree))
+
+    assert back == tree
+    first = back.children[0]
+    assert back.children[1].children[0] is first
+    assert back.children[2] is first
+
+
+def test_the_interpretation_is_left_behind_and_never_blocks_pickling() -> None:
+    """The interpretation does not travel with the term, and neither does its cached result.
+
+    It used to, and that was a bug in both directions.  Outward: the cache entry held the
+    interpretation, the interpretation held a lambda, and a single interpreted node therefore
+    failed to pickle at all -- while terms are pickled to move a population between processes and
+    an algebra assembled from lambdas is the ordinary case.  Inward: the entry is keyed on
+    ``id(interpretation)``, and a round trip rebuilds that dictionary elsewhere, so the key stops
+    naming what the entry holds -- and a freed address is free to be handed out again, to an
+    interpretation the cached result has nothing to do with.
+    """
+    tree = Tree("add", (Tree("one"), Tree("two")))
+    assert tree.interpret({"add": _sum_of, "one": _one, "two": _two}) == 3
+
+    blob = pickle.dumps(tree)
+    assert b"_sum_of" not in blob
+    assert pickle.loads(blob)._interpreted is None  # noqa: SLF001
+
+    with_lambdas = Tree("add", (Tree("one"), Tree("two")))
+    assert with_lambdas.interpret({"add": lambda left, right: left + right, "one": lambda: 1, "two": lambda: 2}) == 3
+    assert pickle.loads(pickle.dumps(with_lambdas)) == with_lambdas
+
+
+def test_nothing_derived_travels_and_everything_derived_comes_back(rng: random.Random) -> None:
+    """A term survives a round trip whole, with every derived field recomputed rather than read.
+
+    Two claims, because neither is worth much alone.  That nothing derived is written: the derived
+    fields are a second encoding of a structure the stream already carries, they are filled by any
+    ordinary use of the term, and so they would travel almost always -- whether a term has been
+    used before must not change what it costs to pickle.  That everything derived comes back
+    anyway: a field left out of the stream has to be recomputed on the way in, or the term that
+    arrives is not the term that was sent.
+
+    The two streams are compared against each other rather than against an absolute size, which is
+    not stable across Python versions.  The stream is searched for the names of the derived fields
+    as well; they are what the default protocol would have written.
+
+    Args:
+        rng (random.Random): Seeded RNG fixture.
+    """
+    cold = balanced(6)
+    warm = balanced(6)
+    warm.positions()
+    warm.leaf_positions()
+
+    assert pickle.dumps(warm) == pickle.dumps(cold)
+
+    for _ in range(30):
+        tree = random_tree(rng)
+        tree.positions()
+        tree.leaf_positions()
+
+        blob = pickle.dumps(tree)
+        assert b"_hash" not in blob
+        assert b"size" not in blob
+        assert b"_positions" not in blob
+
+        back = pickle.loads(blob)
+
+        assert back._positions is None  # noqa: SLF001
+        assert back._leaf_positions is None  # noqa: SLF001
+        assert back == tree
+        assert hash(back) == hash(tree)
+        assert back.size == tree.size
+        assert back.positions() == tree.positions()
+        assert back.leaf_positions() == tree.leaf_positions()
+
+
+def test_a_subclass_comes_back_as_itself() -> None:
+    """Loading rebuilds the class the term was written as, not the base class.
+
+    Nothing in the package subclasses ``Tree``, so this pins a decision rather than a use: the
+    reduction reconstructs through ``self.__class__``, because a stream may not silently change
+    what an object is.
+    """
+    tagged = _TaggedTree("f", (Tree("x"),))
+
+    back = pickle.loads(pickle.dumps(tagged))
+
+    assert type(back) is _TaggedTree
+    assert back == tagged
+    assert hash(back) == hash(tagged)
+    assert back.size == tagged.size
+
+
+def test_a_stream_that_still_carries_an_instance_dictionary_is_rebuilt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A term written before the reduction existed is repaired on the way in, not adopted.
+
+    The reduction decides what is written; what is read is decided by what stands in the stream,
+    and terms written by an earlier version are on disk already -- they are exactly the ones worth
+    keeping, since a pool of them is the record of a long run.  Such a stream carries ``_hash``,
+    and a ``_hash`` from another process is the defect this commit is about, so the reading side
+    recomputes rather than adopts.
+
+    The old format is produced by writing the term through ``object.__reduce__`` for the duration
+    of the write, which is the reduction the class had before this one: a reconstructor plus the
+    instance dictionary.  The root's ``_hash`` is set to a value it cannot have computed itself,
+    standing in for the different value another process's hash seed would have produced, and its
+    ``size`` likewise: that is the field the earlier, mutating ``replace_subtree_at`` left stale,
+    so a stream from back then carries a wrong one and repairing it is half of why this method
+    exists.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Used to write one stream in the old format.
+    """
+    tree = Tree("f", (Tree("a"), Tree("b")))
+    tree.positions()
+    tree.leaf_positions()
+    assert tree.interpret({"f": _sum_of, "a": _one, "b": _two}) == 3
+    tree._hash = 0  # noqa: SLF001
+    tree.size = 99
+
+    monkeypatch.setattr(Tree, "__reduce__", object.__reduce__, raising=False)
+    legacy = pickle.dumps(tree)
+    monkeypatch.undo()
+
+    assert b"_hash" in legacy
+    assert b"_positions" in legacy
+
+    back = pickle.loads(legacy)
+
+    fresh = Tree("f", (Tree("a"), Tree("b")))
+    assert back == fresh
+    assert hash(back) == hash(fresh)
+    assert back.size == fresh.size
+    assert back._positions is None  # noqa: SLF001
+    assert back._leaf_positions is None  # noqa: SLF001
+    assert back._interpreted is None  # noqa: SLF001

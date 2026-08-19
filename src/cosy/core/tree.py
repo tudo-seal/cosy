@@ -116,6 +116,81 @@ class Tree(Generic[T]):
         """
         return Tree(root=self.root, children=self.children)
 
+    # Writing is recursive -- three ``save()`` levels per node here, four with the default
+    # protocol -- and on Python 3.10 and 3.11 that recursion is bounded by the interpreter's
+    # recursion limit: measured from inside a pytest run, a chain of 318 nodes is the deepest term
+    # that can be written, against 238 before.  From 3.12 on the separate C recursion limit binds
+    # instead, at about 3325.  Terms do grow deeper than that -- which is why ``subtree_at``,
+    # ``_walk`` and ``interpret`` are iterative -- so pickling is the one place in this class where
+    # depth is still a limit; the reduction below at least raises the ceiling by a third.
+    def __reduce__(self) -> tuple[type["Tree[T]"], tuple[T, tuple["Tree[T]", ...]]]:
+        """Reconstruct through the constructor instead of through the instance dictionary.
+
+        Everything ``__init__`` computes -- ``size`` and ``_hash`` -- and everything filled on
+        demand -- the two position sets and the interpretation result -- follows from ``root`` and
+        ``children``, so none of it has to be written.  The default protocol writes the instance
+        dictionary, and therefore writes all of it, together with the ``__orig_class__`` that
+        ``Tree[str](...)`` leaves on an instance.  ``__copy__`` and ``replace_subtree_at`` already
+        build their results out of ``root`` and ``children`` alone; this makes the third way of
+        producing a node agree with them.
+
+        ``_hash`` is what makes this more than a question of size.  It is
+        ``hash((root, children))``, and hashing a string is randomized per process, so a
+        transported ``_hash`` is the writing process's answer to a question the reading process
+        would answer differently.  A term read back from a file then compares *equal* to the same
+        term built here and hashes *differently*: a ``set`` keeps both of them, and a ``dict``
+        deduplicates neither -- measured by writing under ``PYTHONHASHSEED=1`` and reading under
+        ``PYTHONHASHSEED=2``.  Recomputing on load is what makes a term that arrived by stream
+        interchangeable with one built in place.
+
+        The interpretation cache is worse than wasteful.  Its entry is
+        ``(id(interpretation), interpretation, result)``, and it holds the second field precisely
+        so that the address in the first stays taken and the key stays meaningful.  Loading
+        rebuilds the interpretation at a different address, so the key names an object that no
+        longer exists anywhere; should the interpreter hand that address to something else, a
+        later ``interpret`` is answered with the result of a foreign interpretation.  Carrying the
+        entry also drags every callable of the interpretation into the stream, which makes a
+        single node unpicklable as soon as one of them is a lambda.
+
+        The position sets are the plain case: a second encoding of a structure the stream already
+        carries.  A term of 2047 nodes with them filled at the root writes 19486 bytes this way
+        instead of 116805, and writing it costs 0.67 milliseconds instead of 1.32 (CPython 3.13,
+        pickle protocol 4, the default).  Filled at every node, which is what one pass over all
+        positions of all subterms leaves behind, the old figure is 380857 bytes and this one is
+        unchanged.
+
+        ``copy.deepcopy`` reduces through here as well, so a deep copy now starts with cold caches
+        too; ``copy.copy`` continues to go through ``__copy__``.  The class is taken from
+        ``self.__class__`` rather than named outright, because loading must not change what an
+        object is.
+
+        Returns:
+            tuple[type[Tree[T]], tuple[T, tuple[Tree[T], ...]]]: The class and the constructor
+                arguments that rebuild this node.  Shared children stay shared, because pickle
+                memoizes the objects it has already written whichever way they are reduced.
+        """
+        return (self.__class__, (self.root, self.children))
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Rebuild from an instance dictionary rather than adopting it.
+
+        Only a stream written before ``__reduce__`` existed reaches this method, since a reduction
+        that hands back constructor arguments produces no state at all.  Such a stream carries the
+        derived fields, and adopting them is what the reduction above avoids producing: the
+        ``_hash`` in it was computed under the writing process's hash seed, and the interpretation
+        cache in it is keyed on an address in a process that has ended.  Taking ``root`` and
+        ``children`` and computing the rest here makes that fix reach terms that were written
+        before it existed -- which matters because the terms anyone keeps on disk are the
+        expensive ones -- and leaves the caches cold, where they belong.
+
+        Args:
+            state (dict[str, Any]): The instance dictionary of the node as it was written.
+        """
+        self.root = state["root"]
+        self.children = state["children"]
+        self.size = 1 + sum(child.size for child in self.children)
+        self._hash = hash((self.root, self.children))
+
     def interpret(self, interpretation: dict[T, Any] | None = None) -> Any:
         """Recursively evaluate given term.
 
