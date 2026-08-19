@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,30 @@ class Type(ABC):
     @abstractmethod
     def __str__(self) -> str:
         """_summary_."""
+
+    def __reduce__(self) -> tuple[type[Type], tuple[Any, ...]]:
+        """Reconstruct through the constructor instead of through the instance dictionary.
+
+        `Constructor`, `Literal` and `Var` store themselves in their derived `organized` field, so
+        the default two-step pickling, which allocates an empty instance and then restores its
+        dictionary, has to build that set while the instance is still empty. Inserting a value into
+        a set hashes it, and the hash of a frozen dataclass reads fields that are only restored one
+        step later, so unpickling fails with a missing attribute. Dumping always works, which is why
+        the defect stayed hidden. Deep copying failed with the same missing attribute, because it
+        uses the same protocol.
+
+        Replaying the constructor keeps the derived fields out of the stream entirely and lets
+        `__post_init__` rebuild them once the value is complete. The arguments to replay are exactly
+        the fields the constructor takes, and those are exactly the ones that do not carry the
+        cycle. They are replayed positionally in declaration order, so every concrete subclass has
+        to redeclare `organized` and `free_vars` as `init=False` and must not add keyword-only or
+        `InitVar` constructor parameters. The test suite checks that invariant for every concrete
+        type class of this module.
+
+        Returns:
+            The class and the arguments that rebuild the instance.
+        """
+        return self.__class__, tuple(getattr(self, f.name) for f in fields(self) if f.init)
 
     @abstractmethod
     def subst(self, substitution: dict[str, Any]) -> Type:
