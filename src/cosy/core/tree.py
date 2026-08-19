@@ -9,7 +9,6 @@ import contextlib
 # Uniqueness is guaranteed by python's set (instead of list) data structure.
 from collections import deque
 from collections.abc import Callable, Hashable, Sequence
-from copy import copy
 from functools import partial
 from inspect import Parameter, _empty, _ParameterKind, signature
 from typing import Any, Generic, TypeVar
@@ -105,16 +104,17 @@ class Tree(Generic[T]):
         return self.__rec_to_str__(outermost=True)
 
     def __copy__(self) -> "Tree[T]":
-        """_summary_.
+        """Return a new root over the same children.
+
+        Shallow, because the nodes are immutable: nothing a caller can do to the copy can be
+        observed through the original, so copying the children as well would only cost the size
+        of the term.  The recursive version was ``deepcopy`` under another name, and it made
+        every ``subtree_at`` a copy of the subtree it read.
 
         Returns:
-            Tree[T]: _description_
+            Tree[T]: A node equal to this one, sharing its children.
         """
-        children_copy = tuple(copy(child) for child in self.children)
-        return Tree(
-            root=self.root,
-            children=children_copy,
-        )
+        return Tree(root=self.root, children=self.children)
 
     def interpret(self, interpretation: dict[T, Any] | None = None) -> Any:
         """Recursively evaluate given term.
@@ -261,24 +261,32 @@ class Tree(Generic[T]):
         return result
 
     def subtree_at(self, pos: Path) -> "Tree[T]":
-        """Return subtree at given position.
+        """Return the subtree at the given position.
+
+        The node itself, not a copy of it.  The class is immutable, so sharing is safe, and it is
+        what the rest of the class assumes: ``replace_subtree_at`` shares every node off the path
+        it rebuilds.  Copying on the way back up made reading a position cost a copy of
+        everything below it -- reading every position of a 2047-node term took 94206 copies.
+
+        Iterative rather than recursive: terms grow to hundreds of nodes, and a chain that deep
+        overflows a recursive descent.
 
         Args:
-            pos (Path): _description_
+            pos (Path): The position, as a tuple of child indices.
 
         Returns:
-            Tree[T]: _description_
+            Tree[T]: The node at ``pos``.
 
         Raises:
-            IndexError: _description_
+            IndexError: If ``pos`` does not address a node of this tree.
         """
-        if pos == ():
-            return self
-        for i, child in enumerate(self.children):
-            if i == pos[0]:
-                return copy(child.subtree_at(pos[1:]))
-        msg = f"Path {pos} is not valid for this tree"
-        raise IndexError(msg)
+        current: Tree[T] = self
+        for index in pos:
+            if index < 0 or index >= len(current.children):
+                msg = f"Path {pos} is not valid for this tree"
+                raise IndexError(msg)
+            current = current.children[index]
+        return current
 
     def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
         """Return a copy of this tree with the subtree at the given position replaced.

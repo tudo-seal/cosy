@@ -53,6 +53,23 @@ def rebuild(tree: Tree[str]) -> Tree[str]:
     return Tree(tree.root, tuple(rebuild(child) for child in tree.children))
 
 
+def node_at(tree: Tree[str], pos: Path) -> Tree[str]:
+    """Descend to a position without going through ``subtree_at``.
+
+    Args:
+        tree (Tree[str]): The tree to descend into.
+        pos (Path): The position to reach.
+
+    Returns:
+        Tree[str]: The node stored at ``pos``.  Written independently of ``subtree_at`` so a test
+            of that method cannot be satisfied by its own implementation.
+    """
+    current = tree
+    for index in pos:
+        current = current.children[index]
+    return current
+
+
 def replaced_at(tree: Tree[str], pos: Path, subtree: Tree[str]) -> Tree[str]:
     """Put a subtree at a position without going through ``replace_subtree_at``.
 
@@ -114,6 +131,23 @@ def test_equality_is_an_equivalence_relation(sample: Tree[str]) -> None:
     assert rebuild(sample) == sample
     assert sample != Tree("f", (Tree("y"), Tree("g", (Tree("x"),))))
     assert sample != "not a tree"
+
+
+def test_subtree_at_rejects_invalid_paths(sample: Tree[str]) -> None:
+    """An unreachable path raises ``IndexError`` rather than returning something wrong.
+
+    The negative cases are the ones a bare tuple index would not catch: ``children[-1]`` is the
+    last child, so without an explicit check ``subtree_at`` would answer a position that is not
+    in ``positions()`` instead of rejecting it.  A caller relies on exactly that rejection --
+    resolving a term at a position uses ``subtree_at`` as its validity test and treats
+    ``IndexError`` as "no such position".
+
+    Args:
+        sample (Tree[str]): The shared sample tree.
+    """
+    for pos in ((5,), (1, 0), (-1,), (0, -1), (0, -1, 0)):
+        with pytest.raises(IndexError):
+            sample.subtree_at(pos)
 
 
 def test_replace_then_read_back(rng: random.Random) -> None:
