@@ -29,7 +29,11 @@ class Tree(Generic[T]):
     _positions: set[Path] | None = None
     _leaf_positions: set[Path] | None = None
     # tuple[interpretation id, reference to interpretation dict (avoid GC, see test), cached interpretation result]
-    _interpreted: tuple[int, dict[T, Any] | None, Any] | None = None  # breaks for non-deterministic interpretations
+    # Breaks for non-deterministic interpretations. The entry belongs to the node, and a node is
+    # shared by every term built around it, so an interpretation dict that is changed in place --
+    # same object, same id, different contents -- now reports its stale value through every one of
+    # those terms rather than only through the one the node was first evaluated in.
+    _interpreted: tuple[int, dict[T, Any] | None, Any] | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         """_summary_.
@@ -277,39 +281,48 @@ class Tree(Generic[T]):
         raise IndexError(msg)
 
     def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
-        """Return replaced subtree at given position.
+        """Return a copy of this tree with the subtree at the given position replaced.
+
+        Neither this tree nor the replacement is modified. The result shares every node that is not
+        on the path from the root to ``pos`` with ``self``, and shares ``tree`` itself; only the
+        nodes along that path are rebuilt.
+
+        Rebuilding through ``__init__`` rather than mutating in place is what keeps ``size`` and
+        ``_hash`` correct. Both are computed once at construction, so an in-place replacement left
+        every ancestor of the replacement point reporting the values it had *before* the change --
+        which broke the equality/hash contract of the class and, through it, every cache and every
+        ``set`` keyed on trees.
 
         Args:
-            pos (Path): _description_
-            tree (Tree[T]): _description_
+            pos (Path): Position of the subtree to replace, as a tuple of child indices.
+            tree (Tree[T]): The replacement subtree.
 
         Returns:
-            Tree[T]: _description_
+            Tree[T]: The resulting tree. For ``pos == ()`` this is ``tree`` itself.
 
         Raises:
-            IndexError: _description_
-            ValueError: _description_
+            IndexError: If ``pos`` does not address a node of this tree.
         """
         if pos == ():
             return tree
 
-        # validate pos by attempting to access the subtree once (avoids materializing all positions)
-        try:
-            _ = self.subtree_at(pos) if pos != () else tree
-        except IndexError:
-            msg = f"Path {pos} is not valid for this tree"
-            raise IndexError(msg) from BaseException
+        # descend to the replacement point, remembering the nodes along the way
+        path_nodes: list[Tree[T]] = [self]
+        current: Tree[T] = self
+        for index in pos:
+            if index < 0 or index >= len(current.children):
+                msg = f"Path {pos} is not valid for this tree"
+                raise IndexError(msg)
+            current = current.children[index]
+            path_nodes.append(current)
 
-        new_tree = copy(self)
-
-        # traverse the path to the subtree to replace
-        current = new_tree
-        for i in pos[:-1]:
-            if i < 0 or i >= len(current.children):
-                msg = "Invalid path."
-                raise ValueError(msg)
-            current = current.children[i]
-        # replace the subtree at the given path
-        insert = copy(tree)
-        current.children = (*current.children[: pos[-1]], insert, *current.children[pos[-1] + 1 :])
-        return new_tree
+        # rebuild bottom-up; everything off the path is shared rather than copied
+        replacement = tree
+        for depth in range(len(pos) - 1, -1, -1):
+            parent = path_nodes[depth]
+            index = pos[depth]
+            replacement = Tree(
+                parent.root,
+                (*parent.children[:index], replacement, *parent.children[index + 1 :]),
+            )
+        return replacement
