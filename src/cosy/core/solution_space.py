@@ -140,6 +140,9 @@ class Goal(Generic[NT, T, G]):
         The constraints are the predicates from the RHSRule and to ensure a correct substitution of variable names,
         the local variable names from the RHSRule are stored additionally to the predicates that are applied at
         the given positions.
+        If the rule has no named non-terminal argument, there is no such position to store its predicates at.
+        They are then decided right here, on the literal substitution of the rule, and None is returned if one of
+        them is violated.
 
         Args:
             rhs (RHSRule[NT, T, G]): _description_
@@ -165,10 +168,22 @@ class Goal(Generic[NT, T, G]):
                 raise TypeError(msg)
         root: dict[Path, T] = {(): rhs.terminal}
         constraints = ({named: (rhs.predicates, rhs.literal_substitution)} if named else {}) if rhs.predicates else {}
+        # A rule without a named non-terminal argument cannot deposit its predicates: `constraints` is keyed by
+        # the tuple of named positions, and the cascade in `update` indexes those keys with `ps[0][:-1]`, which
+        # an empty tuple cannot answer. No deposit is needed either. As the docstring of `resolution` states,
+        # the predicates of a rule are applied to the substitution given by its constant arguments and its
+        # named non-terminal arguments; an unnamed argument is invisible to them. So `literal_substitution` is
+        # already the full substitution, and the rule decides here -- the ground rule as well as the rule whose
+        # non-terminal arguments are all unnamed, which is the shape an arrow type in a suffix produces.
+        # `enumerate_trees` and `contains_tree` decide these predicates the same way; without this branch the
+        # resolution is the only one of the three that does not, at the root for the rule with only unnamed
+        # non-terminal arguments and below it (see `update`) for the ground rule as well. The check replaced
+        # here decided the ground rule at the root on `dict(grounded.values()) | rhs.literal_substitution`,
+        # which is the same dict: `grounded` holds only constant arguments at this point, so the literal
+        # substitution wins every key it contributes.
+        if rhs.predicates and not named and not all(c(rhs.literal_substitution) for c in rhs.predicates):
+            return None
         if not subgoals:
-            substitution = dict(grounded.values()) | rhs.literal_substitution
-            if not all(c(substitution) for c in rhs.predicates):
-                return None
             grounded[()] = "", Tree(rhs.terminal, tuple(grounded[p][1] for p in sorted(grounded.keys())))
             return Goal(root, subgoals, grounded, constraints, success=True)
         return Goal(root, subgoals, grounded, constraints, success=False)
@@ -218,6 +233,12 @@ class Goal(Generic[NT, T, G]):
         new_constraints = self.constraints.copy()
         if rhs.predicates and named:
             new_constraints[named] = rhs.predicates, rhs.literal_substitution
+        # The same decision for a rule applied below the root: without a named non-terminal argument there is no
+        # position to deposit the predicates at, and `literal_substitution` is the whole substitution they are
+        # applied to (see `from_rhs_rule`). Without this branch such a rule applies unchecked everywhere but at
+        # the root, while `enumerate_trees` and `contains_tree` reject the resulting term.
+        elif rhs.predicates and not named and not all(c(rhs.literal_substitution) for c in rhs.predicates):
+            return None
 
         common_prefix = position[:-1]
 
