@@ -17,6 +17,26 @@ B: NonTerminalArgument[str] = NonTerminalArgument(None, "B")
 C: NonTerminalArgument[str] = NonTerminalArgument(None, "C")
 
 
+def branching_space() -> SolutionSpace[str, str, None]:
+    """Return ``S -> top(A, B)`` with ``A -> a1 | a2(A)`` and ``B -> b1 | b2(B) | b3(A)``.
+
+    Two non-terminals produce terms independently of each other, so the enumeration has more than
+    one of them queued at a time. That is what makes the order of its working set observable; on a
+    grammar with a single recursive non-terminal any implementation looks deterministic.
+
+    Returns:
+        SolutionSpace[str, str, None]: The grammar.
+    """
+    space: SolutionSpace[str, str, None] = SolutionSpace()
+    space.add_rule("S", "top", (A, B), ())
+    space.add_rule("A", "a1", (), ())
+    space.add_rule("A", "a2", (A,), ())
+    space.add_rule("B", "b1", (), ())
+    space.add_rule("B", "b2", (B,), ())
+    space.add_rule("B", "b3", (A,), ())
+    return space
+
+
 def mixed_width_space() -> SolutionSpace[str, str, None]:
     """Return ``S -> top(C, C)`` with ``C -> un(C) | tri(C, C, C) | bi(C, C) | lf``.
 

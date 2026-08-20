@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict, deque
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, MutableSet, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from itertools import product
 from queue import PriorityQueue
@@ -16,6 +17,7 @@ from cosy.core.tree import Tree
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
 G = TypeVar("G", bound=Hashable)  # type of constants
+_E = TypeVar("_E", bound=Hashable)  # element type of _OrderedSet
 
 
 @dataclass(frozen=True)
@@ -296,6 +298,82 @@ class Goal(Generic[NT, T, G]):
         return Goal(new_constructors, new_subgoals, new_grounded, new_constraints, success=False)
 
 
+class _OrderedSet(MutableSet[_E]):
+    """A set that iterates in the order its elements were first added.
+
+    ``set`` iterates in hash order, which varies with ``PYTHONHASHSEED`` and, for elements whose
+    hash falls back to ``id()``, with the memory addresses of one particular run. A tree whose
+    terminal is a plain function object -- as a CoSy combinator usually is -- hashes by identity,
+    so a plain set makes an enumeration built on it unrepeatable. This class keeps the set
+    semantics and fixes the order; ``dict`` supplies the ordering, and its keys are a set.
+
+    Only ``__contains__``, ``__iter__``, ``__len__``, ``add`` and ``discard`` are defined here; the
+    rest of the set interface, ``pop`` included, comes from ``MutableSet``. ``pop`` therefore
+    returns ``next(iter(self))``, which is the element that was added first.
+    """
+
+    __slots__ = ("_items",)
+
+    def __init__(self, items: Iterable[_E] = ()) -> None:
+        """Build an ordered set, keeping the order of first occurrence.
+
+        Args:
+            items (Iterable[_E]): The initial elements. (Default value = ())
+        """
+        self._items: dict[_E, None] = dict.fromkeys(items)
+
+    def __contains__(self, item: object) -> bool:
+        """Check membership.
+
+        Args:
+            item (object): The candidate element.
+
+        Returns:
+            bool: True if the element is in the set.
+        """
+        return item in self._items
+
+    def __iter__(self) -> Iterator[_E]:
+        """Iterate over the elements in insertion order.
+
+        Returns:
+            Iterator[_E]: The elements, oldest first.
+        """
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        """Return the number of elements.
+
+        Returns:
+            int: The number of elements.
+        """
+        return len(self._items)
+
+    def __repr__(self) -> str:
+        """Return a representation that shows the order.
+
+        Returns:
+            str: The representation.
+        """
+        return f"{type(self).__name__}({list(self._items)!r})"
+
+    def add(self, value: _E) -> None:
+        """Add an element, keeping the position of an element that is already present.
+
+        Args:
+            value (_E): The element to add.
+        """
+        self._items[value] = None
+
+    def discard(self, value: _E) -> None:
+        """Remove an element if it is present.
+
+        Args:
+            value (_E): The element to remove.
+        """
+        self._items.pop(value, None)
+
+
 @dataclass
 class _RuleProgress(Generic[T]):
     """_summary_.
@@ -485,14 +563,14 @@ class SolutionSpace(Generic[NT, T, G]):
     def _enumerate_tree_vectors(
         self,
         non_terminals: Sequence[NT | None],
-        existing_terms: Mapping[NT, set[Tree[T]]],
+        existing_terms: Mapping[NT, AbstractSet[Tree[T]]],
         nt_term: tuple[NT, Tree[T]] | None = None,
     ) -> Iterable[tuple[Tree[T] | None, ...]]:
         """Enumerate possible term vectors for a given list of non-terminals and existing terms. Use nt_term at least once (if given).
 
         Args:
             non_terminals (Sequence[NT | None]): _description_
-            existing_terms (Mapping[NT, set[Tree[T]]]): _description_
+            existing_terms (Mapping[NT, AbstractSet[Tree[T]]]): _description_
             nt_term (tuple[NT, Tree[T]] | None): _description_ (Default value = None)
 
         Yields:
@@ -513,12 +591,12 @@ class SolutionSpace(Generic[NT, T, G]):
     def _generate_new_trees(
         self,
         rule: RHSRule[NT, T, G],
-        existing_terms: Mapping[NT, set[Tree[T]]],
+        existing_terms: Mapping[NT, AbstractSet[Tree[T]]],
         interpretation: dict[T, Any] | None = None,
         max_count: int | None = None,
         nt_old_term: tuple[NT, Tree[T]] | None = None,
         progress: _RuleProgress[T] | None = None,
-    ) -> set[Tree[T]]:
+    ) -> _OrderedSet[Tree[T]]:
         # Genererate new terms for rule `rule` from existing terms up to `max_count`
         # the term `old_term` should be a subterm of all resulting terms, at a position, that corresponds to `nt`
 
@@ -526,16 +604,18 @@ class SolutionSpace(Generic[NT, T, G]):
 
         Args:
             rule (RHSRule[NT, T, G]): _description_
-            existing_terms (Mapping[NT, set[Tree[T]]]): _description_
+            existing_terms (Mapping[NT, AbstractSet[Tree[T]]]): _description_
             interpretation (dict[T, Any] | None): _description_ (Default value = None)
             max_count (int | None): _description_ (Default value = None)
             nt_old_term (tuple[NT, Tree[T]] | None): _description_ (Default value = None)
             progress (_RuleProgress[T] | None): _description_ (Default value = None)
 
         Returns:
-            set[Tree[T]]: _description_
+            _OrderedSet[Tree[T]]: The new terms, in the order they were generated. The caller
+                enumerates them in that order, so a plain set would leave it to the hash seed
+                which terms an interrupted enumeration returns.
         """
-        output_set: set[Tree[T]] = set()
+        output_set: _OrderedSet[Tree[T]] = _OrderedSet()
         if max_count == 0:
             return output_set
 
@@ -706,7 +786,11 @@ class SolutionSpace(Generic[NT, T, G]):
         max_bucket_size: int | None = None,
         interpretation: dict[T, Any] | None = None,
     ) -> Iterable[Tree[T]]:
-        """Enumerate terms as an iterator efficiently - all terms are enumerated, no guaranteed term order.
+        """Enumerate terms as an iterator efficiently - all terms are enumerated.
+
+        The term order is not specified, but it is reproducible: the same solution space yields the
+        same sequence in every process. Under ``max_count`` that also fixes which terms are
+        returned, not merely the order they arrive in.
 
         Args:
             start (NT): _description_
@@ -723,7 +807,7 @@ class SolutionSpace(Generic[NT, T, G]):
         # nonterminals() now returns a snapshot, so take it once instead of once per use.
         all_nonterminals = self.nonterminals()
         queues: dict[NT, PriorityQueue[Tree[T]]] = {n: PriorityQueue() for n in all_nonterminals}
-        existing_terms: dict[NT, set[Tree[T]]] = {n: set() for n in all_nonterminals}
+        existing_terms: dict[NT, _OrderedSet[Tree[T]]] = {n: _OrderedSet() for n in all_nonterminals}
         inverse_grammar: dict[NT, deque[tuple[NT, RHSRule[NT, T, G]]]] = {n: deque() for n in all_nonterminals}
         all_results: set[Tree[T]] = set()
         progressed: dict[tuple[NT, int], _RuleProgress[T]] = {}
@@ -751,7 +835,9 @@ class SolutionSpace(Generic[NT, T, G]):
         while (max_bucket_size is None or current_bucket_size <= max_bucket_size) and any(
             not queue.empty() for queue in queues.values()
         ):
-            non_terminals = {n for n in all_nonterminals if not queues[n].empty()}
+            # The working set decides which non-terminal is expanded next, and with it which
+            # terms an enumeration under max_count returns; a plain set left that to the hash seed.
+            non_terminals = _OrderedSet(n for n in all_nonterminals if not queues[n].empty())
 
             while non_terminals:
                 n = non_terminals.pop()

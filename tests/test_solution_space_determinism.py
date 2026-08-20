@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from cosy.core.solution_space import NonTerminalArgument, SolutionSpace
+from cosy.core.solution_space import NonTerminalArgument, SolutionSpace, _OrderedSet
 from cosy.core.tree import Tree
 from tests._determinism_grammars import A, B, C, mixed_width_space
 
@@ -75,6 +75,47 @@ def _printed_across_hash_seeds(body: str) -> set[str]:
             )
         printed.add(child.stdout.strip())
     return printed
+
+
+# ---------------------------------------------------------------------------
+# The building block: a set that keeps its insertion order
+# ---------------------------------------------------------------------------
+
+
+def test_ordered_set_keeps_the_position_of_an_element_that_is_added_again() -> None:
+    """Adding a present element must not move it, otherwise the order depends on the traffic.
+
+    The second assertion pins ``__repr__``, the one place where the class reports its order to a
+    reader rather than to the algorithm. Nothing else here would notice a representation that
+    dropped the order, and every failure message of the tests below is written in it.
+    """
+    ordered: _OrderedSet[str] = _OrderedSet(["first", "second", "third"])
+
+    ordered.add("first")
+
+    assert list(ordered) == ["first", "second", "third"]
+    assert repr(ordered) == "_OrderedSet(['first', 'second', 'third'])"
+
+
+def test_ordered_set_pops_the_oldest_element() -> None:
+    """``pop`` is how the enumeration draws its next non-terminal, so it has to be the oldest one."""
+    ordered: _OrderedSet[str] = _OrderedSet(["first", "second", "third"])
+
+    assert [ordered.pop(), ordered.pop(), ordered.pop()] == ["first", "second", "third"]
+
+
+def test_ordered_set_discards_and_refuses_to_pop_when_empty() -> None:
+    """Discarding an absent element is silent; popping an empty set is an error, not a default."""
+    ordered: _OrderedSet[str] = _OrderedSet(["first", "second"])
+
+    ordered.discard("absent")
+    ordered.discard("first")
+
+    assert list(ordered) == ["second"]
+
+    ordered.discard("second")
+    with pytest.raises(KeyError):
+        ordered.pop()
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +282,50 @@ def test_a_seeded_sample_repeats() -> None:
         'print([str(space.sample_tree("S", max_depth=4, rng=random.Random(seed))) for seed in range(3)])\n'
     )
     assert printed == {"['top lf lf', 'top (un lf) lf', 'top (un (bi (tri lf lf lf) (un lf))) lf']"}
+
+
+# ---------------------------------------------------------------------------
+# Enumeration: the same grammar has to give the same terms
+# ---------------------------------------------------------------------------
+
+
+def test_enumeration_repeats_when_the_combinators_are_functions() -> None:
+    """A bounded enumeration must return the same terms whatever the grammar was allocated at.
+
+    The generated terms, the terms already known per non-terminal and the working set of
+    non-terminals were plain sets of trees, and a tree over a function terminal hashes by the
+    address of that function.
+    """
+    enumerations = set()
+    for _ in range(_ROUNDS):
+        _ = [object() for _ in range(50)]
+        space = _function_terminal_space()
+        enumerations.add(tuple(_render(tree) for tree in space.enumerate_trees("S", max_count=4)))
+
+    assert enumerations == {
+        ("top(a1, b1)", "top(a2(a1), b1)", "top(a1, b3(a1))", "top(a2(a1), b3(a1))"),
+    }, f"{len(enumerations)} different enumerations: {enumerations}"
+
+
+def test_enumerate_trees_is_reproducible_across_processes() -> None:
+    """Which terms a bounded enumeration returns, and in which order, must not vary per process.
+
+    The first grammar is the only one in this file that makes ``_generate_new_trees`` run out of
+    budget while it combines new arguments with parameters it already had. The second has two
+    non-terminals producing terms independently of each other, so more than one of them is queued
+    at a time; on a grammar with a single recursive non-terminal the working set never holds more
+    than one element and its order cannot be observed.
+    """
+    printed = _printed_across_hash_seeds(
+        "from tests._determinism_grammars import branching_space, mixed_width_space\n"
+        'print([str(tree) for tree in mixed_width_space().enumerate_trees("S", max_count=5)])\n'
+        'print([str(tree) for tree in branching_space().enumerate_trees("S", max_count=6)])\n'
+    )
+    assert printed == {
+        "['top lf lf', 'top (un lf) lf', 'top (un lf) (un lf)', 'top lf (un lf)', 'top (bi lf lf) lf']\n"
+        "['top a1 b1', 'top (a2 a1) b1', 'top a1 (b3 a1)', 'top (a2 a1) (b3 a1)', "
+        "'top (a2 (a2 a1)) b1', 'top (a2 (a2 a1)) (b3 a1)']"
+    }
 
 
 # ---------------------------------------------------------------------------
