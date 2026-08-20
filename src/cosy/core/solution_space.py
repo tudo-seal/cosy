@@ -1002,18 +1002,30 @@ class SolutionSpace(Generic[NT, T, G]):
         return has_open_at_pos or is_complete_leaf
 
     def goal_from_tree(self, start: NT, tree: Tree[T], pos: Path) -> Iterable[Goal[NT, T, G]]:
-        """Constructs the goal ?- Start(T(X)) where T(X) is `tree` with variable X at position `pos`.
+        """Build the goals of the partial-term query for ``tree`` with a variable at ``pos``.
 
-        Yields all valid goals that result from resolving `start` to a goal that contains exactly
-        one open subgoal at `pos`. The algorithm performs a depth-first search.
+        Yields each goal once. For ``pos == ()`` these are the initial goals of every clause of
+        ``start``; otherwise a goal fixes ``tree`` around ``pos`` and leaves one open subgoal
+        there -- or none, where a clause covers a leaf ``pos`` with a constant argument. Those
+        goals describe the subterms that complete the partial term into an inhabitant.
+
+        A non-terminal is in general reached by more than one clause: for an intersection of
+        arrows the inhabitation emits one clause per admissible subset of paths, and those clauses
+        ask different sorts of their arguments. Stopping at the first goal found drops the
+        completions of every other clause.
+
+        The traversal expands one subgoal per step, the deepest open one other than ``pos``.
+        Expanding all open subgoals of a goal at once and pushing every result reaches the same
+        goal once per expansion order.
 
         Args:
-            start (NT): _description_
-            tree (Tree[T]): _description_
-            pos (Path): _description_
+            start (NT): The queried non-terminal.
+            tree (Tree[T]): The prescribed term. Nothing at or below ``pos`` constrains the query,
+                except where the enclosing clause prescribes a constant argument at ``pos``.
+            pos (Path): The position of the variable.
 
         Yields:
-            Goal[NT, T, G]: _description_
+            Goal[NT, T, G]: One goal per success branch of the query.
         """
 
         if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
@@ -1025,40 +1037,40 @@ class SolutionSpace(Generic[NT, T, G]):
         except IndexError:
             return
 
+        if pos == ():
+            # The variable is the whole term, so nothing of ``tree`` constrains the query.
+            # ``_initial_goals_for`` matches the clauses against the root of ``tree``, which the
+            # caller is about to replace, and would keep only those sharing its terminal.
+            for rhs in self._rules_of(start):
+                initial = Goal.from_rhs_rule(rhs)
+                if initial is not None:
+                    yield initial
+            return
+
         # compute leaf positions once, reuse for all checks
         leaf_positions = tree.leaf_positions()
         is_pos_leaf = pos in leaf_positions
 
-        initial_goals = self._initial_goals_for(start, tree)
-
-        if pos == ():
-            # the variable is at the root: initial goals are already the wanted ones
-            yield from initial_goals
-            return
-
-        pending_goals: deque[Goal[NT, T, G]] = deque(initial_goals)
+        pending_goals: deque[Goal[NT, T, G]] = deque(self._initial_goals_for(start, tree))
 
         while pending_goals:
             goal = pending_goals.pop()
-            # expand every child subgoal except the target position
-            # a child subgoal has a position as key, that is no prefix to another key position
-            valid_children = [
-                p for p in goal.subgoals if not any(p != other and p == other[: len(p)] for other in goal.subgoals)
+            if self._is_goal_for_position(goal, pos, is_pos_leaf):
+                yield goal
+                continue
+            # a child subgoal has a position as key that is no prefix of another key position
+            open_children = [
+                p
+                for p in goal.subgoals
+                if p != pos and not any(p != other and p == other[: len(p)] for other in goal.subgoals)
             ]
-            for child_pos in valid_children:
-                if child_pos == pos:
-                    if self._is_goal_for_position(goal, pos, is_pos_leaf):
-                        yield goal
-                        return  # one goal is enough ??!!!
-                    continue
-                next_goals = self._expand_goal_at(goal, child_pos, tree)
-                for ng in next_goals:
-                    if self._is_goal_for_position(ng, pos, is_pos_leaf):
-                        yield ng
-                        return  # one goal is enough ??!!!
-                    else:
-                        pending_goals.append(ng)
-        return
+            # ``open_children`` is not empty: it is empty only when every non-prefix subgoal is
+            # ``pos``, which is what ``_is_goal_for_position`` accepts above.
+            # Deepest open subgoal, leftmost among those: the selection the uninformed
+            # resolution strategies use.
+            deepest = max(len(child) for child in open_children)
+            child_pos = min(child for child in open_children if len(child) == deepest)
+            pending_goals.extend(self._expand_goal_at(goal, child_pos, tree))
 
     def resolution(
         self,
