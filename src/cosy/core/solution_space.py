@@ -526,25 +526,31 @@ class SolutionSpace(Generic[NT, T, G]):
             SolutionSpace[NT, T, G]: _description_
         """
 
-        ground_types: set[NT] = set()
-        queue: set[NT] = set()
-        inverse_grammar: dict[NT, set[tuple[NT, frozenset[NT]]]] = defaultdict(set)
+        # Insertion-ordered sets: the keys of a dict are a set, and unlike a plain set they keep
+        # the order in which they were added. That order is observable here -- the order in which
+        # ground types are discovered becomes the key order of the pruned space and therefore the
+        # order of its nonterminals(). Plain sets made it depend on PYTHONHASHSEED, down to the
+        # order of the inverse grammar, which decides which non-terminal is discovered next.
+        ground_types: dict[NT, None] = {}
+        queue: dict[NT, None] = {}
+        inverse_grammar: dict[NT, dict[tuple[NT, frozenset[NT]], None]] = defaultdict(dict)
 
         for n, exprs in self._rules.items():
             for expr in exprs:
                 non_terminals = expr.non_terminals
                 for m in non_terminals:
-                    inverse_grammar[m].add((n, non_terminals))
+                    inverse_grammar[m][(n, non_terminals)] = None
                 if not non_terminals:
-                    queue.add(n)
+                    queue[n] = None
 
         while queue:
-            n = queue.pop()
+            n = next(iter(queue))  # oldest entry first, so the traversal follows discovery order
+            del queue[n]
             if n not in ground_types:
-                ground_types.add(n)
+                ground_types[n] = None
                 for m, non_terminals in inverse_grammar[n]:
                     if m not in ground_types and all(t in ground_types for t in non_terminals):
-                        queue.add(m)
+                        queue[m] = None
 
         return SolutionSpace[NT, T, G](
             defaultdict(

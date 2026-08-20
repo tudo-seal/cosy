@@ -407,3 +407,26 @@ def test_nonterminals_is_a_snapshot(space: SolutionSpace[str, str, None]) -> Non
 
     assert list(reported) == ["S", "C"]
     assert "D" in space
+
+
+# ---------------------------------------------------------------------------
+# Pruning: the grammar a prune returns
+# ---------------------------------------------------------------------------
+
+
+def test_prune_reports_its_nonterminals_in_discovery_order() -> None:
+    """Pruning walks the ground types, and the order it finds them in becomes the order it reports.
+
+    Each grammar pins a different part of that walk. In the first, ``C`` is ground through ``lf``
+    alone and ``S`` only through ``C``, so the reported order is the one grammar here that differs
+    from the order the rules were added in. The second has three ground types discovered in the
+    same sweep, so pruning's queue already holds all three before the walk starts. In the third,
+    one ground type makes three non-terminals productive at once, so the order in which its
+    consumers are visited decides the result.
+    """
+    printed = _printed_across_hash_seeds(
+        "from tests._determinism_grammars import fan_out_space, mixed_width_space, three_ground_types_space\n"
+        "for grammar in (mixed_width_space, three_ground_types_space, fan_out_space):\n"
+        "    print(list(grammar().prune().nonterminals()))\n"
+    )
+    assert printed == {"['C', 'S']\n['A', 'B', 'C', 'S']\n['X', 'A', 'B', 'C']"}

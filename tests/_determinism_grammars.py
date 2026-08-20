@@ -55,3 +55,39 @@ def mixed_width_space() -> SolutionSpace[str, str, None]:
     space.add_rule("C", "bi", (C, C), ())
     space.add_rule("C", "lf", (), ())
     return space
+
+
+def three_ground_types_space() -> SolutionSpace[str, str, None]:
+    """Return ``S -> top(A, B, C)`` with ``A -> a``, ``B -> b`` and ``C -> c``.
+
+    The only grammar here with more than one ground type. Pruning seeds its queue in a single
+    sweep over the rules before the walk begins, and with three entries in that seed the order of
+    the sweep is observable in the result; where one ground type is seeded alone it is not.
+
+    Returns:
+        SolutionSpace[str, str, None]: The grammar.
+    """
+    space: SolutionSpace[str, str, None] = SolutionSpace()
+    space.add_rule("A", "a", (), ())
+    space.add_rule("B", "b", (), ())
+    space.add_rule("C", "c", (), ())
+    space.add_rule("S", "top", (A, B, C), ())
+    return space
+
+
+def fan_out_space() -> SolutionSpace[str, str, None]:
+    """Return ``X -> x`` with ``A -> p(X)``, ``B -> q(X)`` and ``C -> r(X)``.
+
+    One ground type makes three non-terminals productive at once, so the order in which pruning
+    walks the consumers of ``X`` decides the order of the pruned grammar.
+
+    Returns:
+        SolutionSpace[str, str, None]: The grammar.
+    """
+    ground: NonTerminalArgument[str] = NonTerminalArgument(None, "X")
+    space: SolutionSpace[str, str, None] = SolutionSpace()
+    space.add_rule("X", "x", (), ())
+    space.add_rule("A", "p", (ground,), ())
+    space.add_rule("B", "q", (ground,), ())
+    space.add_rule("C", "r", (ground,), ())
+    return space
