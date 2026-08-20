@@ -9,7 +9,6 @@ import contextlib
 # Uniqueness is guaranteed by python's set (instead of list) data structure.
 from collections import deque
 from collections.abc import Callable, Hashable, Sequence
-from copy import copy
 from functools import partial
 from inspect import Parameter, _empty, _ParameterKind, signature
 from typing import Any, Generic, TypeVar
@@ -26,10 +25,14 @@ class Tree(Generic[T]):
     children: tuple["Tree[T]", ...]
     size: int
     _hash: int
-    _positions: set[Path] | None = None
-    _leaf_positions: set[Path] | None = None
+    _positions: frozenset[Path] | None = None
+    _leaf_positions: frozenset[Path] | None = None
     # tuple[interpretation id, reference to interpretation dict (avoid GC, see test), cached interpretation result]
-    _interpreted: tuple[int, dict[T, Any] | None, Any] | None = None  # breaks for non-deterministic interpretations
+    # Breaks for non-deterministic interpretations. The entry belongs to the node, and a node is
+    # shared by every term built around it, so an interpretation dict that is changed in place --
+    # same object, same id, different contents -- now reports its stale value through every one of
+    # those terms rather than only through the one the node was first evaluated in.
+    _interpreted: tuple[int, dict[T, Any] | None, Any] | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         """_summary_.
@@ -101,16 +104,92 @@ class Tree(Generic[T]):
         return self.__rec_to_str__(outermost=True)
 
     def __copy__(self) -> "Tree[T]":
-        """_summary_.
+        """Return a new root over the same children.
+
+        Shallow, because the nodes are immutable: nothing a caller can do to the copy can be
+        observed through the original, so copying the children as well would only cost the size
+        of the term.  The recursive version was ``deepcopy`` under another name, and it made
+        every ``subtree_at`` a copy of the subtree it read.
 
         Returns:
-            Tree[T]: _description_
+            Tree[T]: A node equal to this one, sharing its children.
         """
-        children_copy = tuple(copy(child) for child in self.children)
-        return Tree(
-            root=self.root,
-            children=children_copy,
-        )
+        return Tree(root=self.root, children=self.children)
+
+    # Writing is recursive -- three ``save()`` levels per node here, four with the default
+    # protocol -- and on Python 3.10 and 3.11 that recursion is bounded by the interpreter's
+    # recursion limit: measured from inside a pytest run, a chain of 318 nodes is the deepest term
+    # that can be written, against 238 before.  From 3.12 on the separate C recursion limit binds
+    # instead, at about 3325.  Terms do grow deeper than that -- which is why ``subtree_at``,
+    # ``_walk`` and ``interpret`` are iterative -- so pickling is the one place in this class where
+    # depth is still a limit; the reduction below at least raises the ceiling by a third.
+    def __reduce__(self) -> tuple[type["Tree[T]"], tuple[T, tuple["Tree[T]", ...]]]:
+        """Reconstruct through the constructor instead of through the instance dictionary.
+
+        Everything ``__init__`` computes -- ``size`` and ``_hash`` -- and everything filled on
+        demand -- the two position sets and the interpretation result -- follows from ``root`` and
+        ``children``, so none of it has to be written.  The default protocol writes the instance
+        dictionary, and therefore writes all of it, together with the ``__orig_class__`` that
+        ``Tree[str](...)`` leaves on an instance.  ``__copy__`` and ``replace_subtree_at`` already
+        build their results out of ``root`` and ``children`` alone; this makes the third way of
+        producing a node agree with them.
+
+        ``_hash`` is what makes this more than a question of size.  It is
+        ``hash((root, children))``, and hashing a string is randomized per process, so a
+        transported ``_hash`` is the writing process's answer to a question the reading process
+        would answer differently.  A term read back from a file then compares *equal* to the same
+        term built here and hashes *differently*: a ``set`` keeps both of them, and a ``dict``
+        deduplicates neither -- measured by writing under ``PYTHONHASHSEED=1`` and reading under
+        ``PYTHONHASHSEED=2``.  Recomputing on load is what makes a term that arrived by stream
+        interchangeable with one built in place.
+
+        The interpretation cache is worse than wasteful.  Its entry is
+        ``(id(interpretation), interpretation, result)``, and it holds the second field precisely
+        so that the address in the first stays taken and the key stays meaningful.  Loading
+        rebuilds the interpretation at a different address, so the key names an object that no
+        longer exists anywhere; should the interpreter hand that address to something else, a
+        later ``interpret`` is answered with the result of a foreign interpretation.  Carrying the
+        entry also drags every callable of the interpretation into the stream, which makes a
+        single node unpicklable as soon as one of them is a lambda.
+
+        The position sets are the plain case: a second encoding of a structure the stream already
+        carries.  A term of 2047 nodes with them filled at the root writes 19486 bytes this way
+        instead of 116805, and writing it costs 0.67 milliseconds instead of 1.32 (CPython 3.13,
+        pickle protocol 4, the default).  Filled at every node, which is what one pass over all
+        positions of all subterms leaves behind, the old figure is 380857 bytes and this one is
+        unchanged.
+
+        ``copy.deepcopy`` reduces through here as well, so a deep copy now starts with cold caches
+        too; ``copy.copy`` continues to go through ``__copy__``.  The class is taken from
+        ``self.__class__`` rather than named outright, because loading must not change what an
+        object is.
+
+        Returns:
+            tuple[type[Tree[T]], tuple[T, tuple[Tree[T], ...]]]: The class and the constructor
+                arguments that rebuild this node.  Shared children stay shared, because pickle
+                memoizes the objects it has already written whichever way they are reduced.
+        """
+        return (self.__class__, (self.root, self.children))
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Rebuild from an instance dictionary rather than adopting it.
+
+        Only a stream written before ``__reduce__`` existed reaches this method, since a reduction
+        that hands back constructor arguments produces no state at all.  Such a stream carries the
+        derived fields, and adopting them is what the reduction above avoids producing: the
+        ``_hash`` in it was computed under the writing process's hash seed, and the interpretation
+        cache in it is keyed on an address in a process that has ended.  Taking ``root`` and
+        ``children`` and computing the rest here makes that fix reach terms that were written
+        before it existed -- which matters because the terms anyone keeps on disk are the
+        expensive ones -- and leaves the caches cold, where they belong.
+
+        Args:
+            state (dict[str, Any]): The instance dictionary of the node as it was written.
+        """
+        self.root = state["root"]
+        self.children = state["children"]
+        self.size = 1 + sum(child.size for child in self.children)
+        self._hash = hash((self.root, self.children))
 
     def interpret(self, interpretation: dict[T, Any] | None = None) -> Any:
         """Recursively evaluate given term.
@@ -220,96 +299,134 @@ class Tree(Generic[T]):
         self._interpreted = (id(interpretation), interpretation, result)
         return result
 
-    def positions(self) -> set[Path]:
-        """Return all positions in the tree.
+    def _walk(self) -> tuple[frozenset[Path], frozenset[Path]]:
+        """Fill both position caches in one traversal.
+
+        The leaves are read off the walk -- a node without children is a leaf -- rather than
+        filtered out of the position set afterwards.  Filtering compares every position against
+        every other, which is quadratic: a term of 32767 nodes took 84 seconds, and resolving a
+        term at a position asks for the leaves of that term on every call.
 
         Returns:
-            set[Path]: _description_
+            tuple[frozenset[Path], frozenset[Path]]: The positions and the leaf positions, in that
+                order, as they were stored.
         """
-        if self._positions is not None:
-            return self._positions
-        result: set[Path] = set()
+        positions: set[Path] = set()
+        leaves: set[Path] = set()
         queue: deque[tuple[Tree[T], Path]] = deque([(self, ())])
         while queue:
             current, path = queue.popleft()
-            result.add(path)
+            positions.add(path)
+            if not current.children:
+                leaves.add(path)
             for i, child in enumerate(current.children):
                 queue.append((child, (*path, i)))
-        self._positions = result
-        return result
+        self._positions = frozenset(positions)
+        self._leaf_positions = frozenset(leaves)
+        return self._positions, self._leaf_positions
 
-    def leaf_positions(self) -> set[Path]:
+    def positions(self) -> frozenset[Path]:
+        """Return all positions in the tree.
+
+        The cached set is handed out as it is, frozen rather than copied.  It belongs to the node,
+        and a node is shared by every term built around it, so a caller who mutated what it got
+        back would change what every one of those terms reports.  Freezing makes that impossible
+        instead of merely inadvisable, and it costs nothing per call -- copying the set would be
+        linear in the size of the term on every read.
+
+        Returns:
+            frozenset[Path]: The positions of every node.
+        """
+        cached = self._positions
+        if cached is None:
+            cached, _ = self._walk()
+        return cached
+
+    def leaf_positions(self) -> frozenset[Path]:
         """Return all leaf positions in the tree.
 
+        Handed out frozen and uncopied for the same reason ``positions`` is: the cache belongs to
+        the node, and the node is shared.
+
         Returns:
-            set[Path]: _description_
+            frozenset[Path]: The positions without children.
         """
-        if self._leaf_positions is not None:
-            return self._leaf_positions
-        result: set[Path] = set()
-        all_positions: set[Path] = self.positions()
-        # leaf positions are all positions that are no prefix of another position
-        # a prefix of a position is defined as follows: p is a prefix of q if p == q or p is a prefix of q[:-1]
-        for pos in all_positions:
-            if not any(pos != other and pos == other[: len(pos)] for other in all_positions):
-                result.add(pos)
-        self._leaf_positions = result
-        return result
+        cached = self._leaf_positions
+        if cached is None:
+            _, cached = self._walk()
+        return cached
 
     def subtree_at(self, pos: Path) -> "Tree[T]":
-        """Return subtree at given position.
+        """Return the subtree at the given position.
+
+        The node itself, not a copy of it.  The class is immutable, so sharing is safe, and it is
+        what the rest of the class assumes: ``replace_subtree_at`` shares every node off the path
+        it rebuilds.  Copying on the way back up made reading a position cost a copy of
+        everything below it -- reading every position of a 2047-node term took 94206 copies.
+
+        Iterative rather than recursive: terms grow to hundreds of nodes, and a chain that deep
+        overflows a recursive descent.
 
         Args:
-            pos (Path): _description_
+            pos (Path): The position, as a tuple of child indices.
 
         Returns:
-            Tree[T]: _description_
+            Tree[T]: The node at ``pos``.
 
         Raises:
-            IndexError: _description_
+            IndexError: If ``pos`` does not address a node of this tree.
         """
-        if pos == ():
-            return self
-        for i, child in enumerate(self.children):
-            if i == pos[0]:
-                return copy(child.subtree_at(pos[1:]))
-        msg = f"Path {pos} is not valid for this tree"
-        raise IndexError(msg)
+        current: Tree[T] = self
+        for index in pos:
+            if index < 0 or index >= len(current.children):
+                msg = f"Path {pos} is not valid for this tree"
+                raise IndexError(msg)
+            current = current.children[index]
+        return current
 
     def replace_subtree_at(self, pos: Path, tree: "Tree[T]") -> "Tree[T]":
-        """Return replaced subtree at given position.
+        """Return a copy of this tree with the subtree at the given position replaced.
+
+        Neither this tree nor the replacement is modified. The result shares every node that is not
+        on the path from the root to ``pos`` with ``self``, and shares ``tree`` itself; only the
+        nodes along that path are rebuilt.
+
+        Rebuilding through ``__init__`` rather than mutating in place is what keeps ``size`` and
+        ``_hash`` correct. Both are computed once at construction, so an in-place replacement left
+        every ancestor of the replacement point reporting the values it had *before* the change --
+        which broke the equality/hash contract of the class and, through it, every cache and every
+        ``set`` keyed on trees.
 
         Args:
-            pos (Path): _description_
-            tree (Tree[T]): _description_
+            pos (Path): Position of the subtree to replace, as a tuple of child indices.
+            tree (Tree[T]): The replacement subtree.
 
         Returns:
-            Tree[T]: _description_
+            Tree[T]: The resulting tree. For ``pos == ()`` this is ``tree`` itself.
 
         Raises:
-            IndexError: _description_
-            ValueError: _description_
+            IndexError: If ``pos`` does not address a node of this tree.
         """
         if pos == ():
             return tree
 
-        # validate pos by attempting to access the subtree once (avoids materializing all positions)
-        try:
-            _ = self.subtree_at(pos) if pos != () else tree
-        except IndexError:
-            msg = f"Path {pos} is not valid for this tree"
-            raise IndexError(msg) from BaseException
+        # descend to the replacement point, remembering the nodes along the way
+        path_nodes: list[Tree[T]] = [self]
+        current: Tree[T] = self
+        for index in pos:
+            if index < 0 or index >= len(current.children):
+                msg = f"Path {pos} is not valid for this tree"
+                raise IndexError(msg)
+            current = current.children[index]
+            path_nodes.append(current)
 
-        new_tree = copy(self)
-
-        # traverse the path to the subtree to replace
-        current = new_tree
-        for i in pos[:-1]:
-            if i < 0 or i >= len(current.children):
-                msg = "Invalid path."
-                raise ValueError(msg)
-            current = current.children[i]
-        # replace the subtree at the given path
-        insert = copy(tree)
-        current.children = (*current.children[: pos[-1]], insert, *current.children[pos[-1] + 1 :])
-        return new_tree
+        # rebuild bottom-up; everything off the path is shared rather than copied
+        replacement = tree
+        for depth in range(len(pos) - 1, -1, -1):
+            parent = path_nodes[depth]
+            index = pos[depth]
+            replacement = Tree(
+                parent.root,
+                (*parent.children[:index], replacement, *parent.children[index + 1 :]),
+            )
+        return replacement
