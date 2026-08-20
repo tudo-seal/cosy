@@ -1001,7 +1001,10 @@ class SolutionSpace(Generic[NT, T, G]):
                         if max_count is not None and len(all_results) >= max_count:
                             return
                 else:
-                    non_successful_goals = [goal, *non_successful_goals]
+                    # Append, do not prepend: sorted() is stable, so prepending would break ties
+                    # among the initial goals in reverse rule order while every later level, whose
+                    # goals arrive in rule order, breaks them in rule order.
+                    non_successful_goals.append(goal)
 
         if max_depth is not None and max_depth == 0:
             return
@@ -1015,7 +1018,11 @@ class SolutionSpace(Generic[NT, T, G]):
             p, nt = subgoal_selection_strategy(current_goal)
             # Unification
             applicable_rules = self._rules[nt.origin]
-            new_goals: set[Goal] = set()
+            # A list, not a set: Goal defines neither __eq__ nor __hash__, so a set never
+            # deduplicated anything here -- it only scattered the goals over their object
+            # addresses and handed them back in an allocation-dependent order, which is what made
+            # every derivation irreproducible. A list therefore removes no capability.
+            new_goals: list[Goal] = []
             for r in applicable_rules:
                 # Derivation
                 new_goal = current_goal.update(r, p)
@@ -1034,7 +1041,7 @@ class SolutionSpace(Generic[NT, T, G]):
                             if max_count is not None and len(all_results) >= max_count:
                                 return
                     else:
-                        new_goals.add(new_goal)
+                        new_goals.append(new_goal)
             variance = variance_strategy_push(variance, new_goals)
         return
 
@@ -1069,8 +1076,10 @@ class SolutionSpace(Generic[NT, T, G]):
             Returns:
                 deque[Goal]: _description_
             """
-            sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
-            queue.extendleft(new_goals)  # depth-first search <~> LIFO
+            ordered = sorted(new_goals, key=lambda g: len(g.subgoals))  # fewest subgoals first
+            # extendleft inserts in reverse, so pushing `ordered` directly would make popleft
+            # return the goal with the MOST subgoals first -- the opposite of the intent.
+            queue.extendleft(reversed(ordered))  # depth-first search <~> LIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
@@ -1229,8 +1238,10 @@ class SolutionSpace(Generic[NT, T, G]):
             Returns:
                 deque[Goal]: _description_
             """
-            sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
-            queue.extend(new_goals)  # breadth-first search <~> FIFO
+            ordered = sorted(new_goals, key=lambda g: len(g.subgoals))  # fewest subgoals first
+            # extend appends in order and popleft reads from the front, so unlike the depth-first
+            # push above this one needs no reversal.
+            queue.extend(ordered)  # breadth-first search <~> FIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
