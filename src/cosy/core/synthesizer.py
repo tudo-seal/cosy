@@ -407,6 +407,10 @@ class Synthesizer(Generic[C]):
     def construct_solution_space_rules(self, *targets: Type) -> Generator[tuple[Type, RHSRule]]:
         """Generate logic program rules for the given target types.
 
+        A rule that has no non-terminal argument with a name and whose predicates are false on its literal
+        substitution can never derive a term and is therefore not generated. A target all of whose rules are
+        rejected this way does not occur among the generated rules at all.
+
         Args:
             *targets (Type): _description_
 
@@ -463,6 +467,27 @@ class Synthesizer(Generic[C]):
                     instantiation = next(selected_instantiations, None)
                     if instantiation is not None:
                         stack.appendleft((current_target, current_target_info))
+
+                        # The predicates of a rule are applied to the substitution given by its constant
+                        # arguments and by those of its non-terminal arguments that carry a name, because an
+                        # anonymous argument has no name a predicate could read. A combinator without a term
+                        # parameter has no named non-terminal argument, so that substitution is already
+                        # complete here: it is the literal substitution of every rule this instantiation
+                        # would produce. A rule whose predicates are false on it can never derive a term,
+                        # so it is not constructed in the first place.
+                        if specification_info.term_predicates and not any(
+                            isinstance(parameter, TermParameter) for parameter in specification_info.prefix
+                        ):
+                            literal_substitution = {
+                                parameter.name: instantiation[parameter.name]
+                                for parameter in specification_info.prefix
+                                if isinstance(parameter, LiteralParameter)
+                            }
+                            if not all(
+                                predicate(literal_substitution) for predicate in specification_info.term_predicates
+                            ):
+                                continue
+
                         named_arguments: tuple[Argument, ...] | None = None
 
                         # and every arity of the combinator type
@@ -512,6 +537,9 @@ class Synthesizer(Generic[C]):
 
     def construct_solution_space(self, *targets: Type) -> SolutionSpace[Type, C, Group]:
         """Constructs a logic program in the current environment for the given target types.
+
+        A target for which every rule is rejected by a predicate does not occur in the returned solution
+        space.
 
         Args:
             *targets (Type): _description_
