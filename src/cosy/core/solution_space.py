@@ -1099,7 +1099,11 @@ class SolutionSpace(Generic[NT, T, G]):
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
-        """A simple implementation of SLD-Resolution with leftmost goal selection and depth-first search in the SLD-Derivation-Tree.
+        """A simple implementation of SLD-Resolution with depth-first search in the SLD-Derivation-Tree.
+
+        The goal selection is not leftmost: among the open subgoals it takes the deepest ones and,
+        among those, the leftmost. Whether true leftmost selection would be the right semantics is
+        a question about the inhabitation algorithm itself and is not decided here.
 
         Args:
             start (NT): _description_
@@ -1261,7 +1265,11 @@ class SolutionSpace(Generic[NT, T, G]):
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
-        """A simple implementation of SLD-Resolution with leftmost goal selection and breadth-first search in the SLD-Derivation-Tree.
+        """A simple implementation of SLD-Resolution with breadth-first search in the SLD-Derivation-Tree.
+
+        The goal selection is not leftmost: among the open subgoals it takes the deepest ones and,
+        among those, the leftmost. Whether true leftmost selection would be the right semantics is
+        a question about the inhabitation algorithm itself and is not decided here.
 
         Args:
             start (NT): _description_
