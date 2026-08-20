@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict, deque
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, MutableSet, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from itertools import product
 from queue import PriorityQueue
@@ -16,6 +17,7 @@ from cosy.core.tree import Tree
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
 G = TypeVar("G", bound=Hashable)  # type of constants
+_E = TypeVar("_E", bound=Hashable)  # element type of _OrderedSet
 
 
 @dataclass(frozen=True)
@@ -296,6 +298,82 @@ class Goal(Generic[NT, T, G]):
         return Goal(new_constructors, new_subgoals, new_grounded, new_constraints, success=False)
 
 
+class _OrderedSet(MutableSet[_E]):
+    """A set that iterates in the order its elements were first added.
+
+    ``set`` iterates in hash order, which varies with ``PYTHONHASHSEED`` and, for elements whose
+    hash falls back to ``id()``, with the memory addresses of one particular run. A tree whose
+    terminal is a plain function object -- as a CoSy combinator usually is -- hashes by identity,
+    so a plain set makes an enumeration built on it unrepeatable. This class keeps the set
+    semantics and fixes the order; ``dict`` supplies the ordering, and its keys are a set.
+
+    Only ``__contains__``, ``__iter__``, ``__len__``, ``add`` and ``discard`` are defined here; the
+    rest of the set interface, ``pop`` included, comes from ``MutableSet``. ``pop`` therefore
+    returns ``next(iter(self))``, which is the element that was added first.
+    """
+
+    __slots__ = ("_items",)
+
+    def __init__(self, items: Iterable[_E] = ()) -> None:
+        """Build an ordered set, keeping the order of first occurrence.
+
+        Args:
+            items (Iterable[_E]): The initial elements. (Default value = ())
+        """
+        self._items: dict[_E, None] = dict.fromkeys(items)
+
+    def __contains__(self, item: object) -> bool:
+        """Check membership.
+
+        Args:
+            item (object): The candidate element.
+
+        Returns:
+            bool: True if the element is in the set.
+        """
+        return item in self._items
+
+    def __iter__(self) -> Iterator[_E]:
+        """Iterate over the elements in insertion order.
+
+        Returns:
+            Iterator[_E]: The elements, oldest first.
+        """
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        """Return the number of elements.
+
+        Returns:
+            int: The number of elements.
+        """
+        return len(self._items)
+
+    def __repr__(self) -> str:
+        """Return a representation that shows the order.
+
+        Returns:
+            str: The representation.
+        """
+        return f"{type(self).__name__}({list(self._items)!r})"
+
+    def add(self, value: _E) -> None:
+        """Add an element, keeping the position of an element that is already present.
+
+        Args:
+            value (_E): The element to add.
+        """
+        self._items[value] = None
+
+    def discard(self, value: _E) -> None:
+        """Remove an element if it is present.
+
+        Args:
+            value (_E): The element to remove.
+        """
+        self._items.pop(value, None)
+
+
 @dataclass
 class _RuleProgress(Generic[T]):
     """_summary_.
@@ -343,24 +421,68 @@ class SolutionSpace(Generic[NT, T, G]):
         """
         return self._rules.get(nonterminal)
 
-    def __getitem__(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]]:
-        """_summary_.
+    def __contains__(self, nonterminal: object) -> bool:
+        """Report whether a non-terminal has an entry in this solution space.
+
+        This is the cheap membership test. ``nonterminals()`` returns a snapshot, so testing
+        against it is linear in the size of the grammar and rebuilds the snapshot every time.
 
         Args:
-            nonterminal (NT): _description_
+            nonterminal (object): The non-terminal to look for.
 
         Returns:
-            deque[RHSRule[NT, T, G]]: _description_
+            bool: True if the solution space has an entry for it.
         """
-        return self._rules[nonterminal]
+        return nonterminal in self._rules
 
-    def nonterminals(self) -> Iterable[NT]:
-        """_summary_.
+    def __getitem__(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]]:
+        """Return the rules of a non-terminal, without creating it.
+
+        Reading is not a mutation. Going through ``defaultdict.__getitem__`` used to insert an
+        empty entry for every unknown non-terminal that was merely looked at, so that enumerating
+        or inspecting a solution space grew its set of non-terminals. A missing non-terminal is
+        now reported instead of invented; ``get`` is the accessor for "maybe present".
+
+        Args:
+            nonterminal (NT): The non-terminal to look up.
 
         Returns:
-            Iterable[NT]: _description_
+            deque[RHSRule[NT, T, G]]: The stored deque of rules. It is the live one, so appending
+                to it adds a rule, exactly as ``add_rule`` does.
+
+        Raises:
+            KeyError: If the solution space has no entry for this non-terminal.
         """
-        return self._rules.keys()
+        rules = self._rules.get(nonterminal)
+        if rules is None:
+            raise KeyError(nonterminal)
+        return rules
+
+    def _rules_of(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]]:
+        """Return the rules of a non-terminal for reading only.
+
+        Internal read path for the places that treat "no rules" and "no such non-terminal" alike
+        and would otherwise need a guard around every lookup. The empty deque it returns for an
+        unknown non-terminal is not stored, which is why this is private: appending to it is lost.
+
+        Args:
+            nonterminal (NT): The non-terminal to look up.
+
+        Returns:
+            deque[RHSRule[NT, T, G]]: The stored rules, or a fresh empty deque.
+        """
+        rules = self._rules.get(nonterminal)
+        return rules if rules is not None else deque()
+
+    def nonterminals(self) -> tuple[NT, ...]:
+        """Return the non-terminals of this solution space, in the order they were added.
+
+        Returns:
+            tuple[NT, ...]: A snapshot. Returning the live ``keys()`` view meant the result changed
+                underneath a caller that was still iterating it. Because this is a copy, use
+                ``nonterminal in space`` rather than ``in space.nonterminals()`` to test membership.
+        """
+        return tuple(self._rules.keys())
 
     def as_tuples(self) -> Iterable[tuple[NT, deque[RHSRule[NT, T, G]]]]:
         """_summary_.
@@ -404,25 +526,31 @@ class SolutionSpace(Generic[NT, T, G]):
             SolutionSpace[NT, T, G]: _description_
         """
 
-        ground_types: set[NT] = set()
-        queue: set[NT] = set()
-        inverse_grammar: dict[NT, set[tuple[NT, frozenset[NT]]]] = defaultdict(set)
+        # Insertion-ordered sets: the keys of a dict are a set, and unlike a plain set they keep
+        # the order in which they were added. That order is observable here -- the order in which
+        # ground types are discovered becomes the key order of the pruned space and therefore the
+        # order of its nonterminals(). Plain sets made it depend on PYTHONHASHSEED, down to the
+        # order of the inverse grammar, which decides which non-terminal is discovered next.
+        ground_types: dict[NT, None] = {}
+        queue: dict[NT, None] = {}
+        inverse_grammar: dict[NT, dict[tuple[NT, frozenset[NT]], None]] = defaultdict(dict)
 
         for n, exprs in self._rules.items():
             for expr in exprs:
                 non_terminals = expr.non_terminals
                 for m in non_terminals:
-                    inverse_grammar[m].add((n, non_terminals))
+                    inverse_grammar[m][(n, non_terminals)] = None
                 if not non_terminals:
-                    queue.add(n)
+                    queue[n] = None
 
         while queue:
-            n = queue.pop()
+            n = next(iter(queue))  # oldest entry first, so the traversal follows discovery order
+            del queue[n]
             if n not in ground_types:
-                ground_types.add(n)
+                ground_types[n] = None
                 for m, non_terminals in inverse_grammar[n]:
                     if m not in ground_types and all(t in ground_types for t in non_terminals):
-                        queue.add(m)
+                        queue[m] = None
 
         return SolutionSpace[NT, T, G](
             defaultdict(
@@ -430,7 +558,7 @@ class SolutionSpace(Generic[NT, T, G]):
                 {
                     target: deque(
                         possibility
-                        for possibility in self._rules[target]
+                        for possibility in self._rules_of(target)
                         if all(t in ground_types for t in possibility.non_terminals)
                     )
                     for target in ground_types
@@ -441,14 +569,14 @@ class SolutionSpace(Generic[NT, T, G]):
     def _enumerate_tree_vectors(
         self,
         non_terminals: Sequence[NT | None],
-        existing_terms: Mapping[NT, set[Tree[T]]],
+        existing_terms: Mapping[NT, AbstractSet[Tree[T]]],
         nt_term: tuple[NT, Tree[T]] | None = None,
     ) -> Iterable[tuple[Tree[T] | None, ...]]:
         """Enumerate possible term vectors for a given list of non-terminals and existing terms. Use nt_term at least once (if given).
 
         Args:
             non_terminals (Sequence[NT | None]): _description_
-            existing_terms (Mapping[NT, set[Tree[T]]]): _description_
+            existing_terms (Mapping[NT, AbstractSet[Tree[T]]]): _description_
             nt_term (tuple[NT, Tree[T]] | None): _description_ (Default value = None)
 
         Yields:
@@ -469,12 +597,12 @@ class SolutionSpace(Generic[NT, T, G]):
     def _generate_new_trees(
         self,
         rule: RHSRule[NT, T, G],
-        existing_terms: Mapping[NT, set[Tree[T]]],
+        existing_terms: Mapping[NT, AbstractSet[Tree[T]]],
         interpretation: dict[T, Any] | None = None,
         max_count: int | None = None,
         nt_old_term: tuple[NT, Tree[T]] | None = None,
         progress: _RuleProgress[T] | None = None,
-    ) -> set[Tree[T]]:
+    ) -> _OrderedSet[Tree[T]]:
         # Genererate new terms for rule `rule` from existing terms up to `max_count`
         # the term `old_term` should be a subterm of all resulting terms, at a position, that corresponds to `nt`
 
@@ -482,16 +610,18 @@ class SolutionSpace(Generic[NT, T, G]):
 
         Args:
             rule (RHSRule[NT, T, G]): _description_
-            existing_terms (Mapping[NT, set[Tree[T]]]): _description_
+            existing_terms (Mapping[NT, AbstractSet[Tree[T]]]): _description_
             interpretation (dict[T, Any] | None): _description_ (Default value = None)
             max_count (int | None): _description_ (Default value = None)
             nt_old_term (tuple[NT, Tree[T]] | None): _description_ (Default value = None)
             progress (_RuleProgress[T] | None): _description_ (Default value = None)
 
         Returns:
-            set[Tree[T]]: _description_
+            _OrderedSet[Tree[T]]: The new terms, in the order they were generated. The caller
+                enumerates them in that order, so a plain set would leave it to the hash seed
+                which terms an interrupted enumeration returns.
         """
-        output_set: set[Tree[T]] = set()
+        output_set: _OrderedSet[Tree[T]] = _OrderedSet()
         if max_count == 0:
             return output_set
 
@@ -662,7 +792,11 @@ class SolutionSpace(Generic[NT, T, G]):
         max_bucket_size: int | None = None,
         interpretation: dict[T, Any] | None = None,
     ) -> Iterable[Tree[T]]:
-        """Enumerate terms as an iterator efficiently - all terms are enumerated, no guaranteed term order.
+        """Enumerate terms as an iterator efficiently - all terms are enumerated.
+
+        The term order is not specified, but it is reproducible: the same solution space yields the
+        same sequence in every process. Under ``max_count`` that also fixes which terms are
+        returned, not merely the order they arrive in.
 
         Args:
             start (NT): _description_
@@ -673,18 +807,20 @@ class SolutionSpace(Generic[NT, T, G]):
         Yields:
             Tree[T]: _description_
         """
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return
 
-        queues: dict[NT, PriorityQueue[Tree[T]]] = {n: PriorityQueue() for n in self.nonterminals()}
-        existing_terms: dict[NT, set[Tree[T]]] = {n: set() for n in self.nonterminals()}
-        inverse_grammar: dict[NT, deque[tuple[NT, RHSRule[NT, T, G]]]] = {n: deque() for n in self.nonterminals()}
+        # nonterminals() now returns a snapshot, so take it once instead of once per use.
+        all_nonterminals = self.nonterminals()
+        queues: dict[NT, PriorityQueue[Tree[T]]] = {n: PriorityQueue() for n in all_nonterminals}
+        existing_terms: dict[NT, _OrderedSet[Tree[T]]] = {n: _OrderedSet() for n in all_nonterminals}
+        inverse_grammar: dict[NT, deque[tuple[NT, RHSRule[NT, T, G]]]] = {n: deque() for n in all_nonterminals}
         all_results: set[Tree[T]] = set()
         progressed: dict[tuple[NT, int], _RuleProgress[T]] = {}
 
         for n, exprs in self._rules.items():
             for expr in exprs:
-                if all(m in self.nonterminals() for m in expr.non_terminals):
+                if all(m in self for m in expr.non_terminals):
                     for m in expr.non_terminals:
                         inverse_grammar[m].append((n, expr))
                     for new_term in self._generate_new_trees(
@@ -705,7 +841,9 @@ class SolutionSpace(Generic[NT, T, G]):
         while (max_bucket_size is None or current_bucket_size <= max_bucket_size) and any(
             not queue.empty() for queue in queues.values()
         ):
-            non_terminals = {n for n in self.nonterminals() if not queues[n].empty()}
+            # The working set decides which non-terminal is expanded next, and with it which
+            # terms an enumeration under max_count returns; a plain set left that to the hash seed.
+            non_terminals = _OrderedSet(n for n in all_nonterminals if not queues[n].empty())
 
             while non_terminals:
                 n = non_terminals.pop()
@@ -782,7 +920,7 @@ class SolutionSpace(Generic[NT, T, G]):
             list[Goal[NT, T, G]]: _description_
         """
         goals: list[Goal[NT, T, G]] = []
-        for rhs in self._rules[start]:
+        for rhs in self._rules_of(start):
             if self._rule_matches_subtree(rhs, tree):
                 g = Goal.from_rhs_rule(rhs)
                 if g is not None:
@@ -809,7 +947,7 @@ class SolutionSpace(Generic[NT, T, G]):
             return []
         nt = goal.subgoals[child_pos].origin
         results: list[Goal[NT, T, G]] = []
-        for rhs in self._rules[nt]:
+        for rhs in self._rules_of(nt):
             if self._rule_matches_subtree(rhs, subtree):
                 new = goal.update(rhs, child_pos)
                 if new is not None:
@@ -857,7 +995,7 @@ class SolutionSpace(Generic[NT, T, G]):
             Goal[NT, T, G]: _description_
         """
 
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return
 
         # validate pos by attempting to access the subtree once (avoids materializing all positions)
@@ -976,7 +1114,7 @@ class SolutionSpace(Generic[NT, T, G]):
             Tree[T]: _description_
         """
 
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return
 
         all_results: set[Tree[T]] = set()
@@ -987,7 +1125,7 @@ class SolutionSpace(Generic[NT, T, G]):
         if tree is not None and pos is not None:
             goals = self.goal_from_tree(start, tree, pos)
         else:
-            goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
+            goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules_of(start)]
         # yield all solutions for already successful initial goals
         non_successful_goals: list[Goal[NT, T, G]] = []
         for goal in goals:
@@ -1001,7 +1139,10 @@ class SolutionSpace(Generic[NT, T, G]):
                         if max_count is not None and len(all_results) >= max_count:
                             return
                 else:
-                    non_successful_goals = [goal, *non_successful_goals]
+                    # Append, do not prepend: sorted() is stable, so prepending would break ties
+                    # among the initial goals in reverse rule order while every later level, whose
+                    # goals arrive in rule order, breaks them in rule order.
+                    non_successful_goals.append(goal)
 
         if max_depth is not None and max_depth == 0:
             return
@@ -1014,8 +1155,12 @@ class SolutionSpace(Generic[NT, T, G]):
             # Selection:
             p, nt = subgoal_selection_strategy(current_goal)
             # Unification
-            applicable_rules = self._rules[nt.origin]
-            new_goals: set[Goal] = set()
+            applicable_rules = self._rules_of(nt.origin)
+            # A list, not a set: Goal defines neither __eq__ nor __hash__, so a set never
+            # deduplicated anything here -- it only scattered the goals over their object
+            # addresses and handed them back in an allocation-dependent order, which is what made
+            # every derivation irreproducible. A list therefore removes no capability.
+            new_goals: list[Goal] = []
             for r in applicable_rules:
                 # Derivation
                 new_goal = current_goal.update(r, p)
@@ -1034,7 +1179,7 @@ class SolutionSpace(Generic[NT, T, G]):
                             if max_count is not None and len(all_results) >= max_count:
                                 return
                     else:
-                        new_goals.add(new_goal)
+                        new_goals.append(new_goal)
             variance = variance_strategy_push(variance, new_goals)
         return
 
@@ -1046,7 +1191,11 @@ class SolutionSpace(Generic[NT, T, G]):
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
-        """A simple implementation of SLD-Resolution with leftmost goal selection and depth-first search in the SLD-Derivation-Tree.
+        """A simple implementation of SLD-Resolution with depth-first search in the SLD-Derivation-Tree.
+
+        The goal selection is not leftmost: among the open subgoals it takes the deepest ones and,
+        among those, the leftmost. Whether true leftmost selection would be the right semantics is
+        a question about the inhabitation algorithm itself and is not decided here.
 
         Args:
             start (NT): _description_
@@ -1069,8 +1218,10 @@ class SolutionSpace(Generic[NT, T, G]):
             Returns:
                 deque[Goal]: _description_
             """
-            sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
-            queue.extendleft(new_goals)  # depth-first search <~> LIFO
+            ordered = sorted(new_goals, key=lambda g: len(g.subgoals))  # fewest subgoals first
+            # extendleft inserts in reverse, so pushing `ordered` directly would make popleft
+            # return the goal with the MOST subgoals first -- the opposite of the intent.
+            queue.extendleft(reversed(ordered))  # depth-first search <~> LIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
@@ -1206,7 +1357,11 @@ class SolutionSpace(Generic[NT, T, G]):
         tree: Tree[T] | None = None,
         pos: Path | None = None,
     ) -> Iterable[Tree[T]]:
-        """A simple implementation of SLD-Resolution with leftmost goal selection and breadth-first search in the SLD-Derivation-Tree.
+        """A simple implementation of SLD-Resolution with breadth-first search in the SLD-Derivation-Tree.
+
+        The goal selection is not leftmost: among the open subgoals it takes the deepest ones and,
+        among those, the leftmost. Whether true leftmost selection would be the right semantics is
+        a question about the inhabitation algorithm itself and is not decided here.
 
         Args:
             start (NT): _description_
@@ -1229,8 +1384,10 @@ class SolutionSpace(Generic[NT, T, G]):
             Returns:
                 deque[Goal]: _description_
             """
-            sorted(new_goals, key=lambda g: len(g.subgoals))  # sort by number of subgoals
-            queue.extend(new_goals)  # breadth-first search <~> FIFO
+            ordered = sorted(new_goals, key=lambda g: len(g.subgoals))  # fewest subgoals first
+            # extend appends in order and popleft reads from the front, so unlike the depth-first
+            # push above this one needs no reversal.
+            queue.extend(ordered)  # breadth-first search <~> FIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
@@ -1283,7 +1440,7 @@ class SolutionSpace(Generic[NT, T, G]):
         Raises:
             ValueError: _description_
         """
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return False
 
         stack: deque[tuple | Callable] = deque([(start, tree)])
@@ -1305,7 +1462,7 @@ class SolutionSpace(Generic[NT, T, G]):
             if isinstance(task, tuple):
                 nt, tree = task
                 # use shared helper to check whether a rule matches the current tree head
-                relevant_rhss = [rhs for rhs in self._rules[nt] if self._rule_matches_subtree(rhs, tree)]
+                relevant_rhss = [rhs for rhs in self._rules_of(nt) if self._rule_matches_subtree(rhs, tree)]
 
                 # disjunction of the results for individual rules
                 def or_inputs(count: int = len(relevant_rhss)) -> None:
