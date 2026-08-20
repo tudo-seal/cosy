@@ -343,24 +343,68 @@ class SolutionSpace(Generic[NT, T, G]):
         """
         return self._rules.get(nonterminal)
 
-    def __getitem__(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]]:
-        """_summary_.
+    def __contains__(self, nonterminal: object) -> bool:
+        """Report whether a non-terminal has an entry in this solution space.
+
+        This is the cheap membership test. ``nonterminals()`` returns a snapshot, so testing
+        against it is linear in the size of the grammar and rebuilds the snapshot every time.
 
         Args:
-            nonterminal (NT): _description_
+            nonterminal (object): The non-terminal to look for.
 
         Returns:
-            deque[RHSRule[NT, T, G]]: _description_
+            bool: True if the solution space has an entry for it.
         """
-        return self._rules[nonterminal]
+        return nonterminal in self._rules
 
-    def nonterminals(self) -> Iterable[NT]:
-        """_summary_.
+    def __getitem__(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]]:
+        """Return the rules of a non-terminal, without creating it.
+
+        Reading is not a mutation. Going through ``defaultdict.__getitem__`` used to insert an
+        empty entry for every unknown non-terminal that was merely looked at, so that enumerating
+        or inspecting a solution space grew its set of non-terminals. A missing non-terminal is
+        now reported instead of invented; ``get`` is the accessor for "maybe present".
+
+        Args:
+            nonterminal (NT): The non-terminal to look up.
 
         Returns:
-            Iterable[NT]: _description_
+            deque[RHSRule[NT, T, G]]: The stored deque of rules. It is the live one, so appending
+                to it adds a rule, exactly as ``add_rule`` does.
+
+        Raises:
+            KeyError: If the solution space has no entry for this non-terminal.
         """
-        return self._rules.keys()
+        rules = self._rules.get(nonterminal)
+        if rules is None:
+            raise KeyError(nonterminal)
+        return rules
+
+    def _rules_of(self, nonterminal: NT) -> deque[RHSRule[NT, T, G]]:
+        """Return the rules of a non-terminal for reading only.
+
+        Internal read path for the places that treat "no rules" and "no such non-terminal" alike
+        and would otherwise need a guard around every lookup. The empty deque it returns for an
+        unknown non-terminal is not stored, which is why this is private: appending to it is lost.
+
+        Args:
+            nonterminal (NT): The non-terminal to look up.
+
+        Returns:
+            deque[RHSRule[NT, T, G]]: The stored rules, or a fresh empty deque.
+        """
+        rules = self._rules.get(nonterminal)
+        return rules if rules is not None else deque()
+
+    def nonterminals(self) -> tuple[NT, ...]:
+        """Return the non-terminals of this solution space, in the order they were added.
+
+        Returns:
+            tuple[NT, ...]: A snapshot. Returning the live ``keys()`` view meant the result changed
+                underneath a caller that was still iterating it. Because this is a copy, use
+                ``nonterminal in space`` rather than ``in space.nonterminals()`` to test membership.
+        """
+        return tuple(self._rules.keys())
 
     def as_tuples(self) -> Iterable[tuple[NT, deque[RHSRule[NT, T, G]]]]:
         """_summary_.
@@ -430,7 +474,7 @@ class SolutionSpace(Generic[NT, T, G]):
                 {
                     target: deque(
                         possibility
-                        for possibility in self._rules[target]
+                        for possibility in self._rules_of(target)
                         if all(t in ground_types for t in possibility.non_terminals)
                     )
                     for target in ground_types
@@ -673,18 +717,20 @@ class SolutionSpace(Generic[NT, T, G]):
         Yields:
             Tree[T]: _description_
         """
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return
 
-        queues: dict[NT, PriorityQueue[Tree[T]]] = {n: PriorityQueue() for n in self.nonterminals()}
-        existing_terms: dict[NT, set[Tree[T]]] = {n: set() for n in self.nonterminals()}
-        inverse_grammar: dict[NT, deque[tuple[NT, RHSRule[NT, T, G]]]] = {n: deque() for n in self.nonterminals()}
+        # nonterminals() now returns a snapshot, so take it once instead of once per use.
+        all_nonterminals = self.nonterminals()
+        queues: dict[NT, PriorityQueue[Tree[T]]] = {n: PriorityQueue() for n in all_nonterminals}
+        existing_terms: dict[NT, set[Tree[T]]] = {n: set() for n in all_nonterminals}
+        inverse_grammar: dict[NT, deque[tuple[NT, RHSRule[NT, T, G]]]] = {n: deque() for n in all_nonterminals}
         all_results: set[Tree[T]] = set()
         progressed: dict[tuple[NT, int], _RuleProgress[T]] = {}
 
         for n, exprs in self._rules.items():
             for expr in exprs:
-                if all(m in self.nonterminals() for m in expr.non_terminals):
+                if all(m in self for m in expr.non_terminals):
                     for m in expr.non_terminals:
                         inverse_grammar[m].append((n, expr))
                     for new_term in self._generate_new_trees(
@@ -705,7 +751,7 @@ class SolutionSpace(Generic[NT, T, G]):
         while (max_bucket_size is None or current_bucket_size <= max_bucket_size) and any(
             not queue.empty() for queue in queues.values()
         ):
-            non_terminals = {n for n in self.nonterminals() if not queues[n].empty()}
+            non_terminals = {n for n in all_nonterminals if not queues[n].empty()}
 
             while non_terminals:
                 n = non_terminals.pop()
@@ -782,7 +828,7 @@ class SolutionSpace(Generic[NT, T, G]):
             list[Goal[NT, T, G]]: _description_
         """
         goals: list[Goal[NT, T, G]] = []
-        for rhs in self._rules[start]:
+        for rhs in self._rules_of(start):
             if self._rule_matches_subtree(rhs, tree):
                 g = Goal.from_rhs_rule(rhs)
                 if g is not None:
@@ -809,7 +855,7 @@ class SolutionSpace(Generic[NT, T, G]):
             return []
         nt = goal.subgoals[child_pos].origin
         results: list[Goal[NT, T, G]] = []
-        for rhs in self._rules[nt]:
+        for rhs in self._rules_of(nt):
             if self._rule_matches_subtree(rhs, subtree):
                 new = goal.update(rhs, child_pos)
                 if new is not None:
@@ -857,7 +903,7 @@ class SolutionSpace(Generic[NT, T, G]):
             Goal[NT, T, G]: _description_
         """
 
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return
 
         # validate pos by attempting to access the subtree once (avoids materializing all positions)
@@ -976,7 +1022,7 @@ class SolutionSpace(Generic[NT, T, G]):
             Tree[T]: _description_
         """
 
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return
 
         all_results: set[Tree[T]] = set()
@@ -987,7 +1033,7 @@ class SolutionSpace(Generic[NT, T, G]):
         if tree is not None and pos is not None:
             goals = self.goal_from_tree(start, tree, pos)
         else:
-            goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
+            goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules_of(start)]
         # yield all solutions for already successful initial goals
         non_successful_goals: list[Goal[NT, T, G]] = []
         for goal in goals:
@@ -1017,7 +1063,7 @@ class SolutionSpace(Generic[NT, T, G]):
             # Selection:
             p, nt = subgoal_selection_strategy(current_goal)
             # Unification
-            applicable_rules = self._rules[nt.origin]
+            applicable_rules = self._rules_of(nt.origin)
             # A list, not a set: Goal defines neither __eq__ nor __hash__, so a set never
             # deduplicated anything here -- it only scattered the goals over their object
             # addresses and handed them back in an allocation-dependent order, which is what made
@@ -1294,7 +1340,7 @@ class SolutionSpace(Generic[NT, T, G]):
         Raises:
             ValueError: _description_
         """
-        if start not in self.nonterminals():
+        if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return False
 
         stack: deque[tuple | Callable] = deque([(start, tree)])
@@ -1316,7 +1362,7 @@ class SolutionSpace(Generic[NT, T, G]):
             if isinstance(task, tuple):
                 nt, tree = task
                 # use shared helper to check whether a rule matches the current tree head
-                relevant_rhss = [rhs for rhs in self._rules[nt] if self._rule_matches_subtree(rhs, tree)]
+                relevant_rhss = [rhs for rhs in self._rules_of(nt) if self._rule_matches_subtree(rhs, tree)]
 
                 # disjunction of the results for individual rules
                 def or_inputs(count: int = len(relevant_rhss)) -> None:

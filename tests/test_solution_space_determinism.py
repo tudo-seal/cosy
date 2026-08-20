@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from cosy.core.solution_space import SolutionSpace
+from cosy.core.solution_space import NonTerminalArgument, SolutionSpace
 from cosy.core.tree import Tree
 from tests._determinism_grammars import A, B, C, mixed_width_space
 
@@ -241,3 +241,84 @@ def test_a_seeded_sample_repeats() -> None:
         'print([str(space.sample_tree("S", max_depth=4, rng=random.Random(seed))) for seed in range(3)])\n'
     )
     assert printed == {"['top lf lf', 'top (un lf) lf', 'top (un (bi (tri lf lf lf) (un lf))) lf']"}
+
+
+# ---------------------------------------------------------------------------
+# Reading the rules
+# ---------------------------------------------------------------------------
+
+
+def _dangling_reference_space() -> SolutionSpace[str, str, None]:
+    """Return ``S -> f(Missing) | g`` where ``Missing`` has no rules of its own.
+
+    Returns:
+        SolutionSpace[str, str, None]: The grammar. Every read path of the solution space runs
+            into ``Missing`` and has to leave the grammar alone.
+    """
+    space: SolutionSpace[str, str, None] = SolutionSpace()
+    space.add_rule("S", "f", (NonTerminalArgument(None, "Missing"),), ())
+    space.add_rule("S", "g", (), ())
+    return space
+
+
+def test_reading_the_rules_never_creates_a_nonterminal(space: SolutionSpace[str, str, None]) -> None:
+    """Reading is not a mutation. Reads went through ``defaultdict.__getitem__``, which inserts."""
+    before = set(space.nonterminals())
+
+    assert len(space["C"]) == 4
+    with pytest.raises(KeyError):
+        _ = space["NoSuchNonTerminal"]
+    assert space.get("NoSuchNonTerminal") is None
+    assert "NoSuchNonTerminal" not in space
+
+    assert set(space.nonterminals()) == before
+
+
+def test_searching_never_creates_a_nonterminal() -> None:
+    """The searches read the rules of every non-terminal a rule refers to, including unknown ones.
+
+    Those reads went through ``defaultdict.__getitem__`` as well, so running a search over a
+    grammar that refers to a non-terminal without rules used to add that non-terminal to it. The
+    tree handed to ``contains_tree`` has to match the dangling rule for one step, otherwise the
+    check never descends into the non-terminal it is about.
+
+    Starting from ``Missing`` itself is the one case whose answer is observable at all. The other
+    entry points have nothing to report either way, but ``contains_tree`` has to answer False
+    rather than treat the unknown non-terminal as satisfied.
+    """
+    space = _dangling_reference_space()
+
+    assert [str(tree) for tree in space.depth_first_resolution("S", max_depth=3)] == ["g"]
+    assert [str(tree) for tree in space.breadth_first_resolution("S", max_depth=3)] == ["g"]
+    assert [str(tree) for tree in space.enumerate_trees("S")] == ["g"]
+    assert space.contains_tree("S", Tree("g")) is True
+    assert space.contains_tree("S", Tree("f", (Tree("x"),))) is False
+    assert space.contains_tree("Missing", Tree("x")) is False
+
+    assert space.nonterminals() == ("S",)
+
+
+def test_the_rules_of_a_known_nonterminal_are_the_stored_ones(space: SolutionSpace[str, str, None]) -> None:
+    """``__getitem__`` hands out the live deque, so a caller that appends to it adds a rule.
+
+    Refusing the unknown non-terminal instead of inventing an empty deque for it is what makes that
+    unambiguous: there is no key for which the same append is silently discarded.
+    """
+    space["C"].append(space["C"][0])
+
+    assert len(space["C"]) == 5
+
+
+def test_nonterminals_is_a_snapshot(space: SolutionSpace[str, str, None]) -> None:
+    """What ``nonterminals`` reports must not change under a caller who is still iterating it.
+
+    It used to be the live ``keys()`` view of the rule mapping. Two claims ride along that a
+    snapshot alone would not pin: it is in the order the non-terminals were added rather than in
+    any sorted order, and ``in space`` still sees one that was added after it was taken.
+    """
+    reported = space.nonterminals()
+
+    space.add_rule("D", "d", (), ())
+
+    assert list(reported) == ["S", "C"]
+    assert "D" in space
