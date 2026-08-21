@@ -274,14 +274,14 @@ class Tree(Generic[T]):
         # apply/call decomposed terms
         while combinators:
             (c, n) = combinators.pop()
-            parameters_of_c: Sequence[Parameter] = []
             current_combinator: partial[Any] | T | Callable[..., Any] = (
                 c if interpretation is None or c not in interpretation else interpretation[c]
             )
+            parameters_of_current_combinator: Sequence[Parameter] = []
 
             if callable(current_combinator):
                 try:
-                    parameters_of_c = _parameters_of(current_combinator)
+                    parameters_of_current_combinator = _parameters_of(current_combinator)
                 except ValueError as exc:
                     msg = (
                         f"Interpretation of combinator {c} does not expose a signature. "
@@ -289,7 +289,7 @@ class Tree(Generic[T]):
                     )
                     raise TypeError(msg) from exc
 
-                if n == 0 and len(parameters_of_c) == 0:
+                if n == 0 and len(parameters_of_current_combinator) == 0:
                     current_combinator = current_combinator()
 
             arguments = deque(results.pop() for _ in range(n))
@@ -304,11 +304,11 @@ class Tree(Generic[T]):
 
                 use_partial = False
 
-                simple_arity = len(list(filter(lambda x: x.default == _empty, parameters_of_c)))
-                default_arity = len(list(filter(lambda x: x.default != _empty, parameters_of_c)))
+                simple_arity = len(list(filter(lambda x: x.default == _empty, parameters_of_current_combinator)))
+                default_arity = len(list(filter(lambda x: x.default != _empty, parameters_of_current_combinator)))
 
                 # if any parameter is marked as var_args, we need to use all available arguments
-                pop_all = any(x.kind == _ParameterKind.VAR_POSITIONAL for x in parameters_of_c)
+                pop_all = any(x.kind == _ParameterKind.VAR_POSITIONAL for x in parameters_of_current_combinator)
 
                 # If a var_args parameter is found, we need to subtract it from the normal parameters.
                 # Note: python does only allow one parameter in the form of *arg
