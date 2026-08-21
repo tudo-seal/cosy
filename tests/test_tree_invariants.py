@@ -441,22 +441,20 @@ def test_pickle_keeps_shared_subtrees_shared() -> None:
 
 
 def test_the_interpretation_is_left_behind_and_never_blocks_pickling() -> None:
-    """The interpretation does not travel with the term, and neither does its cached result.
+    """The interpretation does not travel with the term.
 
-    It used to, and that was a bug in both directions.  Outward: the cache entry held the
-    interpretation, the interpretation held a lambda, and a single interpreted node therefore
-    failed to pickle at all -- while terms are pickled to move a population between processes and
-    an algebra assembled from lambdas is the ordinary case.  Inward: the entry is keyed on
-    ``id(interpretation)``, and a round trip rebuilds that dictionary elsewhere, so the key stops
-    naming what the entry holds -- and a freed address is free to be handed out again, to an
-    interpretation the cached result has nothing to do with.
+    A node used to keep the result of its last evaluation, together with the interpretation that
+    produced it, and that was a bug in both directions.  Outward: the interpretation held a lambda,
+    and a single interpreted node therefore failed to pickle at all.  Terms are pickled to move a
+    population between processes, and an algebra assembled from lambdas is the ordinary case.  Inward: the entry was keyed on ``id(interpretation)``, and a round trip
+    rebuilds that dictionary elsewhere, so the key stopped naming what the entry held.  A node
+    holds no result at all now, and this test keeps it that way.
     """
     tree = Tree("add", (Tree("one"), Tree("two")))
     assert tree.interpret({"add": _sum_of, "one": _one, "two": _two}) == 3
 
     blob = pickle.dumps(tree)
     assert b"_sum_of" not in blob
-    assert pickle.loads(blob)._interpreted is None  # noqa: SLF001
 
     with_lambdas = Tree("add", (Tree("one"), Tree("two")))
     assert with_lambdas.interpret({"add": lambda left, right: left + right, "one": lambda: 1, "two": lambda: 2}) == 3
@@ -567,4 +565,3 @@ def test_a_stream_that_still_carries_an_instance_dictionary_is_rebuilt(monkeypat
     assert back.size == fresh.size
     assert back._positions is None  # noqa: SLF001
     assert back._leaf_positions is None  # noqa: SLF001
-    assert back._interpreted is None  # noqa: SLF001

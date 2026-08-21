@@ -12,6 +12,9 @@ mutation that cannot happen:
 * ``leaf_positions`` filtered the position set against itself, which is quadratic in the number of
   nodes -- and the leaves of a term are asked for once per query against it.
 
+``interpret`` had a fourth cost: it asked ``inspect.signature`` for the parameters of every
+combinator *occurrence*, and that call dominated the evaluation of a term.
+
 The tests below count operations instead of measuring time.  A counted operation says the same
 thing on a loaded machine as on an idle one, whereas a wall-clock bound would only say how busy
 the machine running the suite happens to be.  Where the claim is about growth rather than about a
@@ -19,15 +22,19 @@ single call -- the quadratic filter above -- the count comes from ``sys.setprofi
 every call the interpreter makes and so measures work done rather than time taken.
 """
 
+import math
 import sys
 from collections.abc import Callable
 from copy import copy
+from dataclasses import dataclass
+from functools import lru_cache
+from inspect import Signature, signature
 from types import FrameType
 from typing import Any
 
 import pytest
 
-from cosy.core.tree import Path, Tree
+from cosy.core.tree import Path, Tree, _parameters_cached, _parameters_of
 
 
 def chain(depth: int) -> Tree[str]:
@@ -42,6 +49,23 @@ def chain(depth: int) -> Tree[str]:
     node: Tree[str] = Tree("leaf", ())
     for _ in range(depth):
         node = Tree("f", (node,))
+    return node
+
+
+def cycling_chain(labels: tuple[str, ...], depth: int) -> Tree[str]:
+    """Build a unary chain whose labels cycle through ``labels``.
+
+    Args:
+        labels (tuple[str, ...]): The labels to cycle through, innermost first.
+        depth (int): The number of unary nodes above the leaf.
+
+    Returns:
+        Tree[str]: The chain.  Neighboring nodes carry different labels, so evaluating it asks for
+            the combinators in rotation rather than in blocks.
+    """
+    node: Tree[str] = Tree("leaf", ())
+    for index in range(depth):
+        node = Tree(labels[index % len(labels)], (node,))
     return node
 
 
@@ -302,3 +326,216 @@ def test_a_shared_node_reports_one_set_to_every_term_that_holds_it() -> None:
     with pytest.raises(AttributeError):
         subtree.positions().add((42,))  # type: ignore[attr-defined]
     assert (42,) not in grafted.children[1].positions()
+
+
+# ---------------------------------------------------------------------------
+# interpret: one signature per combinator, not one per occurrence
+# ---------------------------------------------------------------------------
+
+
+def counting_signatures(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Record every callable whose signature is asked for, against an empty memo.
+
+    The memo is module state that the whole process shares, so a test that read the shipped one
+    would depend on what ran before it, and one that filled it would leave its closures behind.
+
+    The bound is read off the shipped memo rather than repeated here, so the test still asks about
+    what is shipped while the memo the rest of the process shares is neither emptied nor left
+    holding this test's closures.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Used to stand an empty memo in for the shared one.
+
+    Returns:
+        list[Any]: The list the recorded callables are appended to.
+    """
+    calls: list[Any] = []
+
+    def recording(obj: Any) -> Signature:
+        """Record the object and delegate.
+
+        Args:
+            obj (Any): The callable whose signature is asked for.
+
+        Returns:
+            Signature: The signature of ``obj``.
+        """
+        calls.append(obj)
+        return signature(obj)
+
+    monkeypatch.setattr("cosy.core.tree.signature", recording)
+    monkeypatch.setattr("cosy.core.tree._parameters_cached", empty_memo())
+    return calls
+
+
+def empty_memo():
+    """Return an empty memo of the shipped size, wrapping the shipped function.
+
+    Returns:
+        Any: The memo, ready to stand in for ``_parameters_cached``.
+    """
+    return lru_cache(maxsize=_parameters_cached.cache_parameters()["maxsize"])(_parameters_cached.__wrapped__)
+
+
+def test_interpret_asks_once_per_combinator_even_when_they_alternate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A signature is asked for once per combinator, not once per node that carries it.
+
+    A chain over a single combinator is served by a memo of any size at all, so it says nothing.
+    Here the labels rotate, which is the shape a real term has: every step asks for a different
+    combinator and comes back to the first one five steps later.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): The pytest monkeypatch fixture.
+    """
+    calls = counting_signatures(monkeypatch)
+
+    labels = ("a", "b", "c", "d", "e")
+    interpretation: dict[str, Any] = {
+        label: (lambda value, step=step: value + step) for step, label in enumerate(labels, start=1)
+    }
+    interpretation["leaf"] = lambda: 0
+
+    assert cycling_chain(labels, 300).interpret(interpretation) == 900
+
+    assert len(calls) == len(interpretation), (
+        f"asked for {len(calls)} signatures over {len(interpretation)} combinators"
+    )
+
+
+def test_a_whole_algebra_of_repository_size_stays_in_the_memo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bound holds a whole algebra, so a round trip through one keeps hitting.
+
+    An LRU one entry short of its working set evicts exactly the entry the next lookup asks for,
+    so it does not degrade gradually but all at once.  That is what the bound is generous for.
+    Sixty-five combinators is well past the algebras in use here.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): The pytest monkeypatch fixture.
+    """
+    calls = counting_signatures(monkeypatch)
+
+    labels = tuple(f"c{index}" for index in range(64))
+    algebra: dict[str, Any] = {label: (lambda value: value + 1) for label in labels}
+    algebra["leaf"] = lambda: 0
+
+    assert cycling_chain(labels, 3 * len(labels)).interpret(algebra) == 3 * len(labels)
+
+    assert len(calls) == len(algebra)
+
+
+def test_a_fresh_algebra_per_evaluation_does_not_grow_the_memo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller that rebuilds its algebra for every evaluation must not grow the memo without end.
+
+    The pattern is the ordinary one: an algebra assembled inside the call that evaluates the term,
+    so every set of callables is used once and is unreachable afterwards.  Unbounded, the memo
+    would keep all of them, together with whatever they close over.  Bounded, it holds what the
+    last evaluations needed and forgets the rest.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): The pytest monkeypatch fixture.
+    """
+    memo = empty_memo()
+    monkeypatch.setattr("cosy.core.tree._parameters_cached", memo)
+    bound = memo.cache_parameters()["maxsize"]
+
+    tree: Tree[str] = Tree("leaf", ())
+    for _ in range(20):
+        tree = Tree("step", (tree,))
+    for _ in range(2 * bound):
+        assert tree.interpret({"leaf": lambda: 0, "step": lambda value: value + 1}) == 20
+
+    assert memo.cache_info().currsize <= bound
+
+
+def test_a_combinator_without_parameters_is_remembered_like_any_other(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A nullary combinator's answer is the empty tuple, and an empty answer is still an answer.
+
+    Leaves are most of the nodes of a term, and their combinators take no arguments.  A memo that
+    tested its stored answer for truth rather than for presence would miss on every one of them
+    while looking fully effective on the inner nodes.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): The pytest monkeypatch fixture.
+    """
+    calls = counting_signatures(monkeypatch)
+
+    interpretation: dict[str, Any] = {"pair": lambda left, right: left + right, "leaf": lambda: 1}
+    tree: Tree[str] = Tree("leaf", ())
+    for _ in range(50):
+        tree = Tree("pair", (tree, Tree("leaf", ())))
+
+    assert tree.interpret(interpretation) == 51
+
+    assert len(calls) == 2, f"asked for {len(calls)} signatures over 2 combinators"
+
+
+@dataclass
+class UncacheableAdd:
+    """A combinator that cannot key the memo.
+
+    A dataclass keeps the default ``__eq__``, which sets ``__hash__`` to ``None``.  A combinator
+    written as a value object rather than as a function ends up unhashable that way, without its
+    author ever thinking about caching.
+    """
+
+    def __call__(self, left: int, right: int) -> int:
+        """Add two numbers.
+
+        Args:
+            left (int): The first summand.
+            right (int): The second summand.
+
+        Returns:
+            int: Their sum.
+        """
+        return left + right
+
+
+def test_interpret_accepts_a_combinator_that_cannot_be_cached() -> None:
+    """An unhashable combinator is inspected directly instead of being rejected.
+
+    This is the one failure mode the memo introduces: before it existed every callable worked, and
+    a combinator that cannot be a dictionary key must not start raising ``TypeError`` from inside
+    the cache.  The memo is skipped for it, not consulted and not blamed.
+    """
+    combinator = UncacheableAdd()
+    assert type(combinator).__hash__ is None
+
+    tree = Tree("add", (Tree("one"), Tree("two")))
+    assert tree.interpret({"add": combinator, "one": lambda: 1, "two": lambda: 2}) == 3
+
+
+def test_interpret_still_reports_a_combinator_without_a_signature() -> None:
+    """A built-in without an introspectable signature is still a hard error.
+
+    The memo must not turn the ``TypeError`` of ``interpret`` into a silent success or into an
+    error raised by the memo itself: a failure is reported, never replaced by a value.
+    """
+    tree = Tree("b", (Tree("leaf", ()),))
+    with pytest.raises(TypeError, match="does not expose a signature"):
+        tree.interpret({"b": math.log, "leaf": lambda: 1.0})
+
+
+def test_the_memo_hands_out_something_a_caller_cannot_corrupt() -> None:
+    """The stored answer is a tuple, because the memo hands out the object it stored.
+
+    A caller that appended to a list it received would change what every later evaluation of that
+    combinator reads.
+    """
+
+    def combinator(left: int, right: int) -> int:
+        """Add two numbers.
+
+        Args:
+            left (int): The first summand.
+            right (int): The second summand.
+
+        Returns:
+            int: Their sum.
+        """
+        return left + right
+
+    parameters = _parameters_of(combinator)
+
+    assert isinstance(parameters, tuple)
+    assert _parameters_of(combinator) is parameters

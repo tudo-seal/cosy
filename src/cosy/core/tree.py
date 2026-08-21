@@ -9,13 +9,85 @@ import contextlib
 # Uniqueness is guaranteed by python's set (instead of list) data structure.
 from collections import deque
 from collections.abc import Callable, Hashable, Sequence
-from functools import partial
+from functools import lru_cache, partial
 from inspect import Parameter, _empty, _ParameterKind, signature
 from typing import Any, Generic, TypeVar
 
 T = TypeVar("T", bound=Hashable)
 
 Path = tuple[int, ...]
+
+
+# ``inspect.signature`` costs about 5.4 microseconds, and ``interpret`` asked it once per
+# occurrence of a combinator rather than once per combinator.  A chain of five thousand nodes over
+# two combinators paid five thousand times for two answers.  The memo is keyed on the combinator,
+# which is what carries the signature.
+#
+# What the bound has to hold is the set of combinators evaluated together, which is the size of a
+# component repository: 3 to 7 in the examples here, 4 in the benchmarks, and 24 to 49 in the
+# largest algebras in use elsewhere.  An LRU that no longer holds its working set drops to a zero
+# hit rate at once rather than declining, because every lookup evicts the entry the next one asks
+# for.  Measured over 200 combinators, ``maxsize=128`` runs about ninety times slower than
+# ``maxsize=1024``.  ``_parameters_cached.cache_info()`` reports a set that no longer fits.
+#
+# The bound also limits retention.  A caller that builds a fresh algebra per evaluation gets its
+# hits within one call and none across calls, so an unbounded memo keeps every callable it has
+# seen, with whatever those callables close over.  Measured on that pattern, it grew to 200000
+# entries in 50000 evaluations and became slower than the bounded memo, since its table keeps
+# being rebuilt.
+#
+# The memo holds metadata about a combinator, never the result of applying one.  Every combinator
+# is still called on every evaluation, so an interpretation may have side effects and may answer
+# differently each time.  See ``tests/test_interpretation_semantics.py``.
+@lru_cache(maxsize=1024)
+def _parameters_cached(combinator: Any) -> tuple[Parameter, ...]:
+    """Return the parameters of a callable, from a bounded memo.
+
+    Args:
+        combinator (Any): The callable to inspect.
+
+    Returns:
+        tuple[Parameter, ...]: Its parameters, in declaration order.  A tuple rather than a list,
+            because the memo hands out the object it stored.
+
+    Raises:
+        ValueError: If ``combinator`` exposes no signature.  ``interpret`` turns this into a
+            ``TypeError`` naming the combinator.  A memo that swallowed it would answer wrongly
+            instead of reporting the failure.
+        TypeError: If ``combinator`` cannot be a memo key, raised by ``lru_cache`` before this
+            body runs, or if ``signature`` cannot inspect it.  ``_parameters_of`` tells the two
+            apart.
+    """
+    return tuple(signature(combinator).parameters.values())
+
+
+def _parameters_of(combinator: Any) -> tuple[Parameter, ...]:
+    """Return the parameters of a callable, through the memo wherever that is possible.
+
+    Args:
+        combinator (Any): The callable to inspect.
+
+    Returns:
+        tuple[Parameter, ...]: Its parameters, in declaration order.
+
+    Raises:
+        ValueError: If ``combinator`` exposes no signature, see ``_parameters_cached``.
+        TypeError: If ``signature`` cannot inspect ``combinator``, for instance because it carries
+            a ``__signature__`` that is not a signature.  The other ``TypeError``, the one an
+            unhashable combinator raises on the memo key, is handled below rather than reported.
+    """
+    try:
+        return _parameters_cached(combinator)
+    except TypeError:
+        # Two failures arrive as ``TypeError``, and retrying without the memo tells them apart.
+        # An unhashable combinator fails on the cache key before the body runs, a value object
+        # that defines ``__eq__`` and so has no ``__hash__`` being the common case.  Inspecting it
+        # directly is a detour around the memo rather than a failure, and it is the only path the
+        # memo adds, so it is tested.  A combinator that ``signature`` itself rejects raises again
+        # here and reaches the caller, as it did before the memo existed.  Checking hashability up
+        # front would hash every combinator a second time on the hot path, for a case that does
+        # not occur in practice.
+        return tuple(signature(combinator).parameters.values())
 
 
 class Tree(Generic[T]):
@@ -27,12 +99,6 @@ class Tree(Generic[T]):
     _hash: int
     _positions: frozenset[Path] | None = None
     _leaf_positions: frozenset[Path] | None = None
-    # tuple[interpretation id, reference to interpretation dict (avoid GC, see test), cached interpretation result]
-    # Breaks for non-deterministic interpretations. The entry belongs to the node, and a node is
-    # shared by every term built around it, so an interpretation dict that is changed in place --
-    # same object, same id, different contents -- now reports its stale value through every one of
-    # those terms rather than only through the one the node was first evaluated in.
-    _interpreted: tuple[int, dict[T, Any] | None, Any] | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         """_summary_.
@@ -116,41 +182,31 @@ class Tree(Generic[T]):
         """
         return Tree(root=self.root, children=self.children)
 
-    # Writing is recursive -- three ``save()`` levels per node here, four with the default
-    # protocol -- and on Python 3.10 and 3.11 that recursion is bounded by the interpreter's
-    # recursion limit: measured from inside a pytest run, a chain of 318 nodes is the deepest term
-    # that can be written, against 238 before.  From 3.12 on the separate C recursion limit binds
-    # instead, at about 3325.  Terms do grow deeper than that -- which is why ``subtree_at``,
-    # ``_walk`` and ``interpret`` are iterative -- so pickling is the one place in this class where
-    # depth is still a limit; the reduction below at least raises the ceiling by a third.
+    # Writing is recursive, three ``save()`` levels per node here and four with the default
+    # protocol.  On Python 3.10 and 3.11 that recursion is bounded by the interpreter's recursion
+    # limit: measured from inside a pytest run, a chain of 318 nodes is the deepest term that can
+    # be written, against 238 before.  From 3.12 on the separate C recursion limit binds instead,
+    # at about 3325.  Terms do grow deeper than that, which is why ``subtree_at``, ``_walk`` and
+    # ``interpret`` are iterative, so pickling is the one place in this class where depth is still
+    # a limit.  The reduction below at least raises the ceiling by a third.
     def __reduce__(self) -> tuple[type["Tree[T]"], tuple[T, tuple["Tree[T]", ...]]]:
         """Reconstruct through the constructor instead of through the instance dictionary.
 
-        Everything ``__init__`` computes -- ``size`` and ``_hash`` -- and everything filled on
-        demand -- the two position sets and the interpretation result -- follows from ``root`` and
-        ``children``, so none of it has to be written.  The default protocol writes the instance
-        dictionary, and therefore writes all of it, together with the ``__orig_class__`` that
-        ``Tree[str](...)`` leaves on an instance.  ``__copy__`` and ``replace_subtree_at`` already
-        build their results out of ``root`` and ``children`` alone; this makes the third way of
-        producing a node agree with them.
+        Everything ``__init__`` computes (``size`` and ``_hash``) and everything filled on demand
+        (the two position sets) follows from ``root`` and ``children``, so none of it has to be
+        written.  The default protocol writes the instance dictionary, and therefore writes all of
+        it, together with the ``__orig_class__`` that ``Tree[str](...)`` leaves on an instance.
+        ``__copy__`` and ``replace_subtree_at`` already build their results out of ``root`` and
+        ``children`` alone.  This makes the third way of producing a node agree with them.
 
         ``_hash`` is what makes this more than a question of size.  It is
         ``hash((root, children))``, and hashing a string is randomized per process, so a
         transported ``_hash`` is the writing process's answer to a question the reading process
         would answer differently.  A term read back from a file then compares *equal* to the same
         term built here and hashes *differently*: a ``set`` keeps both of them, and a ``dict``
-        deduplicates neither -- measured by writing under ``PYTHONHASHSEED=1`` and reading under
+        deduplicates neither, measured by writing under ``PYTHONHASHSEED=1`` and reading under
         ``PYTHONHASHSEED=2``.  Recomputing on load is what makes a term that arrived by stream
         interchangeable with one built in place.
-
-        The interpretation cache is worse than wasteful.  Its entry is
-        ``(id(interpretation), interpretation, result)``, and it holds the second field precisely
-        so that the address in the first stays taken and the key stays meaningful.  Loading
-        rebuilds the interpretation at a different address, so the key names an object that no
-        longer exists anywhere; should the interpreter hand that address to something else, a
-        later ``interpret`` is answered with the result of a foreign interpretation.  Carrying the
-        entry also drags every callable of the interpretation into the stream, which makes a
-        single node unpicklable as soon as one of them is a lambda.
 
         The position sets are the plain case: a second encoding of a structure the stream already
         carries.  A term of 2047 nodes with them filled at the root writes 19486 bytes this way
@@ -160,7 +216,7 @@ class Tree(Generic[T]):
         unchanged.
 
         ``copy.deepcopy`` reduces through here as well, so a deep copy now starts with cold caches
-        too; ``copy.copy`` continues to go through ``__copy__``.  The class is taken from
+        too.  ``copy.copy`` continues to go through ``__copy__``.  The class is taken from
         ``self.__class__`` rather than named outright, because loading must not change what an
         object is.
 
@@ -177,11 +233,12 @@ class Tree(Generic[T]):
         Only a stream written before ``__reduce__`` existed reaches this method, since a reduction
         that hands back constructor arguments produces no state at all.  Such a stream carries the
         derived fields, and adopting them is what the reduction above avoids producing: the
-        ``_hash`` in it was computed under the writing process's hash seed, and the interpretation
-        cache in it is keyed on an address in a process that has ended.  Taking ``root`` and
-        ``children`` and computing the rest here makes that fix reach terms that were written
-        before it existed -- which matters because the terms anyone keeps on disk are the
-        expensive ones -- and leaves the caches cold, where they belong.
+        ``_hash`` in it was computed under the writing process's hash seed.  A stream old enough
+        carries an interpretation result as well, which no longer has a field to be read into and
+        is dropped here with the rest.  Taking ``root`` and ``children`` and computing the rest
+        here makes that fix reach terms that were written before it existed, which matters because
+        the terms anyone keeps on disk are the expensive ones, and leaves the position sets cold,
+        where they belong.
 
         Args:
             state (dict[str, Any]): The instance dictionary of the node as it was written.
@@ -205,11 +262,6 @@ class Tree(Generic[T]):
             TypeError: _description_
         """
 
-        # if interpretation hasn't changed, skip interpreting, use cache
-        evaluated = self._interpreted
-        if evaluated is not None and evaluated[0] == id(interpretation):
-            return evaluated[2]
-
         terms: deque[Tree[T]] = deque((self,))
         combinators: deque[tuple[T, int]] = deque()
         # decompose terms
@@ -229,7 +281,7 @@ class Tree(Generic[T]):
 
             if callable(current_combinator):
                 try:
-                    parameters_of_c = list(signature(current_combinator).parameters.values())
+                    parameters_of_c = _parameters_of(current_combinator)
                 except ValueError as exc:
                     msg = (
                         f"Interpretation of combinator {c} does not expose a signature. "
@@ -293,16 +345,12 @@ class Tree(Generic[T]):
                     current_combinator = current_combinator(*fixed_parameters, *var_parameters, *default_parameters)
 
             results.append(current_combinator)
-        result = results.pop()
-
-        # no cache hit (first seen or interpretation changed), overwrite cache
-        self._interpreted = (id(interpretation), interpretation, result)
-        return result
+        return results.pop()
 
     def _walk(self) -> tuple[frozenset[Path], frozenset[Path]]:
         """Fill both position caches in one traversal.
 
-        The leaves are read off the walk -- a node without children is a leaf -- rather than
+        The leaves are read off the walk, a node without children being a leaf, rather than
         filtered out of the position set afterwards.  Filtering compares every position against
         every other, which is quadratic: a term of 32767 nodes took 84 seconds, and resolving a
         term at a position asks for the leaves of that term on every call.
@@ -331,8 +379,8 @@ class Tree(Generic[T]):
         The cached set is handed out as it is, frozen rather than copied.  It belongs to the node,
         and a node is shared by every term built around it, so a caller who mutated what it got
         back would change what every one of those terms reports.  Freezing makes that impossible
-        instead of merely inadvisable, and it costs nothing per call -- copying the set would be
-        linear in the size of the term on every read.
+        instead of merely inadvisable, and it costs nothing per call, where copying the set would
+        be linear in the size of the term on every read.
 
         Returns:
             frozenset[Path]: The positions of every node.
@@ -362,7 +410,7 @@ class Tree(Generic[T]):
         The node itself, not a copy of it.  The class is immutable, so sharing is safe, and it is
         what the rest of the class assumes: ``replace_subtree_at`` shares every node off the path
         it rebuilds.  Copying on the way back up made reading a position cost a copy of
-        everything below it -- reading every position of a 2047-node term took 94206 copies.
+        everything below it.  Reading every position of a 2047-node term took 94206 copies.
 
         Iterative rather than recursive: terms grow to hundreds of nodes, and a chain that deep
         overflows a recursive descent.
@@ -388,14 +436,14 @@ class Tree(Generic[T]):
         """Return a copy of this tree with the subtree at the given position replaced.
 
         Neither this tree nor the replacement is modified. The result shares every node that is not
-        on the path from the root to ``pos`` with ``self``, and shares ``tree`` itself; only the
+        on the path from the root to ``pos`` with ``self``, and shares ``tree`` itself.  Only the
         nodes along that path are rebuilt.
 
         Rebuilding through ``__init__`` rather than mutating in place is what keeps ``size`` and
         ``_hash`` correct. Both are computed once at construction, so an in-place replacement left
-        every ancestor of the replacement point reporting the values it had *before* the change --
-        which broke the equality/hash contract of the class and, through it, every cache and every
-        ``set`` keyed on trees.
+        every ancestor of the replacement point reporting the values it had *before* the change.
+        That broke the equality and hash contract of the class and, through it, every cache and
+        every ``set`` keyed on trees.
 
         Args:
             pos (Path): Position of the subtree to replace, as a tuple of child indices.
@@ -420,7 +468,7 @@ class Tree(Generic[T]):
             current = current.children[index]
             path_nodes.append(current)
 
-        # rebuild bottom-up; everything off the path is shared rather than copied
+        # rebuild bottom-up, everything off the path is shared rather than copied
         replacement = tree
         for depth in range(len(pos) - 1, -1, -1):
             parent = path_nodes[depth]
