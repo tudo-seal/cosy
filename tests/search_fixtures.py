@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from cosy.core import Constructor, SpecificationBuilder, Synthesizer
+from cosy.core.types import DataGroup
 
 # ---------------------------------------------------------------------------
 # E -- expressions:  E -> lit | neg(E) | add(E, E)
@@ -152,3 +153,55 @@ def constrained_space():
         pair: SpecificationBuilder().argument("left", WORD).argument("right", WORD).constraint(different).suffix(PAIR),
     }
     return Synthesizer(specs).construct_solution_space(PAIR)
+
+
+# ---------------------------------------------------------------------------
+# N -- a constant argument:  N -> val(v) | plus(v, N),  v in {0, 1}
+# ---------------------------------------------------------------------------
+
+NUM = Constructor("N")
+
+
+def val(v: int) -> str:
+    """Build the literal of the numeric space.
+
+    Args:
+        v (int): The chosen constant.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return str(v)
+
+
+def plus(v: int, inner: str) -> str:
+    """Add a constant to a numeric term.
+
+    Args:
+        v (int): The chosen constant.
+        inner (str): The interpreted operand.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"({v}+{inner})"
+
+
+def literal_space():
+    """Build the space whose clauses carry a constant argument next to a non-terminal one.
+
+    The two kinds of argument are recorded in different places of a goal. A constant argument is
+    grounded from the start and never becomes a subgoal, so a goal of this space carries a
+    grounded position that has no entry in ``constructors``. The spaces above have no constant
+    argument, and on them a goal's ``grounded`` map holds nothing a walk over ``constructors``
+    could not rebuild.
+
+    Returns:
+        SolutionSpace: The space, started at ``N``.
+    """
+    digits = DataGroup("int", [0, 1])
+    specs = {
+        val: SpecificationBuilder().parameter("v", digits).suffix(NUM),
+        plus: SpecificationBuilder().parameter("v", digits).argument("inner", NUM).suffix(NUM),
+    }
+    return Synthesizer(specs).construct_solution_space(NUM)
