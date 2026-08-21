@@ -40,11 +40,11 @@ Path = tuple[int, ...]
 # is still called on every evaluation, so an interpretation may have side effects and may answer
 # differently each time.  See ``tests/test_interpretation_semantics.py``.
 @lru_cache(maxsize=1024)
-def _parameters_cached(combinator: Any) -> tuple[Parameter, ...]:
+def _parameters_cached(combinator: Callable[..., Any]) -> tuple[Parameter, ...]:
     """Return the parameters of a callable, from a bounded memo.
 
     Args:
-        combinator (Any): The callable to inspect.
+        combinator (Callable[..., Any]): The callable to inspect.
 
     Returns:
         tuple[Parameter, ...]: Its parameters, in declaration order.  A tuple rather than a list,
@@ -61,11 +61,11 @@ def _parameters_cached(combinator: Any) -> tuple[Parameter, ...]:
     return tuple(signature(combinator).parameters.values())
 
 
-def _parameters_of(combinator: Any) -> tuple[Parameter, ...]:
+def _parameters_of(combinator: Callable[..., Any]) -> tuple[Parameter, ...]:
     """Return the parameters of a callable, through the memo wherever that is possible.
 
     Args:
-        combinator (Any): The callable to inspect.
+        combinator (Callable[..., Any]): The callable to inspect.
 
     Returns:
         tuple[Parameter, ...]: Its parameters, in declaration order.
