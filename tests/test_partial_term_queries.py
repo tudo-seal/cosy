@@ -22,85 +22,24 @@ from cosy.core.types import Arrow, Intersection
 from tests.search_fixtures import (
     EXPR,
     PAIR,
+    A,
+    B,
+    C,
+    a_only,
     add,
+    b_only,
+    c_ab,
     constrained_space,
     expression_space,
     lit,
+    multi_path_space,
     neg,
     one,
     pair,
     wrap,
+    wrap_c,
     zero,
 )
-
-A = Constructor("A")
-B = Constructor("B")
-C = Constructor("C")
-
-
-# ---------------------------------------------------------------------------
-# A space whose target is reached by two clauses sharing their terminal
-# ---------------------------------------------------------------------------
-
-
-def c_ab() -> str:
-    """Build the constant that inhabits both argument sorts.
-
-    Returns:
-        str: Its rendering under ``interpret``.
-    """
-    return "c"
-
-
-def a_only() -> str:
-    """Build the constant that inhabits ``A`` alone.
-
-    Returns:
-        str: Its rendering under ``interpret``.
-    """
-    return "a"
-
-
-def b_only() -> str:
-    """Build the constant that inhabits ``B`` alone.
-
-    Returns:
-        str: Its rendering under ``interpret``.
-    """
-    return "b"
-
-
-def wrap_c(x: str) -> str:
-    """Build the unary combinator with two paths onto ``C``.
-
-    Args:
-        x (str): The interpreted child.
-
-    Returns:
-        str: Its rendering under ``interpret``.
-    """
-    return f"f({x})"
-
-
-def multi_path_space():
-    """Build the space in which one position is reached by two clauses.
-
-    ``wrap_c : (A -> C) & (B -> C)`` has two paths of arity one onto ``C``, so the inhabitation
-    emits two clauses for ``C`` that share their terminal and differ in their argument sort. The
-    completions of a variable under ``wrap_c`` are the union: ``c_ab`` and ``a_only`` through ``A``,
-    ``c_ab`` and ``b_only`` through ``B``.
-
-    Returns:
-        SolutionSpace: The space, started at ``C``.
-    """
-    specs = {
-        c_ab: Intersection(A, B),
-        a_only: A,
-        b_only: B,
-        wrap_c: Intersection(Arrow(A, C), Arrow(B, C)),
-    }
-    return Synthesizer(specs).construct_solution_space(C)
-
 
 T = Constructor("T")
 

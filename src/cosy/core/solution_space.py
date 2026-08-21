@@ -88,6 +88,10 @@ class RHSRule(Generic[NT, T, G]):
 
 Path = tuple[int, ...]
 
+# The clause order of a search rule: it arranges the applicable rules of one expansion into a
+# sequence containing each of them exactly once, possibly at random.
+ClauseOrder = Callable[[Sequence["RHSRule[NT, T, G]"]], Sequence["RHSRule[NT, T, G]"]]
+
 
 class Goal(Generic[NT, T, G]):
     """A goal models a Tree/Combinatory Term with variables.
@@ -317,6 +321,73 @@ class Goal(Generic[NT, T, G]):
         we return the updated goal.
         """
         return Goal(new_constructors, new_subgoals, new_grounded, new_constraints, success=False)
+
+
+def fewest_arguments_first(
+    applicable: Sequence[RHSRule[NT, T, G]],
+) -> Sequence[RHSRule[NT, T, G]]:
+    """Arrange the clauses of one expansion by the number of holes they open.
+
+    The default clause order of the uninformed search rules, and the reason a depth-first search
+    returns anything at all on a recursive space. A clause with fewer non-terminal arguments
+    leaves fewer holes behind, so exploring those first reaches a success node at a bounded depth,
+    where a recursive clause descends until the bound of the enumeration stops it, or forever if
+    there is none.
+
+    It used to sit in the depth-first frontier as a sort over the goals of an expansion. A search
+    rule is a frontier and a clause order, so a sort in the frontier is a third component, and it
+    silently overruled the clause order a caller passed in. As a clause order it is replaceable,
+    which is what a randomizing search rule needs.
+
+    The sort is stable, so clauses opening equally many holes keep their program order.
+
+    Args:
+        applicable (Sequence[RHSRule[NT, T, G]]): The applicable clauses of one expansion.
+
+    Returns:
+        Sequence[RHSRule[NT, T, G]]: The clauses, fewest non-terminal arguments first.
+    """
+    return sorted(
+        applicable,
+        key=lambda rule: sum(1 for argument in rule.arguments if isinstance(argument, NonTerminalArgument)),
+    )
+
+
+def deepest_first_subgoal(goal: Goal[NT, T, G]) -> tuple[Path, NonTerminalArgument[NT]]:
+    """Select the subgoal to expand: the deepest open one, leftmost among those.
+
+    The computation rule of the uninformed instances below, which carried it as a copy of one
+    closure each. One function is what keeps them expanding nodes in the same order, and it is
+    what a caller can point at to expand them the same way.
+
+    It is a computation rule, not a clause order: it picks which hole is filled next, while the
+    clause order arranges the clauses that may fill it. An unbounded enumeration streams the same
+    inhabitants whichever one is chosen, only the shape of the derivation tree differs. Under
+    ``max_count`` the shape decides which prefix of them is reached.
+
+    Selecting the deepest position is also what makes ``Goal.subgoals`` safe to read directly. An
+    expanded spine position stays a subgoal until its subtree grounds, but a strictly deeper hole
+    always exists below it, so this rule never selects one.
+
+    Args:
+        goal (Goal[NT, T, G]): The search node to expand. Must carry an open subgoal.
+
+    Returns:
+        tuple[Path, NonTerminalArgument[NT]]: The selected position and its non-terminal.
+
+    Raises:
+        ValueError: If the goal has no subgoal left. A success node has nothing to expand, and
+            silently returning something would hide a caller that failed to test for success.
+    """
+    if not goal.subgoals:
+        msg = "a goal without subgoals is a success node and cannot be expanded"
+        raise ValueError(msg)
+    deepest = max(len(position) for position in goal.subgoals)
+    # leftmost among the deepest, assuming new subgoals are added "to the left" of the old ones
+    return min(
+        ((position, argument) for position, argument in goal.subgoals.items() if len(position) == deepest),
+        key=lambda item: item[0][-1],
+    )
 
 
 class _OrderedSet(MutableSet[_E]):
@@ -906,6 +977,50 @@ class SolutionSpace(Generic[NT, T, G]):
         return
 
     # --- helpers for goal_from_tree / contains_tree ---------------------------------
+    @staticmethod
+    def _in_clause_order(
+        applicable: Sequence[RHSRule[NT, T, G]],
+        clause_order: ClauseOrder[NT, T, G] | None,
+    ) -> Sequence[RHSRule[NT, T, G]]:
+        """Arrange the applicable rules of one expansion into the order the search explores them.
+
+        The one place a search rule draws its randomness, and therefore the one place that has to
+        be asked wherever an expansion happens: the generator's initial goals, a partial term's
+        initial goals, and every step of the walk that derives them alike. A clause order is a
+        permutation of its input, so which rules take part never depends on it.
+
+        The result is a fresh sequence, also when there is no order to apply. ``_rules_of`` hands
+        out the live deque of a non-terminal, and ``resolution`` runs caller-supplied code, its
+        ``goal_filter``, inside its loop over these rules. Handing the deque straight through
+        would let a filter that touches the space raise ``deque mutated during iteration`` where
+        the same code worked before.
+
+        This orders one expansion, and whoever consumes the result owes it to keep the direction.
+        ``resolution`` hands it to the frontier, and ``goal_from_tree`` reverses before pushing,
+        because its own frontier pops from the right. A clause order therefore means the same
+        thing at the root of a query and two levels down.
+
+        Args:
+            applicable (Sequence[RHSRule[NT, T, G]]): The rules of one expansion.
+            clause_order (ClauseOrder[NT, T, G] | None): The order, or None for program order.
+
+        Returns:
+            Sequence[RHSRule[NT, T, G]]: The rules in the order the search explores them.
+
+        Raises:
+            ValueError: If the order returns a different number of rules than it was given. It is
+                a permutation of its input, and an order that drops one leaves the inhabitants of
+                that clause out of the stream without any sign of it.
+        """
+        rules = tuple(applicable)
+        if clause_order is None:
+            return rules
+        ordered = clause_order(rules)
+        if len(ordered) != len(rules):
+            msg = f"a clause order is a permutation: got {len(ordered)} rules for an expansion of {len(rules)}"
+            raise ValueError(msg)
+        return ordered
+
     def _rule_matches_subtree(self, rhs: RHSRule[NT, T, G], subtree: Tree[T]) -> bool:
         """Return True if rhs can match the given subtree head (arity, terminal and constant leaf args).
 
@@ -928,7 +1043,12 @@ class SolutionSpace(Generic[NT, T, G]):
                 return False
         return True
 
-    def _initial_goals_for(self, start: NT, tree: Tree[T]) -> list[Goal[NT, T, G]]:
+    def _initial_goals_for(
+        self,
+        start: NT,
+        tree: Tree[T],
+        clause_order: ClauseOrder[NT, T, G] | None = None,
+    ) -> list[Goal[NT, T, G]]:
         """Build initial goals from rules for `start` that match the root `tree`.
 
         Filters out None results from Goal.from_rhs_rule.
@@ -936,19 +1056,27 @@ class SolutionSpace(Generic[NT, T, G]):
         Args:
             start (NT): _description_
             tree (Tree[T]): _description_
+            clause_order (ClauseOrder[NT, T, G] | None): The order of the expansion. None keeps
+                the program order. (Default value = None)
 
         Returns:
             list[Goal[NT, T, G]]: _description_
         """
         goals: list[Goal[NT, T, G]] = []
-        for rhs in self._rules_of(start):
+        for rhs in self._in_clause_order(self._rules_of(start), clause_order):
             if self._rule_matches_subtree(rhs, tree):
                 g = Goal.from_rhs_rule(rhs)
                 if g is not None:
                     goals.append(g)
         return goals
 
-    def _expand_goal_at(self, goal: Goal[NT, T, G], child_pos: Path, tree: Tree[T]) -> list[Goal[NT, T, G]]:
+    def _expand_goal_at(
+        self,
+        goal: Goal[NT, T, G],
+        child_pos: Path,
+        tree: Tree[T],
+        clause_order: ClauseOrder[NT, T, G] | None = None,
+    ) -> list[Goal[NT, T, G]]:
         """Expand a single subgoal at `child_pos` of `goal` and return the list of resulting goals.
 
         This calls `goal.update(...)` for every rule that matches the corresponding subtree and
@@ -958,6 +1086,8 @@ class SolutionSpace(Generic[NT, T, G]):
             goal (Goal[NT, T, G]): _description_
             child_pos (Path): _description_
             tree (Tree[T]): _description_
+            clause_order (ClauseOrder[NT, T, G] | None): The order of the expansion. None keeps
+                the program order. (Default value = None)
 
         Returns:
             list[Goal[NT, T, G]]: _description_
@@ -968,7 +1098,7 @@ class SolutionSpace(Generic[NT, T, G]):
             return []
         nt = goal.subgoals[child_pos].origin
         results: list[Goal[NT, T, G]] = []
-        for rhs in self._rules_of(nt):
+        for rhs in self._in_clause_order(self._rules_of(nt), clause_order):
             if self._rule_matches_subtree(rhs, subtree):
                 new = goal.update(rhs, child_pos)
                 if new is not None:
@@ -1001,12 +1131,19 @@ class SolutionSpace(Generic[NT, T, G]):
 
         return has_open_at_pos or is_complete_leaf
 
-    def goal_from_tree(self, start: NT, tree: Tree[T], pos: Path) -> Iterable[Goal[NT, T, G]]:
+    def goal_from_tree(
+        self,
+        start: NT,
+        tree: Tree[T],
+        pos: Path,
+        *,
+        clause_order: ClauseOrder[NT, T, G] | None = None,
+    ) -> Iterable[Goal[NT, T, G]]:
         """Build the goals of the partial-term query for ``tree`` with a variable at ``pos``.
 
         Yields each goal once. For ``pos == ()`` these are the initial goals of every clause of
-        ``start``; otherwise a goal fixes ``tree`` around ``pos`` and leaves one open subgoal
-        there -- or none, where a clause covers a leaf ``pos`` with a constant argument. Those
+        ``start``. Otherwise a goal fixes ``tree`` around ``pos`` and leaves one open subgoal
+        there, or none where a clause covers a leaf ``pos`` with a constant argument. Those
         goals describe the subterms that complete the partial term into an inhabitant.
 
         A non-terminal is in general reached by more than one clause: for an intersection of
@@ -1023,6 +1160,9 @@ class SolutionSpace(Generic[NT, T, G]):
             tree (Tree[T]): The prescribed term. Nothing at or below ``pos`` constrains the query,
                 except where the enclosing clause prescribes a constant argument at ``pos``.
             pos (Path): The position of the variable.
+            clause_order (ClauseOrder[NT, T, G] | None): The order of the search rule, applied to
+                every expansion of the walk, the initial one included. None keeps the program
+                order. (Default value = None)
 
         Yields:
             Goal[NT, T, G]: One goal per success branch of the query.
@@ -1041,7 +1181,7 @@ class SolutionSpace(Generic[NT, T, G]):
             # The variable is the whole term, so nothing of ``tree`` constrains the query.
             # ``_initial_goals_for`` matches the clauses against the root of ``tree``, which the
             # caller is about to replace, and would keep only those sharing its terminal.
-            for rhs in self._rules_of(start):
+            for rhs in self._in_clause_order(self._rules_of(start), clause_order):
                 initial = Goal.from_rhs_rule(rhs)
                 if initial is not None:
                     yield initial
@@ -1051,7 +1191,12 @@ class SolutionSpace(Generic[NT, T, G]):
         leaf_positions = tree.leaf_positions()
         is_pos_leaf = pos in leaf_positions
 
-        pending_goals: deque[Goal[NT, T, G]] = deque(self._initial_goals_for(start, tree))
+        # Reversed on the way in, and again at every expansion below. The frontier of this walk
+        # pops from the right, so pushing the goals of an expansion in clause order would explore
+        # them back to front. The ``pos == ()`` shortcut above yields straight to its caller and
+        # therefore runs with the order, and the two have to agree. A clause order means the same
+        # thing at every position of a query or it means nothing at any of them.
+        pending_goals: deque[Goal[NT, T, G]] = deque(reversed(self._initial_goals_for(start, tree, clause_order)))
 
         while pending_goals:
             goal = pending_goals.pop()
@@ -1066,11 +1211,13 @@ class SolutionSpace(Generic[NT, T, G]):
             ]
             # ``open_children`` is not empty: it is empty only when every non-prefix subgoal is
             # ``pos``, which is what ``_is_goal_for_position`` accepts above.
-            # Deepest open subgoal, leftmost among those: the selection the uninformed
-            # resolution strategies use.
+            # Deepest open subgoal, leftmost among those, which is the depth selection the
+            # uninformed resolution strategies make. Ties among equally deep positions are broken
+            # over the whole path here and over the last index in ``deepest_first_subgoal``, which
+            # differ only for positions under different parents.
             deepest = max(len(child) for child in open_children)
             child_pos = min(child for child in open_children if len(child) == deepest)
-            pending_goals.extend(self._expand_goal_at(goal, child_pos, tree))
+            pending_goals.extend(reversed(self._expand_goal_at(goal, child_pos, tree, clause_order)))
 
     def resolution(
         self,
@@ -1082,10 +1229,23 @@ class SolutionSpace(Generic[NT, T, G]):
         max_depth: int | None = None,
         tree: Tree[T] | None = None,
         pos: Path | None = None,
+        *,
+        clause_order: ClauseOrder[NT, T, G] | None = None,
+        goal_filter: Callable[[Goal[NT, T, G]], bool] | None = None,
     ) -> Iterable[Tree[T]]:
         """Enumerate terms implemented via SLD-Resolution.
 
         The NT start is the request/ first goal.
+
+        This method is the generic search rule, and a search rule is a pair of a frontier and a
+        clause order. The frontier is ``variance_strategy_push`` and ``variance_strategy_pop``.
+        Its structure decides which goal leaves next, and the success test happens when a goal
+        leaves the frontier, not when it is created. The clause order is ``clause_order``. It
+        arranges the applicable rules of one expansion into a sequence, which on an infinite
+        derivation tree decides which branches are explored first, and it is the one place a
+        randomized search rule draws its randomness. ``subgoal_selection_strategy`` is the
+        computation rule, a parameter independent of the search rule: it selects the subgoal to
+        expand, and an unbounded enumeration streams the same inhabitants whichever one it is.
 
         If the solution space is not pruned, resolution may lead to unexpected behavior.
 
@@ -1142,6 +1302,25 @@ class SolutionSpace(Generic[NT, T, G]):
             max_depth (int | None): _description_ (Default value = None)
             tree (Tree[T] | None): _description_ (Default value = None)
             pos (Path | None): _description_ (Default value = None)
+            clause_order (ClauseOrder[NT, T, G] | None): The order of the search rule: it
+                arranges the applicable rules of one expansion into a sequence containing each of
+                them exactly once, possibly at random. None keeps the program order, and the
+                named instances below pass ``fewest_arguments_first`` in its place. It reaches
+                every expansion of the run, the initial one included, and on a partial-term query
+                that means the walk ``goal_from_tree`` makes as well: those goals are handed to
+                the frontier in one push, so their order is a decision of the search rule like
+                any other. (Default value = None)
+            goal_filter (Callable[[Goal[NT, T, G]], bool] | None): An expansion filter. A child
+                the predicate rejects is dropped where it is created, exactly as a child
+                violating a ground constraint is. ``max_depth`` is the bound the engine carries
+                itself, and a bound on any other property of a node needs this one. The two are
+                not applied at the same points: this filter also runs on the goals a query starts
+                with, ``max_depth`` only on the children of an expansion. Bounding the depth of the partial inhabitant is the case in hand, which is
+                not what ``max_depth`` measures: that bounds the length of the open positions and
+                stops seeing a subtree once it grounds. The two agree on the terms a
+                deepest-first computation rule streams, which is a property of that rule rather
+                than of the bound. The filter runs on successful children too, so what it
+                rejects is genuinely unreachable. (Default value = None)
 
         Yields:
             Tree[T]: _description_
@@ -1150,45 +1329,59 @@ class SolutionSpace(Generic[NT, T, G]):
         if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return
 
+        def ordered_rules(applicable: Sequence[RHSRule[NT, T, G]]) -> Sequence[RHSRule[NT, T, G]]:
+            """Apply the clause order to one applicable-rule sequence.
+
+            Args:
+                applicable (Sequence[RHSRule[NT, T, G]]): The rules of one expansion.
+
+            Returns:
+                Sequence[RHSRule[NT, T, G]]: The rules in the order the search explores them.
+            """
+            return self._in_clause_order(applicable, clause_order)
+
         all_results: set[Tree[T]] = set()
 
         # Initialize
-        # goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules[start]]
         goals: Iterable[Goal[NT, T, G] | None] = []
         if tree is not None and pos is not None:
-            goals = self.goal_from_tree(start, tree, pos)
+            goals = self.goal_from_tree(start, tree, pos, clause_order=clause_order)
         else:
-            goals = [Goal.from_rhs_rule(rhs) for rhs in self._rules_of(start)]
-        # yield all solutions for already successful initial goals
-        non_successful_goals: list[Goal[NT, T, G]] = []
-        for goal in goals:
-            if goal is not None:
-                if goal.success:
-                    new_term = goal.grounded[()][1]
-                    if new_term not in all_results:
-                        # depth 0
-                        yield new_term
-                        all_results.add(new_term)
-                        if max_count is not None and len(all_results) >= max_count:
-                            return
-                else:
-                    # Append, do not prepend: sorted() is stable, so prepending would break ties
-                    # among the initial goals in reverse rule order while every later level, whose
-                    # goals arrive in rule order, breaks them in rule order.
-                    non_successful_goals.append(goal)
+            goals = [Goal.from_rhs_rule(rhs) for rhs in ordered_rules(self._rules_of(start))]
 
-        if max_depth is not None and max_depth == 0:
-            return
-
-        variance: deque[Goal] = variance_strategy_push(deque(), non_successful_goals)
+        # The success test happens when a goal leaves the frontier, never when it enters it. A
+        # search rule is a frontier and a clause order, and between them they decide the order of
+        # the stream. Handing out a goal the moment it turns out successful takes that decision
+        # away from both, and the effect was not subtle: a start symbol with a nullary clause
+        # streamed that clause's term first under every clause order and every frontier, so a
+        # search rule drawing its randomness from the clause order drew the same term on every
+        # seed, and no other inhabitant could ever be its first element.
+        variance: deque[Goal] = variance_strategy_push(
+            deque(),
+            [goal for goal in goals if goal is not None and (goal_filter is None or goal_filter(goal))],
+        )
 
         # Selection, Unification, Derivation and Termination
         while variance:
             variance, current_goal = variance_strategy_pop(variance)
+
+            if current_goal.success:
+                new_term = current_goal.grounded[()][1]
+                if new_term not in all_results:
+                    yield new_term
+                    all_results.add(new_term)
+                    if max_count is not None and len(all_results) >= max_count:
+                        return
+                continue
+
+            if max_depth is not None and max_depth == 0:
+                # no expansion at all, so only the goals the query started with can succeed
+                continue
+
             # Selection:
             p, nt = subgoal_selection_strategy(current_goal)
             # Unification
-            applicable_rules = self._rules_of(nt.origin)
+            applicable_rules = ordered_rules(self._rules_of(nt.origin))
             # A list, not a set: Goal defines neither __eq__ nor __hash__, so a set never
             # deduplicated anything here -- it only scattered the goals over their object
             # addresses and handed them back in an allocation-dependent order, which is what made
@@ -1203,16 +1396,10 @@ class SolutionSpace(Generic[NT, T, G]):
                         depth = max(len(p) for p in paths)
                         if depth > max_depth:
                             continue
-                    # Termination
-                    if new_goal.success:
-                        new_term = new_goal.grounded[()][1]
-                        if new_term not in all_results:
-                            yield new_term
-                            all_results.add(new_term)
-                            if max_count is not None and len(all_results) >= max_count:
-                                return
-                    else:
-                        new_goals.append(new_goal)
+                    if goal_filter is not None and not goal_filter(new_goal):
+                        continue
+                    # Termination is tested when the goal leaves the frontier, see above
+                    new_goals.append(new_goal)
             variance = variance_strategy_push(variance, new_goals)
         return
 
@@ -1223,12 +1410,20 @@ class SolutionSpace(Generic[NT, T, G]):
         max_depth: int | None = None,
         tree: Tree[T] | None = None,
         pos: Path | None = None,
+        *,
+        clause_order: ClauseOrder[NT, T, G] | None = None,
+        goal_filter: Callable[[Goal[NT, T, G]], bool] | None = None,
     ) -> Iterable[Tree[T]]:
         """A simple implementation of SLD-Resolution with depth-first search in the SLD-Derivation-Tree.
 
-        The goal selection is not leftmost: among the open subgoals it takes the deepest ones and,
-        among those, the leftmost. Whether true leftmost selection would be the right semantics is
-        a question about the inhabitation algorithm itself and is not decided here.
+        The goal selection is ``deepest_first_subgoal``, so it is not leftmost: among the open
+        subgoals it takes the deepest ones and, among those, the leftmost. Whether true leftmost
+        selection would be the right semantics is a question about the inhabitation algorithm
+        itself and is not decided here.
+
+        The default clause order is ``fewest_arguments_first``. A depth-first search that took
+        the clauses in program order would descend into a recursive clause and never come back,
+        so the bound of the enumeration is what would end the run rather than a success node.
 
         Args:
             start (NT): _description_
@@ -1236,6 +1431,11 @@ class SolutionSpace(Generic[NT, T, G]):
             max_depth (int | None): _description_ (Default value = None)
             tree (Tree[T] | None): _description_ (Default value = None)
             pos (Path | None): _description_ (Default value = None)
+            clause_order (ClauseOrder[NT, T, G] | None): The order of the search rule. None takes
+                ``fewest_arguments_first``, and a caller that passes one replaces it rather than
+                joining it. (Default value = None)
+            goal_filter (Callable[[Goal[NT, T, G]], bool] | None): The expansion filter of
+                ``resolution``. (Default value = None)
 
         Returns:
             Iterable[Tree[T]]: _description_
@@ -1251,10 +1451,18 @@ class SolutionSpace(Generic[NT, T, G]):
             Returns:
                 deque[Goal]: _description_
             """
-            ordered = sorted(new_goals, key=lambda g: len(g.subgoals))  # fewest subgoals first
-            # extendleft inserts in reverse, so pushing `ordered` directly would make popleft
-            # return the goal with the MOST subgoals first -- the opposite of the intent.
-            queue.extendleft(reversed(ordered))  # depth-first search <~> LIFO
+            # In clause order, with no sort of its own. A search rule is a frontier and a clause
+            # order, so the sort by subgoal count that used to stand here was a third component
+            # overruling the second: it put successful goals, which have zero subgoals, at the
+            # front of every expansion, so no clause order could decide which inhabitant is
+            # streamed first. The sort itself is worth keeping, and it is a clause order: the
+            # children of one expansion differ in their subgoal count only by the number of
+            # non-terminal arguments of the clause applied, so sorting them by the one is sorting
+            # them by the other. It moved to ``fewest_arguments_first``, where a caller can
+            # replace it.
+            # extendleft inserts in reverse, so the reversal here makes popleft return the goals
+            # in the order the clause order produced.
+            queue.extendleft(reversed(list(new_goals)))  # depth-first search <~> LIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
@@ -1268,29 +1476,17 @@ class SolutionSpace(Generic[NT, T, G]):
             """
             return queue, queue.popleft()  # depth-first search <~> LIFO
 
-        def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
-            """_summary_.
-
-            Args:
-                goal (Goal): _description_
-
-            Returns:
-                tuple[Path, NonTerminalArgument[NT]]: _description_
-            """
-            max_len = max(len(p) for p in goal.subgoals)
-            filtered = filter(lambda x: len(x[0]) == max_len, goal.subgoals.items())
-            return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
-            # assuming new subgoals (deeper positions) are added "to the left" of the old ones
-
         return self.resolution(
             start,
             variance_strategy_push,
             variance_strategy_pop,
-            goal_selection_strategy,
+            deepest_first_subgoal,
             max_count,
             max_depth,
             tree,
             pos,
+            clause_order=fewest_arguments_first if clause_order is None else clause_order,
+            goal_filter=goal_filter,
         )
 
     def sample_tree(
@@ -1307,9 +1503,6 @@ class SolutionSpace(Generic[NT, T, G]):
         max_depth is None, as it may get stuck in an infinite branch of the SLD-Derivation-Tree.
         Additionally the user has to ensure that the solution space is not empty, as an empty solution space can lead
         to nontermination as well.
-
-        TODO: Because resolution directly returns all successful goals after the first derivation step without pushing
-              goals to the stack, this method currently doens't work with requests, were depth 0 terms are allowed!
 
         Args:
             start (NT): _description_
@@ -1389,12 +1582,20 @@ class SolutionSpace(Generic[NT, T, G]):
         max_depth: int | None = None,
         tree: Tree[T] | None = None,
         pos: Path | None = None,
+        *,
+        clause_order: ClauseOrder[NT, T, G] | None = None,
+        goal_filter: Callable[[Goal[NT, T, G]], bool] | None = None,
     ) -> Iterable[Tree[T]]:
         """A simple implementation of SLD-Resolution with breadth-first search in the SLD-Derivation-Tree.
 
-        The goal selection is not leftmost: among the open subgoals it takes the deepest ones and,
-        among those, the leftmost. Whether true leftmost selection would be the right semantics is
-        a question about the inhabitation algorithm itself and is not decided here.
+        The goal selection is ``deepest_first_subgoal``, so it is not leftmost: among the open
+        subgoals it takes the deepest ones and, among those, the leftmost. Whether true leftmost
+        selection would be the right semantics is a question about the inhabitation algorithm
+        itself and is not decided here.
+
+        The default clause order is ``fewest_arguments_first``, as it is for the depth-first
+        instance. A queue reaches a success node without it, so here the default is what keeps
+        the two instances comparable rather than what makes the search return.
 
         Args:
             start (NT): _description_
@@ -1402,6 +1603,11 @@ class SolutionSpace(Generic[NT, T, G]):
             max_depth (int | None): _description_ (Default value = None)
             tree (Tree[T] | None): _description_ (Default value = None)
             pos (Path | None): _description_ (Default value = None)
+            clause_order (ClauseOrder[NT, T, G] | None): The order of the search rule. None takes
+                ``fewest_arguments_first``, and a caller that passes one replaces it rather than
+                joining it. (Default value = None)
+            goal_filter (Callable[[Goal[NT, T, G]], bool] | None): The expansion filter of
+                ``resolution``. (Default value = None)
 
         Returns:
             Iterable[Tree[T]]: _description_
@@ -1417,10 +1623,10 @@ class SolutionSpace(Generic[NT, T, G]):
             Returns:
                 deque[Goal]: _description_
             """
-            ordered = sorted(new_goals, key=lambda g: len(g.subgoals))  # fewest subgoals first
+            # In clause order, for the reason the depth-first push gives.
             # extend appends in order and popleft reads from the front, so unlike the depth-first
             # push above this one needs no reversal.
-            queue.extend(ordered)  # breadth-first search <~> FIFO
+            queue.extend(new_goals)  # breadth-first search <~> FIFO
             return queue
 
         def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
@@ -1434,29 +1640,17 @@ class SolutionSpace(Generic[NT, T, G]):
             """
             return queue, queue.popleft()  # breadth-first search <~> FIFO
 
-        def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
-            """_summary_.
-
-            Args:
-                goal (Goal): _description_
-
-            Returns:
-                tuple[Path, NonTerminalArgument[NT]]: _description_
-            """
-            max_len = max(len(p) for p in goal.subgoals)
-            filtered = filter(lambda x: len(x[0]) == max_len, goal.subgoals.items())
-            return min(filtered, key=lambda item: item[0][-1])  # leftmost selection,
-            # assuming new subgoals (deeper positions) are added "to the left" of the old ones
-
         return self.resolution(
             start,
             variance_strategy_push,
             variance_strategy_pop,
-            goal_selection_strategy,
+            deepest_first_subgoal,
             max_count,
             max_depth,
             tree,
             pos,
+            clause_order=fewest_arguments_first if clause_order is None else clause_order,
+            goal_filter=goal_filter,
         )
 
     def contains_tree(self, start: NT, tree: Tree[T], interpretation: dict[T, Any] | None = None) -> bool:
