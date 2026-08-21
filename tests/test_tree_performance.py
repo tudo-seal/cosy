@@ -196,10 +196,7 @@ def test_replace_subtree_at_shares_everything_off_the_path() -> None:
     """Only the nodes between the root and the replaced position are new.
 
     This is the contract the docstring states, and the reason a replacement is cheap: an offspring
-    assembled by crossover costs the depth of the crossover point, not the size of the parent.  It
-    is also what keeps the per-node interpretation cache useful across a generation -- a rebuilt
-    node starts out with an empty one, so a copying implementation would make every individual
-    look new to ``interpret`` even where nothing about it changed.
+    assembled by crossover costs the depth of the crossover point, not the size of the parent.
     """
     tree = Tree("f", (Tree("g", (Tree("x"), Tree("w"))), Tree("y")))
     replacement = Tree("z")

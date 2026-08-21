@@ -11,9 +11,8 @@ The tests below are in three groups.  The first fixes the properties that must h
 implementation does.  The second is about the cached fields specifically: a replacement has to
 recompute them.  The third asks the same question about pickling, which is the other way a node can
 be asked what belongs to it: the derived fields must stay out of the stream.  ``_hash`` because a
-hash computed under another process's seed breaks the very contract the first group fixes, the
-interpretation cache because its key stops naming anything once it has travelled, and the position
-sets because carrying them is waste.
+hash computed under another process's seed breaks the very contract the first group fixes, and the
+position sets because carrying them is waste.
 """
 
 import os
@@ -446,9 +445,10 @@ def test_the_interpretation_is_left_behind_and_never_blocks_pickling() -> None:
     A node used to keep the result of its last evaluation, together with the interpretation that
     produced it, and that was a bug in both directions.  Outward: the interpretation held a lambda,
     and a single interpreted node therefore failed to pickle at all.  Terms are pickled to move a
-    population between processes, and an algebra assembled from lambdas is the ordinary case.  Inward: the entry was keyed on ``id(interpretation)``, and a round trip
-    rebuilds that dictionary elsewhere, so the key stopped naming what the entry held.  A node
-    holds no result at all now, and this test keeps it that way.
+    population between processes, and an algebra assembled from lambdas is the ordinary case.
+    Inward: the entry was keyed on ``id(interpretation)``, and a round trip rebuilds that
+    dictionary elsewhere, so the key stopped naming what the entry held.  A node holds no result
+    at all now, and this test keeps it that way.
     """
     tree = Tree("add", (Tree("one"), Tree("two")))
     assert tree.interpret({"add": _sum_of, "one": _one, "two": _two}) == 3

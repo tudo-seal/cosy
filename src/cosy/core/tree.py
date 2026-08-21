@@ -18,27 +18,28 @@ T = TypeVar("T", bound=Hashable)
 Path = tuple[int, ...]
 
 
-# ``inspect.signature`` costs about 5.4 microseconds, and ``interpret`` asked it once per
-# occurrence of a combinator rather than once per combinator.  A chain of five thousand nodes over
-# two combinators paid five thousand times for two answers.  The memo is keyed on the combinator,
-# which is what carries the signature.
+# ``inspect.signature`` is called in ``interpret`` once per occurrence of a combinator, at about
+# 5.4 microseconds per call. Memoization reduces this to once per combinator.
 #
-# What the bound has to hold is the set of combinators evaluated together, which is the size of a
-# component repository: 3 to 7 in the examples here, 4 in the benchmarks, and 24 to 49 in the
-# largest algebras in use elsewhere.  An LRU that no longer holds its working set drops to a zero
-# hit rate at once rather than declining, because every lookup evicts the entry the next one asks
-# for.  Measured over 200 combinators, ``maxsize=128`` runs about ninety times slower than
-# ``maxsize=1024``.  ``_parameters_cached.cache_info()`` reports a set that no longer fits.
+# What the bound must hold is the number of combinators evaluated together, which is at most the
+# size of a component repository: 3 to 7 in the examples here, 4 in the benchmarks, and 24 to 49
+# in the largest practical scenarios. An LRU that no longer holds that set falls to a zero hit
+# rate at once rather than declining, because every lookup evicts the entry the next one asks for.
+# Measured over 200 combinators, ``maxsize=128`` runs about ninety times slower than
+# ``maxsize=1024``.
 #
-# The bound also limits retention.  A caller that builds a fresh algebra per evaluation gets its
-# hits within one call and none across calls, so an unbounded memo keeps every callable it has
-# seen, with whatever those callables close over.  Measured on that pattern, it grew to 200000
-# entries in 50000 evaluations and became slower than the bounded memo, since its table keeps
-# being rebuilt.
+# The cache key is the combinator object itself, and a function or a lambda hashes by identity. An
+# algebra rebuilt for every evaluation therefore presents new keys for the same signatures, and no
+# lookup hits across calls. The bound is what keeps such a caller from filling the cache with
+# callables it will never ask for again, together with whatever those callables close over.
+# Measured on that pattern, an unbounded memo grew to 200000 entries over 50000 evaluations and
+# became slower than the bounded one, since its table keeps being rebuilt. 1024 sits well above
+# the largest working set named above and well below the size at which retention costs anything.
+# See ``test_a_fresh_algebra_per_evaluation_does_not_grow_the_memo``.
 #
-# The memo holds metadata about a combinator, never the result of applying one.  Every combinator
-# is still called on every evaluation, so an interpretation may have side effects and may answer
-# differently each time.  See ``tests/test_interpretation_semantics.py``.
+# The cache holds static metadata about a combinator. Every combinator is still called on every
+# evaluation, so an interpretation may have side effects and may answer differently each time. See
+# ``tests/test_interpretation_semantics.py``.
 @lru_cache(maxsize=1024)
 def _parameters_cached(combinator: Callable[..., Any]) -> tuple[Parameter, ...]:
     """Return the parameters of a callable, from a bounded memo.
@@ -47,16 +48,14 @@ def _parameters_cached(combinator: Callable[..., Any]) -> tuple[Parameter, ...]:
         combinator (Callable[..., Any]): The callable to inspect.
 
     Returns:
-        tuple[Parameter, ...]: Its parameters, in declaration order.  A tuple rather than a list,
+        tuple[Parameter, ...]: Its parameters, in declaration order. A tuple rather than a list,
             because the memo hands out the object it stored.
 
     Raises:
-        ValueError: If ``combinator`` exposes no signature.  ``interpret`` turns this into a
-            ``TypeError`` naming the combinator.  A memo that swallowed it would answer wrongly
-            instead of reporting the failure.
-        TypeError: If ``combinator`` cannot be a memo key, raised by ``lru_cache`` before this
-            body runs, or if ``signature`` cannot inspect it.  ``_parameters_of`` tells the two
-            apart.
+        ValueError: If ``combinator`` exposes no signature. ``interpret`` turns this into a
+            ``TypeError`` naming the combinator.
+        TypeError: If ``combinator`` cannot be a memo key, raised by ``lru_cache`` before this body
+            runs, or if ``signature`` cannot inspect it. ``_parameters_of`` tells the two apart.
     """
     return tuple(signature(combinator).parameters.values())
 
@@ -73,20 +72,18 @@ def _parameters_of(combinator: Callable[..., Any]) -> tuple[Parameter, ...]:
     Raises:
         ValueError: If ``combinator`` exposes no signature, see ``_parameters_cached``.
         TypeError: If ``signature`` cannot inspect ``combinator``, for instance because it carries
-            a ``__signature__`` that is not a signature.  The other ``TypeError``, the one an
+            a ``__signature__`` that is not a signature. The other ``TypeError``, the one an
             unhashable combinator raises on the memo key, is handled below rather than reported.
     """
     try:
         return _parameters_cached(combinator)
     except TypeError:
-        # Two failures arrive as ``TypeError``, and retrying without the memo tells them apart.
-        # An unhashable combinator fails on the cache key before the body runs, a value object
-        # that defines ``__eq__`` and so has no ``__hash__`` being the common case.  Inspecting it
-        # directly is a detour around the memo rather than a failure, and it is the only path the
-        # memo adds, so it is tested.  A combinator that ``signature`` itself rejects raises again
-        # here and reaches the caller, as it did before the memo existed.  Checking hashability up
-        # front would hash every combinator a second time on the hot path, for a case that does
-        # not occur in practice.
+        # Two failures arrive as ``TypeError``, and retrying without the memo tells them apart. An
+        # unhashable combinator fails on the cache key before the body runs, the common case being
+        # a value object that defines ``__eq__`` and so has no ``__hash__``. A combinator that
+        # ``signature`` itself rejects raises again here and reaches the caller, as it did before
+        # the memo existed. Checking hashability up front would hash every combinator a second
+        # time on the hot path, for a case that does not occur in practice.
         return tuple(signature(combinator).parameters.values())
 
 
