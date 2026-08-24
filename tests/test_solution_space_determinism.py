@@ -281,7 +281,7 @@ def test_a_seeded_sample_repeats() -> None:
         "space = mixed_width_space()\n"
         'print([str(space.sample_tree("S", max_depth=4, rng=random.Random(seed))) for seed in range(3)])\n'
     )
-    assert printed == {"['top lf lf', 'top (un lf) lf', 'top (un (bi (tri lf lf lf) (un lf))) lf']"}
+    assert printed == {"['top lf lf', 'top (un lf) (un lf)', 'top (un (bi (tri lf lf lf) (un lf))) lf']"}
 
 
 # ---------------------------------------------------------------------------
