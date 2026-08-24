@@ -87,6 +87,22 @@ def _parameters_of(combinator: Callable[..., Any]) -> tuple[Parameter, ...]:
         return tuple(signature(combinator).parameters.values())
 
 
+# Subterms of at most this many positions are compared and rendered by recursive descent.  Larger
+# ones are compared and rendered iteratively.
+#
+# ``size`` counts positions, so a subterm of at most n positions is at most n levels deep, and the
+# descent is therefore bounded by this threshold rather than by the term.  Both operations used to
+# descend the whole term, which bounded the depth a term could have at a fixed fraction of the
+# interpreter's recursion limit, and terms grow past that.
+#
+# The descent is kept below the threshold because it is the tuple comparison, which runs in C,
+# where the iterative form allocates per node in Python, and ``__eq__`` carries every ``set`` of
+# terms, every ``dict.fromkeys`` and the fitness cache of the evolutionary algorithms.  The value
+# is a compromise: small enough for the descent to fit in a call stack that is already in use,
+# large enough that ordinary terms take it.
+_SMALL_ENOUGH = 64
+
+
 class Tree(Generic[T]):
     """Please only use immutably."""
 
@@ -129,26 +145,69 @@ class Tree(Generic[T]):
         return self.size < other.size
 
     def __eq__(self, other: object) -> bool:
-        """_summary_.
+        """Compare two terms position by position, iteratively above ``_SMALL_ENOUGH``.
+
+        The children were compared as a tuple, and comparing tuples compares their elements, so
+        equality descended one level per level of the term.  Two separately built copies of a
+        chain overflowed that descent at a fixed fraction of the interpreter's recursion limit,
+        and terms grow past it.  Every ``dict`` and every ``set`` keyed on terms carried the same
+        bound, because a lookup whose hash matches ends in a comparison: the fitness cache of the
+        evolutionary algorithms is keyed on terms, and so is the deduplication of a population.
+
+        Terms of at most ``_SMALL_ENOUGH`` positions are compared exactly as before, which is
+        both the fast path and what bounds the descent.  Larger ones are compared here, pair by
+        pair, stopping at the first position where the two terms disagree.  The loop compares
+        positions rather than nodes, so it does not dispatch to the ``__eq__`` of a subclass, and
+        the class does not support one anyway: ``_hash`` is computed from the root and the
+        children alone.
 
         Args:
-            other (object): _description_
+            other (object): The value to compare against.  Anything that is not a ``Tree`` is
+                unequal to every term.
 
         Returns:
-            bool: _description_
+            bool: Whether both terms carry the same label at the same positions.  A term is equal
+                to itself even where its root is not equal to itself, which is what a ``dict`` and
+                a ``set`` assumed all along and what the tuple comparison already did for a root
+                below the outermost one.
         """
+        if self is other:
+            return True
         if not isinstance(other, Tree):
             return False
-        return self.size == other.size and self.root == other.root and self.children == other.children
+        if not (self.size == other.size and self.root == other.root):
+            return False
+        if self.size <= _SMALL_ENOUGH:
+            return self.children == other.children
+        pending: list[tuple[Tree[Any], Tree[Any]]] = [(self, other)]
+        while pending:
+            left, right = pending.pop()
+            if left is right:
+                continue
+            if not (left.size == right.size and left.root == right.root):
+                return False
+            if left.size <= _SMALL_ENOUGH:
+                if left.children != right.children:
+                    return False
+                continue
+            if len(left.children) != len(right.children):
+                return False
+            pending.extend(zip(reversed(left.children), reversed(right.children), strict=True))
+        return True
 
     def __rec_to_str__(self, *, outermost: bool) -> str:
-        """_summary_.
+        """Render a subterm by recursive descent.
+
+        What bounds the descent is the caller: ``__str__`` hands over subterms of at most
+        ``_SMALL_ENOUGH`` positions and renders anything larger iteratively.  Called directly on
+        a term deeper than that, this overflows as it always did.
 
         Args:
-            outermost (bool): _description_
+            outermost (bool): Whether this node is the outermost one of the term being rendered.
+                Only the outermost application goes unbracketed.
 
         Returns:
-            str: _description_
+            str: The subterm in applicative notation.
         """
         str_root = [f"{self.root!s}"]
         str_args = [f"{subtree.__rec_to_str__(outermost=False)}" for subtree in self.children]
@@ -159,12 +218,39 @@ class Tree(Generic[T]):
         return " ".join(strings)
 
     def __str__(self) -> str:
-        """_summary_.
+        """Render the term in applicative notation, iteratively above ``_SMALL_ENOUGH``.
+
+        Rendering descended into every child, so a chain overflowed it at a fixed fraction of the
+        interpreter's recursion limit, as comparing did.  A term that cannot be rendered cannot be
+        named in a failure message either, and ``str(term)`` is the identity this package states
+        expectations about a term in.
+
+        What gets written is unchanged: a node with children becomes its label followed by its
+        children, bracketed unless it is the outermost node, and a node without children becomes
+        its label alone.  Terms of at most ``_SMALL_ENOUGH`` positions go to the recursive
+        renderer above.  Larger ones are carried here twice, once to descend into them and once to
+        join what their children left on ``rendered``, in the order they were visited.
 
         Returns:
-            str: _description_
+            str: The term, with every applied subterm but the outermost one in brackets.
         """
-        return self.__rec_to_str__(outermost=True)
+        if self.size <= _SMALL_ENOUGH:
+            return self.__rec_to_str__(outermost=True)
+        rendered: list[str] = []
+        pending: list[tuple[Tree[T], bool, bool]] = [(self, True, False)]
+        while pending:
+            node, outermost, joining = pending.pop()
+            if joining:
+                cut = len(rendered) - len(node.children)
+                joined = " ".join([f"{node.root!s}", *rendered[cut:]])
+                del rendered[cut:]
+                rendered.append(joined if outermost else f"({joined})")
+            elif node.size <= _SMALL_ENOUGH:
+                rendered.append(node.__rec_to_str__(outermost=outermost))
+            else:
+                pending.append((node, outermost, True))
+                pending.extend((child, False, False) for child in reversed(node.children))
+        return rendered[0]
 
     def __copy__(self) -> "Tree[T]":
         """Return a new root over the same children.
@@ -183,9 +269,10 @@ class Tree(Generic[T]):
     # protocol.  On Python 3.10 and 3.11 that recursion is bounded by the interpreter's recursion
     # limit: measured from inside a pytest run, a chain of 318 nodes is the deepest term that can
     # be written, against 238 before.  From 3.12 on the separate C recursion limit binds instead,
-    # at about 3325.  Terms do grow deeper than that, which is why ``subtree_at``, ``_walk`` and
-    # ``interpret`` are iterative, so pickling is the one place in this class where depth is still
-    # a limit.  The reduction below at least raises the ceiling by a third.
+    # at about 3325.  Terms do grow deeper than that, which is why ``subtree_at``, ``_walk``,
+    # ``interpret``, equality and rendering are iterative, so pickling is the one place in this
+    # class where depth is still a limit.  The reduction below at least raises the ceiling by a
+    # third.
     def __reduce__(self) -> tuple[type["Tree[T]"], tuple[T, tuple["Tree[T]", ...]]]:
         """Reconstruct through the constructor instead of through the instance dictionary.
 
