@@ -15,6 +15,15 @@ mutation that cannot happen:
 ``interpret`` had a fourth cost: it asked ``inspect.signature`` for the parameters of every
 combinator *occurrence*, and that call dominated the evaluation of a term.
 
+A fifth cost is paid in interpreter recursion rather than in time.  Comparing two terms compared
+their children as tuples, and rendering a term descended into every child, so both spent one level
+of recursion per level of the term.  That bounded the depth a term could have at a fixed fraction
+of the interpreter's recursion limit, and terms grow past it.  Every ``dict`` and every ``set``
+keyed on terms carried the same bound, the fitness cache of the evolutionary algorithms among
+them.  The tests at the end do not count that cost the way the ones below count calls.  They work
+on terms twice the recursion limit deep, which is the statement about the bound that does not
+depend on which interpreter runs it.
+
 The tests below count operations instead of measuring time.  A counted operation says the same
 thing on a loaded machine as on an idle one, whereas a wall-clock bound would only say how busy
 the machine running the suite happens to be.  Where the claim is about growth rather than about a
@@ -536,3 +545,60 @@ def test_the_memo_hands_out_something_a_caller_cannot_corrupt() -> None:
 
     assert isinstance(parameters, tuple)
     assert _parameters_of(combinator) is parameters
+
+
+# ---------------------------------------------------------------------------
+# Depth -- what an operation spends per level of a term
+# ---------------------------------------------------------------------------
+
+
+def test_two_equal_terms_built_apart_compare_equal_at_any_depth() -> None:
+    """Equality does not care how deep the two terms are.
+
+    Comparing the children compared two tuples, and that compared their elements, so a comparison
+    descended one level of interpreter recursion per level of the term.  Both terms are built here
+    rather than compared against themselves, because a tuple comparison settles on identity before
+    it looks at anything, which is what hid the bound for as long as it was there.
+    """
+    depth = sys.getrecursionlimit() * 2
+
+    assert chain(depth) == chain(depth)
+
+
+def test_a_deep_term_that_differs_at_its_bottom_compares_unequal() -> None:
+    """A comparison that reaches the bottom of a deep term still reports what it finds there.
+
+    The two terms agree at every position but the last, so anything that stops early -- or that
+    answers from the size alone, which is equal here -- calls them equal.
+    """
+    depth = sys.getrecursionlimit() * 2
+    bottom = tuple(0 for _ in range(depth))
+    other_leaf = chain(depth).replace_subtree_at(bottom, Tree("other"))
+
+    assert chain(depth).size == other_leaf.size
+    assert chain(depth) != other_leaf
+
+
+def test_a_deep_term_is_found_in_a_dict_keyed_by_terms() -> None:
+    """A term looked up in a dict is compared against the key, and the key was built elsewhere.
+
+    This is the shape the bound was reached in.  The fitness cache of the evolutionary algorithms
+    is a dict keyed on terms, and the terms it is asked about are the ones just assembled, so the
+    lookup cannot settle on identity and ends in a comparison.
+    """
+    depth = sys.getrecursionlimit() * 2
+    scored = {chain(depth): "reference"}
+
+    assert scored[chain(depth)] == "reference"
+
+
+def test_a_deep_term_renders_as_the_chain_it_is() -> None:
+    """Rendering does not care how deep the term is, and writes the brackets it always wrote.
+
+    The expected string is spelled out from the shape rather than taken from another rendering, so
+    an implementation that is merely consistent with itself does not satisfy this.
+    """
+    depth = sys.getrecursionlimit() * 2
+    expected = "f " + "(f " * (depth - 1) + "leaf" + ")" * (depth - 1)
+
+    assert str(chain(depth)) == expected

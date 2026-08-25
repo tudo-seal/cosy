@@ -848,16 +848,16 @@ def test_a_deep_term_is_walked_without_recursing_over_it():
     assert k_sst(shorter, shorter) > 0
 
 
-def test_the_subtree_kernel_inherits_the_depth_a_term_comparison_reaches():
-    """Comparing two equal terms is what bounds the depth, and it is not this module's bound.
+def test_the_subtree_kernel_reaches_the_bottom_of_separately_built_terms():
+    """A lookup that cannot settle on identity ends in a comparison, and that no longer bounds depth.
 
-    ``k_st`` collects subterms into a dict, so a lookup that does not settle on identity falls
-    back to ``Tree.__eq__``, which walks the children recursively. Every dict keyed by terms
-    carries that bound; it is recorded here because the kernel is the first caller to reach it,
-    and because a search scoring partial inhabitants against separately built reference terms is
-    exactly the case where the lookup cannot settle on identity.
+    ``k_st`` collects subterms into a dict, so a lookup whose hash matches ends in ``Tree.__eq__``.
+    That comparison used to descend one interpreter frame per level and raised ``RecursionError``
+    here, and the kernel was the first caller in the package to reach the bound. Scoring partial
+    inhabitants against reference terms built elsewhere is exactly the case where the lookup cannot
+    settle on identity, so the answer has to be the one the identical-object case above gives.
     """
     too_deep = sys.getrecursionlimit() * 2
+    left, right = chain(too_deep), chain(too_deep)
 
-    with pytest.raises(RecursionError):
-        k_st(chain(too_deep), chain(too_deep))
+    assert k_st(left, right) == left.size

@@ -7,12 +7,15 @@ replacement.  The consequences reached far beyond this class: an offspring assem
 compared unequal to the structurally identical tree built directly, and no ``set`` of trees
 recognized it.
 
-The tests below are in three groups.  The first fixes the properties that must hold whatever the
+The tests below are in five groups.  The first fixes the properties that must hold whatever the
 implementation does.  The second is about the cached fields specifically: a replacement has to
 recompute them.  The third asks the same question about pickling, which is the other way a node can
 be asked what belongs to it: the derived fields must stay out of the stream.  ``_hash`` because a
 hash computed under another process's seed breaks the very contract the first group fixes, and the
-position sets because carrying them is waste.
+position sets because carrying them is waste.  The fourth is about equality on terms too large
+to be compared by recursive descent, which are compared iteratively instead: what that loop has
+to notice by itself, a chain cannot show, because a chain has one child per node.  The fifth fixes
+what a term renders as, which is a contract of its own and is written by both halves.
 """
 
 import os
@@ -23,7 +26,7 @@ import sys
 
 import pytest
 
-from cosy.core.tree import Path, Tree
+from cosy.core.tree import _SMALL_ENOUGH, Path, Tree
 
 
 def random_tree(rng: random.Random, depth: int = 3, max_arity: int = 3) -> Tree[str]:
@@ -101,6 +104,39 @@ def replaced_at(tree: Tree[str], pos: Path, subtree: Tree[str]) -> Tree[str]:
     return Tree(tree.root, tuple(children))
 
 
+def chain(depth: int) -> Tree[str]:
+    """Build a unary chain of the given depth.
+
+    Args:
+        depth (int): The number of unary nodes above the leaf.
+
+    Returns:
+        Tree[str]: The chain, of ``depth + 1`` positions.
+    """
+    node: Tree[str] = Tree("leaf", ())
+    for _ in range(depth):
+        node = Tree("f", (node,))
+    return node
+
+
+def applied(tree: Tree[str], *, outermost: bool = True) -> str:
+    """Render a term in applicative notation, written independently of ``__str__``.
+
+    Args:
+        tree (Tree[str]): The term to render.
+        outermost (bool): Whether this node is the outermost one. (Default value = True)
+
+    Returns:
+        str: The label of a childless node, and otherwise the label followed by the children,
+            bracketed unless this is the outermost node.  Recursive, and therefore usable only on
+            terms shallow enough to recurse over, which is what the tests below keep it to.
+    """
+    if not tree.children:
+        return str(tree.root)
+    written = " ".join([str(tree.root), *(applied(child, outermost=False) for child in tree.children)])
+    return written if outermost else f"({written})"
+
+
 @pytest.fixture
 def rng() -> random.Random:
     """Return the seeded RNG shared by the property-style tests.
@@ -138,6 +174,24 @@ def test_equality_is_an_equivalence_relation(sample: Tree[str]) -> None:
     assert rebuild(sample) == sample
     assert sample != Tree("f", (Tree("y"), Tree("g", (Tree("x"),))))
     assert sample != "not a tree"
+
+
+def test_a_term_is_equal_to_itself_whatever_its_labels_are() -> None:
+    """Reflexivity holds even where the label at a position is not equal to itself.
+
+    A NaN is the label that tells the two answers apart.  Comparing the outermost roots decided
+    the whole term, so a term rooted in a NaN used to be unequal to itself, while the same NaN one
+    level down was not, because the tuple comparison settled that pair on identity first.  Both
+    answers are the reflexive one now, which is what a ``dict`` and a ``set`` gave all along: they
+    compare identity before they compare values.  Only identity changes, not the relation: two
+    terms built apart around a NaN stay unequal.
+    """
+    not_reflexive: Tree[float] = Tree(float("nan"))
+    same_object = not_reflexive
+
+    assert not_reflexive == same_object
+    assert not_reflexive in {not_reflexive}
+    assert Tree(float("nan")) != Tree(float("nan"))
 
 
 def test_positions_are_prefix_closed(rng: random.Random) -> None:
@@ -565,3 +619,132 @@ def test_a_stream_that_still_carries_an_instance_dictionary_is_rebuilt(monkeypat
     assert back.size == fresh.size
     assert back._positions is None  # noqa: SLF001
     assert back._leaf_positions is None  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Equality on terms past the recursion threshold
+# ---------------------------------------------------------------------------
+
+
+def test_terms_of_equal_size_differing_in_arity_below_the_root_are_unequal() -> None:
+    """Two terms can agree in size and label and still branch differently underneath.
+
+    The differing node is larger than ``_SMALL_ENOUGH``, so the loop has to notice by itself
+    rather than hand the pair to the descent it uses for small subterms.  A loop that paired the
+    children without checking how many there are compares the first pair and stops.
+    """
+    wide = Tree("f", (Tree("g", (chain(_SMALL_ENOUGH), chain(_SMALL_ENOUGH))),))
+    narrow = Tree("f", (Tree("g", (chain(2 * _SMALL_ENOUGH + 1),)),))
+
+    assert wide.size == narrow.size
+    assert wide.children[0].size > _SMALL_ENOUGH
+    assert wide != narrow
+    assert narrow != wide
+
+
+def test_the_children_of_a_root_past_the_threshold_are_compared_in_place() -> None:
+    """A child is compared against the child in the same place, not against some other one.
+
+    Both terms carry the same two subterms, in the other order, so a loop that pairs them back to
+    front finds every pair equal and calls the two terms equal.
+    """
+    first = Tree("g", (chain(_SMALL_ENOUGH),))
+    second = Tree("h", (chain(_SMALL_ENOUGH),))
+    one = Tree("f", (first, second))
+    swapped = Tree("f", (second, first))
+
+    assert one.size > _SMALL_ENOUGH
+    assert one != swapped
+    assert swapped != one
+
+
+def test_a_shared_subterm_does_not_settle_the_rest_of_the_comparison() -> None:
+    """Meeting the same object at one position says nothing about the positions left over.
+
+    Shared subterms are the normal case here, because ``replace_subtree_at`` shares every node off
+    the path it rebuilds.  Skipping such a pair is right; taking it for the answer is not.
+    """
+    shared = chain(_SMALL_ENOUGH)
+    one = Tree("f", (shared, Tree("g", (chain(_SMALL_ENOUGH),))))
+    other = Tree("f", (shared, Tree("h", (chain(_SMALL_ENOUGH),))))
+
+    assert one.size > _SMALL_ENOUGH
+    assert one.children[0] is other.children[0]
+    assert one != other
+    assert other != one
+
+
+def test_a_node_past_the_threshold_is_compared_by_its_label() -> None:
+    """The label of a node the loop descends into counts, not only the labels underneath it.
+
+    The two terms differ in one label, on a node too large to be handed to the recursion, and
+    agree everywhere else including in size.
+    """
+    deep = chain(2 * _SMALL_ENOUGH)
+    one = Tree("f", (deep,))
+    relabeled = Tree("f", (Tree("other", deep.children),))
+
+    assert one.size == relabeled.size
+    assert one.children[0].size > _SMALL_ENOUGH
+    assert one != relabeled
+    assert relabeled != one
+
+
+# ---------------------------------------------------------------------------
+# What a term renders as
+# ---------------------------------------------------------------------------
+
+
+def test_only_the_outermost_application_goes_unbracketed(sample: Tree[str]) -> None:
+    """An applied subterm is bracketed, the outermost application is not, and a leaf never is.
+
+    Spelled out rather than compared against another rendering, so this is the one test in the
+    group that the reference renderer can itself be checked against.
+
+    Args:
+        sample (Tree[str]): The shared sample tree, ``f(g(x), y)``.
+    """
+    assert str(sample) == "f (g x) y"
+    assert str(Tree("x")) == "x"
+    assert str(Tree("f", (Tree("x"),))) == "f x"
+
+
+def test_a_term_below_the_threshold_renders_by_the_rule(rng: random.Random) -> None:
+    """What the descent writes for a small term is what the rule says it should be.
+
+    Args:
+        rng (random.Random): The seeded RNG shared by the property-style tests.
+    """
+    for _ in range(20):
+        tree = random_tree(rng)
+        assert tree.size <= _SMALL_ENOUGH
+        assert str(tree) == applied(tree)
+
+
+def test_a_term_above_the_threshold_renders_by_the_same_rule() -> None:
+    """A term past the threshold renders exactly as the descent would have written it.
+
+    Three shapes meet here that the loop has to keep apart: a child too large to be handed to the
+    descent, two that are small enough, and the join that has to collect the three of them in the
+    order they were visited.  A loop that gave a finished child to the wrong parent, or that
+    reversed the children, produces a term that still reads like a term and is the wrong one.
+    """
+    deep = chain(2 * _SMALL_ENOUGH)
+    mixed = Tree("h", (deep, Tree("x"), Tree("g", (Tree("y"), Tree("z")))))
+
+    assert deep.size > _SMALL_ENOUGH
+    assert str(mixed) == applied(mixed)
+
+
+def test_a_wide_term_above_the_threshold_keeps_its_children_in_order() -> None:
+    """Every child of a node past the threshold is written once, in its own place.
+
+    The labels are distinct, so a child written twice, dropped or moved shows up in the result
+    instead of hiding behind a repeated subterm.
+    """
+    labels = "abcdefghijklmnopqrst"
+    wide = Tree("h", tuple(Tree(label, (Tree("x"), Tree("y", (Tree("z"),)))) for label in labels))
+
+    assert wide.size > _SMALL_ENOUGH
+    assert str(wide) == applied(wide)
+    assert str(wide) == "h " + " ".join(f"({label} x (y z))" for label in labels)
