@@ -8,6 +8,7 @@ created.
 """
 
 import random
+from collections import Counter
 
 import pytest
 
@@ -22,6 +23,9 @@ from cosy.core.solution_space import (
 )
 from cosy.core.tree import Tree
 from cosy.core.types import Arrow, Intersection
+from cosy.search import breadth_first, depth_first, generator_query, residual_query, uniform_random_clause_order
+from cosy.search import deepest_first_subgoal as exported_deepest_first_subgoal
+from cosy.search import fewest_arguments_first as exported_fewest_arguments_first
 from tests.search_fixtures import (
     EXPR,
     START,
@@ -56,32 +60,6 @@ def reversed_order(rules):
         list: The same clauses, reversed.
     """
     return list(reversed(list(rules)))
-
-
-def random_clause_order(rng):
-    """Build a clause order that draws a uniform permutation from a seeded generator.
-
-    Args:
-        rng (random.Random): The generator the order draws from.
-
-    Returns:
-        Callable: The clause order.
-    """
-
-    def order(applicable):
-        """Draw one permutation of the applicable clauses.
-
-        Args:
-            applicable (Sequence[RHSRule]): The applicable clauses of one expansion.
-
-        Returns:
-            list: The clauses, permuted.
-        """
-        drawn = list(applicable)
-        rng.shuffle(drawn)
-        return drawn
-
-    return order
 
 
 def by_argument_sort(*, ascending):
@@ -250,7 +228,9 @@ def first_terminals_over_seeds(space, count=50):
     return {
         next(
             iter(
-                space.depth_first_resolution(WIDTH, max_depth=3, clause_order=random_clause_order(random.Random(seed)))
+                space.depth_first_resolution(
+                    WIDTH, max_depth=3, clause_order=uniform_random_clause_order(random.Random(seed))
+                )
             )
         ).root
         for seed in range(count)
@@ -706,3 +686,158 @@ def test_the_stream_hands_out_each_inhabitant_once():
     streamed = [str(term) for term in space.depth_first_resolution(C, max_depth=3)]
 
     assert len(streamed) == len(set(streamed)), streamed
+
+
+# ---------------------------------------------------------------------------
+# The named rules over a query
+# ---------------------------------------------------------------------------
+
+
+NAMED_RULES = [pytest.param(depth_first, id="depth_first"), pytest.param(breadth_first, id="breadth_first")]
+
+ENGINE_ENTRIES = [
+    pytest.param(depth_first, SolutionSpace.depth_first_resolution, id="depth_first"),
+    pytest.param(breadth_first, SolutionSpace.breadth_first_resolution, id="breadth_first"),
+]
+
+
+@pytest.mark.parametrize(("rule", "engine"), ENGINE_ENTRIES)
+def test_a_named_rule_streams_what_its_engine_entry_streams(rule, engine):
+    """The named rule is the engine entry of its frontier, read off a query.
+
+    Both rules stream the same terms and only their order tells them apart, so a rule that
+    reaches for the other frontier is visible in the order and nowhere else.
+    """
+    space = expression_space()
+
+    assert [str(term) for term in rule(generator_query(space, EXPR), max_count=50, max_depth=2)] == [
+        str(term) for term in engine(space, EXPR, max_count=50, max_depth=2)
+    ]
+
+
+@pytest.mark.parametrize("rule", NAMED_RULES)
+def test_a_named_rule_passes_its_bounds_to_the_engine(rule):
+    """Both bounds reach the engine, each one observed while the other one holds the space finite."""
+    query = generator_query(equal_width_space(), WIDTH)
+
+    assert len(list(rule(query, max_count=5, max_depth=3))) == 5
+    shallow = list(rule(query, max_count=20, max_depth=1))
+    deeper = list(rule(query, max_count=20, max_depth=3))
+
+    assert 0 < len(shallow) < len(deeper)
+
+
+@pytest.mark.parametrize("rule", NAMED_RULES)
+def test_a_named_rule_answers_a_partial_term_query(rule):
+    """The query term of a partial-term query reaches the engine, its prescribed part included.
+
+    A rule that drops it asks the generator instead, which streams the whole language rather
+    than the completions of one term, and every completion below then carries the wrong head.
+    """
+    space = expression_space()
+    witness = next(term for term in rule(generator_query(space, EXPR), max_count=20, max_depth=2) if term.children)
+
+    completions = list(rule(residual_query(space, EXPR, witness, (0,)), max_count=50, max_depth=2))
+
+    assert completions, "the opened position has completions within the bound"
+    assert all(term.root is witness.root for term in completions)
+
+
+@pytest.mark.parametrize(("rule", "engine"), ENGINE_ENTRIES)
+def test_a_named_rule_passes_the_clause_order_and_the_expansion_filter(rule, engine):
+    """The two callbacks a caller supplies reach the engine, and the clause order reaches it whole.
+
+    The stream under the caller's order is compared against the engine under the same order, not
+    merely against the unordered one. An order the rule joined with the default instead of
+    replacing it also permutes the stream, so a comparison against the unordered stream cannot
+    tell the two apart, and joining is what the engine stopped doing.
+    """
+    space = equal_width_space()
+    query = generator_query(space, WIDTH)
+    baseline = [str(term) for term in rule(query, max_count=50, max_depth=3)]
+    reordered = [str(term) for term in rule(query, max_count=50, max_depth=3, clause_order=reversed_order)]
+
+    assert sorted(baseline) == sorted(reordered)
+    assert baseline != reordered
+    assert reordered == [
+        str(term) for term in engine(space, WIDTH, max_count=50, max_depth=3, clause_order=reversed_order)
+    ]
+    assert list(rule(query, max_count=50, max_depth=3, goal_filter=lambda goal: False)) == []
+
+
+def test_uniform_random_clause_order_is_a_function_of_its_generator():
+    """Same seed, same stream: the property every search built on the order inherits."""
+    query = generator_query(equal_width_space(), WIDTH)
+
+    def stream(seed):
+        """Enumerate under a clause order drawn from one seed.
+
+        Args:
+            seed (int): The seed of the generator the order draws from.
+
+        Returns:
+            list: The streamed terms, rendered.
+        """
+        order = uniform_random_clause_order(random.Random(seed))
+        return [str(term) for term in depth_first(query, max_count=50, max_depth=4, clause_order=order)]
+
+    assert stream(7) == stream(7)
+    assert stream(7) != stream(1)
+    assert sorted(stream(7)) == sorted(stream(1))
+
+
+def test_uniform_random_clause_order_draws_a_fresh_permutation_per_expansion():
+    """Every draw is a permutation, and the draws differ from one expansion to the next.
+
+    The engine only counts what an order returns, so an order that keeps the clauses but repeats
+    one and drops another passes its check; that is why the set is compared here as well. And an
+    order that drew once and replayed its result would still be a permutation, so the draws have
+    to be told apart from each other rather than from program order alone.
+    """
+    clauses = tuple(expression_space().get(EXPR))
+    order = uniform_random_clause_order(random.Random(3))
+
+    draws = [tuple(order(clauses)) for _ in range(10)]
+
+    assert all(set(drawn) == set(clauses) and len(drawn) == len(clauses) for drawn in draws)
+    assert len(set(draws)) > 1, "an order that draws once and replays it is not drawing per expansion"
+
+
+def test_uniform_random_clause_order_reaches_every_permutation_about_equally_often():
+    """Uniform is in the name, so it is what the draws have to be.
+
+    A biased order can be seeded, reproducible and a permutation, and still put one clause in
+    front far more often than the others. Nothing else in this file would notice: the tests over
+    the streamed terms only ask that each clause be reached under some seed. Three clauses have
+    six permutations, and 600 draws leave every count far from the bound below.
+    """
+    clauses = tuple(expression_space().get(EXPR))
+    order = uniform_random_clause_order(random.Random(11))
+
+    counts = Counter(tuple(id(clause) for clause in order(clauses)) for _ in range(600))
+
+    assert len(counts) == 6, "the six permutations of three clauses are all drawn"
+    assert min(counts.values()) > 50, f"a permutation is drawn far below its share: {sorted(counts.values())}"
+
+
+@pytest.mark.parametrize("rule", NAMED_RULES)
+def test_a_named_rule_hands_back_a_stream(rule):
+    """The rule returns the engine's stream rather than a materialized list.
+
+    A rule that collects the stream before returning it answers an unbounded query by not
+    returning at all, and the bounds are the caller's to choose.
+    """
+    stream = rule(generator_query(expression_space(), EXPR), max_count=50, max_depth=2)
+
+    assert iter(stream) is stream
+
+
+def test_the_named_rules_hand_out_the_engine_s_own_functions():
+    """The computation rule and the default clause order are the engine's, not a copy of them.
+
+    A caller that has to expand nodes the way the engine expands them needs the function the
+    engine uses. Two copies of it agree by coincidence, and nothing in a stream of terms shows
+    that they have stopped agreeing.
+    """
+    assert exported_deepest_first_subgoal is deepest_first_subgoal
+    assert exported_fewest_arguments_first is fewest_arguments_first
