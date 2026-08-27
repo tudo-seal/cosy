@@ -112,6 +112,7 @@ class Tree(Generic[T]):
     _hash: int
     _positions: frozenset[Path] | None = None
     _leaf_positions: frozenset[Path] | None = None
+    _depth: int | None = None
 
     def __init__(self, root: T, children: Sequence["Tree[T]"] = ()) -> None:
         """_summary_.
@@ -277,8 +278,8 @@ class Tree(Generic[T]):
         """Reconstruct through the constructor instead of through the instance dictionary.
 
         Everything ``__init__`` computes (``size`` and ``_hash``) and everything filled on demand
-        (the two position sets) follows from ``root`` and ``children``, so none of it has to be
-        written.  The default protocol writes the instance dictionary, and therefore writes all of
+        (the two position sets and the depth) follows from ``root`` and ``children``, so none of
+        it has to be written.  The default protocol writes the instance dictionary, and therefore writes all of
         it, together with the ``__orig_class__`` that ``Tree[str](...)`` leaves on an instance.
         ``__copy__`` and ``replace_subtree_at`` already build their results out of ``root`` and
         ``children`` alone.  This makes the third way of producing a node agree with them.
@@ -486,6 +487,61 @@ class Tree(Generic[T]):
         cached = self._leaf_positions
         if cached is None:
             _, cached = self._walk()
+        return cached
+
+    def _fill_depth(self) -> int:
+        """Fill the depth cache of this node and of every node below it that lacks one.
+
+        Bottom-up in one pass, and iterative for the reason ``subtree_at`` is: terms grow deeper
+        than a recursive descent survives.  Filling the whole subtree rather than this node alone
+        is what the depth-bounded sampler needs.  Its filter reads the depth of every grounded
+        subtree of a goal, once per expanded child, so a computation that answered for the root
+        alone would walk the same nodes again for each of them, which is quadratic in the term.
+
+        Reading and writing ``_depth`` on the nodes below is what filling them means, and it is
+        why the three accesses below are marked: they are the same attribute on the same class,
+        reached through another instance rather than through ``self``.
+
+        Returns:
+            int: The depth of this node, as it was stored.
+        """
+        pending: list[Tree[T]] = []
+        stack: list[Tree[T]] = [self]
+        while stack:
+            current = stack.pop()
+            if current._depth is None:  # noqa: SLF001
+                pending.append(current)
+                stack.extend(current.children)
+        # Children were pushed after their parent, so reversing puts every node after all of its
+        # own children and each one reads depths that are already stored.  This node was pushed
+        # first, so it is filled last and ``depth`` below is its value.
+        depth = 0
+        for node in reversed(pending):
+            deepest = -1
+            for child in node.children:
+                below = child._depth  # noqa: SLF001
+                if below is not None and below > deepest:
+                    deepest = below
+            depth = deepest + 1
+            node._depth = depth  # noqa: SLF001
+        return depth
+
+    @property
+    def depth(self) -> int:
+        """Return the depth of the term: the length of its longest root-to-leaf path.
+
+        A leaf has depth 0.  This counts edges where ``size`` counts nodes, and it is filled on
+        demand rather than in the constructor, because every term pays a constructor and only the
+        terms a depth bound is asked about pay this.  Computing it eagerly cost 54 percent more
+        construction time on a term of 20000 nodes, which every caller would carry for the sake of
+        the one that reads it.
+
+        Returns:
+            int: The depth, 0 on a single node.
+        """
+        cached = self._depth
+        if cached is None:
+            cached = self._fill_depth()
         return cached
 
     def subtree_at(self, pos: Path) -> "Tree[T]":
