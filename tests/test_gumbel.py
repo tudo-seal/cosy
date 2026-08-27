@@ -28,6 +28,23 @@ class FixedUniform(random.Random):
     Lets a test read the inverse-CDF identity off a known uniform draw instead of a statistic.
     """
 
+    def __new__(cls, values) -> "FixedUniform":  # noqa: ARG004
+        """Construct without letting the base class seed itself from the scripted draws.
+
+        Up to Python 3.10 ``_random.Random.__new__`` forwards whatever the constructor received to
+        ``seed()``, which hashes its argument. A sequence of draws is not hashable, so on 3.10 the
+        class raises ``TypeError`` before ``__init__`` ever runs. From 3.11 on the arguments are no
+        longer forwarded, which is why the difference shows on one row of the matrix alone.
+
+        Args:
+            values: The scripted draws. Consumed by ``__init__``, ignored here.
+
+        Returns:
+            FixedUniform: A fresh instance. Its inherited state is seeded from the default source
+                and never read, since ``random`` is overridden.
+        """
+        return super().__new__(cls)
+
     def __init__(self, values) -> None:
         """Replay the given uniform draws in order.
 
@@ -53,6 +70,28 @@ class FixedUniform(random.Random):
         value = self._values[self._index]
         self._index += 1
         return value
+
+
+# ---------------------------------------------------------------------------
+# The scripted generator
+# ---------------------------------------------------------------------------
+
+
+def test_the_scripted_generator_replays_its_sequence_and_then_stops():
+    """The helper the tests below build on is constructible from a list, in order, and finite.
+
+    Constructibility is what carries a version difference. ``FixedUniform`` inherits from
+    ``random.Random``, whose ``__new__`` seeds from the constructor arguments up to Python 3.10,
+    and a list of draws cannot be hashed. Without the ``__new__`` on the class, every test that
+    scripts its draws fails on that one row of the matrix with a ``TypeError`` naming neither the
+    helper nor the version.
+    """
+    rng = FixedUniform([0.25, 0.5])
+
+    assert rng.random() == 0.25
+    assert rng.random() == 0.5
+    with pytest.raises(AssertionError, match="exhausted"):
+        rng.random()
 
 
 # ---------------------------------------------------------------------------
