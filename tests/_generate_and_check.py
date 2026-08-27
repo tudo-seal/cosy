@@ -26,7 +26,9 @@ from tests.search_fixtures import (
     cons_0,
     cons_1,
     cons_2,
+    halt,
     lit,
+    marked,
     merge,
     neg,
     nil,
@@ -43,6 +45,7 @@ EXPR_SIGNATURE = {lit: 0, neg: 1, add: 2}
 PAIR_SIGNATURE = {zero: 0, one: 0, wrap: 1, pair: 2}
 AMBIGUOUS_SIGNATURE = {base: 0, alt: 0, merge: 1}
 TAGGED_SIGNATURE = {stop: 0, tag: 2, 0: 0, 1: 0}
+CHAIN_SIGNATURE = {halt: 0, marked: 2, 0: 0, 1: 0}
 
 
 def terms_up_to(signature, bound):

@@ -7,15 +7,17 @@ replacement.  The consequences reached far beyond this class: an offspring assem
 compared unequal to the structurally identical tree built directly, and no ``set`` of trees
 recognized it.
 
-The tests below are in five groups.  The first fixes the properties that must hold whatever the
+The tests below are in six groups.  The first fixes the properties that must hold whatever the
 implementation does.  The second is about the cached fields specifically: a replacement has to
-recompute them.  The third asks the same question about pickling, which is the other way a node can
-be asked what belongs to it: the derived fields must stay out of the stream.  ``_hash`` because a
-hash computed under another process's seed breaks the very contract the first group fixes, and the
-position sets because carrying them is waste.  The fourth is about equality on terms too large
-to be compared by recursive descent, which are compared iteratively instead: what that loop has
-to notice by itself, a chain cannot show, because a chain has one child per node.  The fifth fixes
-what a term renders as, which is a contract of its own and is written by both halves.
+recompute them.  The third is about the depth, which is filled on demand rather than in the
+constructor and fills the whole subtree while it is at it.  The fourth asks what a node carries
+into a pickle stream, which is the other way a node can be asked what belongs to it: the derived
+fields must stay out of it.  ``_hash`` because a hash computed under another process's seed breaks
+the very contract the first group fixes, and the position sets and the depth because carrying them
+is waste.  The fifth is about equality on terms too large to be compared by recursive descent,
+which are compared iteratively instead: what that loop has to notice by itself, a chain cannot
+show, because a chain has one child per node.  The sixth fixes what a term renders as, which is a
+contract of its own and is written by both halves.
 """
 
 import os
@@ -357,6 +359,131 @@ def test_repeated_replacements_stay_consistent(rng: random.Random) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The depth, which is filled on demand rather than in the constructor
+# ---------------------------------------------------------------------------
+
+
+def test_the_depth_of_a_leaf_is_zero() -> None:
+    """A single node ends every path it sits on, so it reaches no level below the root."""
+    assert Tree("x").depth == 0
+
+
+@pytest.mark.parametrize("levels", [0, 1, 2, 3, 7, 40])
+def test_a_chain_is_as_deep_as_it_is_long(levels: int) -> None:
+    """One unary node per level, so the depth is the number of nodes above the leaf.
+
+    Args:
+        levels (int): The chain length under test.
+    """
+    assert chain(levels).depth == levels
+
+
+def test_the_depth_is_the_deepest_branch_and_not_the_first_one() -> None:
+    """A node reaches as far as its deepest child, wherever that child sits among the others.
+
+    Both orders are asserted.  A descent that stopped at the first child would pass one of them
+    and fail the other, and a descent that took the last would do the reverse.
+    """
+    deep_first = Tree("f", (chain(3), Tree("y")))
+    deep_last = Tree("f", (Tree("y"), chain(3)))
+
+    assert deep_first.depth == 4
+    assert deep_last.depth == 4
+
+
+def test_the_depth_agrees_with_walking_the_positions(rng: random.Random) -> None:
+    """On random terms the depth is the length of the longest position, computed independently.
+
+    The oracle shares nothing with the implementation: it reads the position set, which is filled
+    by a breadth-first walk, while the depth is filled bottom-up.
+
+    Args:
+        rng (random.Random): Seeded RNG fixture.
+    """
+    for _ in range(200):
+        tree = random_tree(rng, depth=5)
+        assert tree.depth == max(len(position) for position in tree.positions())
+
+
+def test_reading_the_depth_fills_it_for_every_node_below(rng: random.Random) -> None:
+    """One read answers for the whole subtree, which is what the depth-bounded filter needs.
+
+    That filter reads the depth of every grounded subtree of a goal, once per expanded child, so a
+    computation that answered for the root alone would walk the same nodes again for each of them.
+    Reading a child afterwards must therefore find its answer already stored.
+
+    Args:
+        rng (random.Random): Seeded RNG fixture.
+    """
+    tree = random_tree(rng, depth=5)
+    while not tree.children:
+        tree = random_tree(rng, depth=5)
+
+    assert tree._depth is None, "the constructor must not have filled it"  # noqa: SLF001
+
+    assert tree.depth == max(len(position) for position in tree.positions())
+
+    pending = [tree]
+    while pending:
+        current = pending.pop()
+        assert current._depth is not None, "a node below the root was left unfilled"  # noqa: SLF001
+        pending.extend(current.children)
+
+
+def test_a_warm_depth_does_not_change_what_a_term_is(rng: random.Random) -> None:
+    """Filling the cache must leave equality and hashing where they were.
+
+    ``Tree`` is what every ``set`` and every deduplication in this package is keyed on, so a field
+    filled by one holder of a node must not make that node compare differently to another.
+
+    Args:
+        rng (random.Random): Seeded RNG fixture.
+    """
+    for _ in range(30):
+        cold = random_tree(rng, depth=4)
+        warm = pickle.loads(pickle.dumps(cold))
+
+        assert warm.depth == cold.depth
+        assert warm == cold
+        assert hash(warm) == hash(cold)
+
+
+def test_the_depth_of_a_shared_subterm_is_its_own(rng: random.Random) -> None:
+    """A node appearing at two positions carries the depth of the subterm, not of a container.
+
+    ``replace_subtree_at`` shares every node off the path it rebuilds, so a term assembled by
+    recombination holds the same object at several places.  Filling the depth through one of them
+    must answer for the node itself.
+
+    Args:
+        rng (random.Random): Seeded RNG fixture.
+    """
+    shared = chain(3)
+    around = Tree("f", (shared, Tree("g", (shared,))))
+
+    assert around.depth == 5
+    assert shared.depth == 3
+
+    for _ in range(20):
+        tree = random_tree(rng, depth=4)
+        twice = Tree("f", (tree, tree))
+        assert twice.depth == tree.depth + 1
+
+
+def test_the_depth_of_a_term_deeper_than_the_recursion_limit() -> None:
+    """The fill is iterative, and a chain past the interpreter's limit is what says so.
+
+    Terms grow deeper than a recursive descent survives, which is why ``subtree_at``, ``_walk``,
+    equality and rendering are iterative.  A recursive fill would raise ``RecursionError`` here
+    rather than answer.
+    """
+    levels = sys.getrecursionlimit() * 4
+    deep = chain(levels)
+
+    assert deep.depth == levels
+
+
+# ---------------------------------------------------------------------------
 # What a node carries into a pickle stream
 # ---------------------------------------------------------------------------
 
@@ -536,6 +663,7 @@ def test_nothing_derived_travels_and_everything_derived_comes_back(rng: random.R
     warm = balanced(6)
     warm.positions()
     warm.leaf_positions()
+    assert warm.depth == 6
 
     assert pickle.dumps(warm) == pickle.dumps(cold)
 
@@ -543,19 +671,23 @@ def test_nothing_derived_travels_and_everything_derived_comes_back(rng: random.R
         tree = random_tree(rng)
         tree.positions()
         tree.leaf_positions()
+        assert tree.depth >= 0
 
         blob = pickle.dumps(tree)
         assert b"_hash" not in blob
         assert b"size" not in blob
         assert b"_positions" not in blob
+        assert b"_depth" not in blob
 
         back = pickle.loads(blob)
 
         assert back._positions is None  # noqa: SLF001
         assert back._leaf_positions is None  # noqa: SLF001
+        assert back._depth is None  # noqa: SLF001
         assert back == tree
         assert hash(back) == hash(tree)
         assert back.size == tree.size
+        assert back.depth == tree.depth
         assert back.positions() == tree.positions()
         assert back.leaf_positions() == tree.leaf_positions()
 

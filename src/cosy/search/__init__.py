@@ -7,6 +7,8 @@ of a search node as the partial inhabitant it denotes, the tree kernels that sco
 its similarity to a set of reference terms, the two uninformed search rules with the clause orders
 they are built from, and the branch counts that say how many inhabitants a node still reaches,
 which is what a search has to weight its choices by in order to draw from a chosen distribution.
+It also carries random search itself, which is best-first search under a randomizing cost function,
+and the two samplers the evolutionary and Bayesian methods draw their populations from.
 """
 
 from cosy.search.counting import (
@@ -21,6 +23,7 @@ from cosy.search.counting import (
     retained_node_count,
     size_table,
 )
+from cosy.search.gumbel import condition_on_maximum, gumbel_key, gumbel_noise
 from cosy.search.kernels import k_sst, k_st, normalized, reference_score
 from cosy.search.partial import Hole, holes, partial_inhabitant, term_depth, term_size
 from cosy.search.queries import ResolutionQuery, checker, generator_query, residual_query
@@ -31,34 +34,57 @@ from cosy.search.rules import (
     fewest_arguments_first,
     uniform_random_clause_order,
 )
+from cosy.search.samplers import DepthBoundedRandomSampler, Sampler, SizeUniformSampler
+from cosy.search.sampling import (
+    WeightedTable,
+    WeightedTree,
+    random_search,
+    random_search_keyed,
+    size_uniform,
+    weighted_table,
+    weighted_tree,
+)
 
 __all__ = [
     "CountedNode",
     "CoupledClause",
+    "DepthBoundedRandomSampler",
     "Hole",
     "ResolutionQuery",
+    "Sampler",
     "SizeTable",
+    "SizeUniformSampler",
+    "WeightedTable",
+    "WeightedTree",
     "assert_unambiguous_within",
     "branch_counts",
     "branch_multiplicities",
     "breadth_first",
     "checker",
+    "condition_on_maximum",
     "coupled_clauses",
     "decomposable_or_raise",
     "deepest_first_subgoal",
     "depth_first",
     "fewest_arguments_first",
     "generator_query",
+    "gumbel_key",
+    "gumbel_noise",
     "holes",
     "k_sst",
     "k_st",
     "normalized",
     "partial_inhabitant",
+    "random_search",
+    "random_search_keyed",
     "reference_score",
     "residual_query",
     "retained_node_count",
     "size_table",
+    "size_uniform",
     "term_depth",
     "term_size",
     "uniform_random_clause_order",
+    "weighted_table",
+    "weighted_tree",
 ]

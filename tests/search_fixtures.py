@@ -1145,3 +1145,92 @@ def mixed_arity_space():
         h_join: SpecificationBuilder().argument("left", MIXED).argument("right", MIXED).suffix(MIXED),
     }
     return Synthesizer(specs).construct_solution_space(MIXED)
+
+
+# ---------------------------------------------------------------------------
+# Two hole tuples of one length: Ha -> a_zero | a_one ; Hb -> b_single ;
+# Ht -> same_holes(Ha, Ha) | mixed_holes(Ha, Hb)
+# ---------------------------------------------------------------------------
+
+SORT_A = Constructor("Ha")
+SORT_B = Constructor("Hb")
+TUPLE_SORT = Constructor("Ht")
+
+
+def a_zero() -> str:
+    """Build the first inhabitant of the two-element sort.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "a0"
+
+
+def a_one() -> str:
+    """Build the second inhabitant of the two-element sort.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "a1"
+
+
+def b_single() -> str:
+    """Build the single inhabitant of the one-element sort.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "b"
+
+
+def same_holes(left: str, right: str) -> str:
+    """Build the term whose two holes carry the same sort.
+
+    Args:
+        left (str): The interpreted left operand.
+        right (str): The interpreted right operand.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"s({left},{right})"
+
+
+def mixed_holes(left: str, right: str) -> str:
+    """Build the term whose two holes carry different sorts.
+
+    Args:
+        left (str): The interpreted left operand.
+        right (str): The interpreted right operand.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"g({left},{right})"
+
+
+def hole_tuple_space():
+    """Build the space with two different hole tuples of one length.
+
+    ``same_holes`` opens ``(Ha, Ha)`` and ``mixed_holes`` opens ``(Ha, Hb)``: two tuples of two
+    holes each, and the sorts are of *different* size (``N_Ha(1) = 2``, ``N_Hb(1) = 1``), so the
+    two tuples admit different numbers of splits at the same total, 4 against 2 at total 2. A
+    convolution cache keyed by the number of holes rather than by the holes themselves would
+    answer the second tuple with the first tuple's number, and the start row would read 8 where it
+    must read 6.
+
+    Every other space here has at most one hole tuple per length, so nothing else can tell the two
+    keys apart.
+
+    Returns:
+        SolutionSpace: The space, started at ``Ht``.
+    """
+    specs = {
+        a_zero: SpecificationBuilder().suffix(SORT_A),
+        a_one: SpecificationBuilder().suffix(SORT_A),
+        b_single: SpecificationBuilder().suffix(SORT_B),
+        same_holes: SpecificationBuilder().argument("left", SORT_A).argument("right", SORT_A).suffix(TUPLE_SORT),
+        mixed_holes: SpecificationBuilder().argument("left", SORT_A).argument("right", SORT_B).suffix(TUPLE_SORT),
+    }
+    return Synthesizer(specs).construct_solution_space(TUPLE_SORT)
