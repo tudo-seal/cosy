@@ -5,7 +5,7 @@ composing independent, reusable components. Instead of implementing specific alg
 users can combine components to create custom algorithms tailored to their specific problems.
 
 Core Components:
-    - Initialization: Create initial populations
+    - Initializer: Create initial populations
     - Mutation: Apply local modifications to individuals
     - Recombination: Combine genetic material from multiple parents
     - Selection: Choose individuals for reproduction or survival
@@ -39,8 +39,10 @@ from cosy.evolutionary_algorithms.fitness import (
 
 # Initialization
 from cosy.evolutionary_algorithms.initialisation import (
-    Initialization,
-    RandomLimitedDepthFirstInitialization,
+    InitializationError,
+    Initializer,
+    MixtureInitializer,
+    SampledInitialization,
 )
 
 # Mutation
@@ -51,8 +53,9 @@ from cosy.evolutionary_algorithms.mutation import (
 
 # Recombination
 from cosy.evolutionary_algorithms.recombination import (
-    Crossover,
     Recombination,
+    SubtreeGraft,
+    SubtreeSwap,
 )
 
 # Selection
@@ -67,28 +70,25 @@ from cosy.evolutionary_algorithms.selection import (
 
 __all__ = [
     "AgeBasedReplacement",
-    "Crossover",
     "EAState",
-    # Core algorithm classes
     "Evolutionary",
-    # Fitness
     "Fitness",
     "FitnessBasedReplacement",
     "FitnessComparator",
     "FitnessProportionalSelection",
-    # Initialization
-    "Initialization",
-    # Mutation
+    "InitializationError",
+    "Initializer",
+    "MixtureInitializer",
     "Mutation",
     "ParetoFitnessComparator",
-    "RandomLimitedDepthFirstInitialization",
     "RankBasedSelection",
-    # Recombination
     "Recombination",
     "ResolutionMutation",
+    "SampledInitialization",
     "ScalarFitnessComparator",
-    # Selection
     "Selection",
     "SimpleGeneticProgramming",
+    "SubtreeGraft",
+    "SubtreeSwap",
     "TournamentSelection",
 ]
