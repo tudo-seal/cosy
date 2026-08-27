@@ -40,6 +40,7 @@ from cosy.search import (
 from tests.search_fixtures import (
     EXPR,
     LIST,
+    MIXED,
     PAIR,
     TUPLE_SORT,
     WIDTH,
@@ -51,6 +52,7 @@ from tests.search_fixtures import (
     hole_tuple_space,
     list_space,
     lit,
+    mixed_arity_space,
     nil,
 )
 
@@ -103,6 +105,31 @@ def test_the_depth_sampler_halts_on_a_recursive_space(depth_bound):
     stream = sampler.sample(query)
     drawn = [next(stream, None) for _ in range(20)]
     assert all(tree is None or term_depth(tree) <= depth_bound for tree in drawn)
+
+
+@pytest.mark.parametrize("depth_bound", [0, 1, 2])
+def test_the_bound_holds_where_a_grounded_subterm_carries_the_depth(depth_bound):
+    """The filter reads the depth of a grounded subterm and not only the position of a hole.
+
+    A goal whose subgoals are all solved has no open position left, so the check over ``subgoals``
+    is a check over nothing and passes. What decides such a goal is the depth its grounded subterms
+    reach, which is the reason the filter reads it and the reason ``Tree`` carries it. Half of the
+    goals one draw filters are of that kind, so this is the common case rather than a corner of it.
+
+    On ``mixed_arity_space`` the distinction bites: an argument is itself composite, so a subterm of
+    depth one grounds at a position of length one and the completion comes out a level deeper than
+    the bound admits. The recursive spaces above cannot catch this, since there the depth of a term
+    follows the length of its positions and the check over the subgoals already decides it.
+
+    Args:
+        depth_bound (int): The bound under test.
+    """
+    sampler = DepthBoundedRandomSampler(depth_bound, random.Random(11))
+    query = generator_query(mixed_arity_space(), MIXED)
+    drawn = [tree for tree, _ in zip(sampler.sample(query), range(30), strict=False)]
+
+    assert drawn, "the bound admits completions here, so an empty stream would make the test vacuous"
+    assert all(term_depth(tree) <= depth_bound for tree in drawn)
 
 
 def test_a_bound_that_admits_nothing_ends_the_stream_rather_than_searching_on():

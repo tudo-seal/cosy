@@ -41,6 +41,7 @@ from cosy.core import Constructor, SpecificationBuilder, Synthesizer
 from cosy.core.tree import Tree
 from cosy.search import checker, depth_first, generator_query, residual_query, term_size
 from cosy.search.counting import (
+    CountedNode,
     CoupledClause,
     SizeTable,
     branch_counts,
@@ -49,7 +50,7 @@ from cosy.search.counting import (
     initial_nodes,
     size_table,
 )
-from cosy.search.sampling import log_sum_exp, weighted_table, weighted_tree
+from cosy.search.sampling import WeightedTree, keyed_stream, log_sum_exp, weighted_table, weighted_tree
 from tests._generate_and_check import (
     AMBIGUOUS_SIGNATURE,
     CHAIN_SIGNATURE,
@@ -1505,3 +1506,86 @@ def test_a_clause_with_two_predicates_is_admissible_only_where_all_of_them_hold(
     assert [str(term) for term in at_root] == [str(Tree(grade, (Tree(1, ()),)))]
     for digit in (0, 2):
         assert not checker(space, GRADED, Tree(grade, (Tree(digit, ()),)))
+
+
+# ---------------------------------------------------------------------------
+# The shared search, and the two states it must refuse to search
+# ---------------------------------------------------------------------------
+
+
+def test_random_search_draws_nothing_from_a_root_of_vanishing_weight():
+    """A root that weighs nothing has no key, and the search must not ask it for one.
+
+    ``gumbel_key`` of ``-inf`` is ``-inf`` again, a key that orders below every other and would put
+    a node with no inhabitant at the head of the frontier for as long as the frontier lasts. The
+    stream ends instead, and ``expand`` is never reached: a caller who built the construction over
+    a bound the space does not meet gets an empty stream rather than a search over nothing.
+    """
+
+    def expand(node):
+        """Fail, since the search must not reach this.
+
+        Args:
+            node: The node the search would expand.
+
+        Raises:
+            AssertionError: Always.
+        """
+        msg = f"expand must not be called for a root of vanishing weight, was called on {node}"
+        raise AssertionError(msg)
+
+    assert list(keyed_stream("root", -math.inf, expand, random.Random(1))) == []
+
+
+def test_random_search_steps_over_a_node_that_is_neither_a_success_nor_expandable():
+    """A node with no inhabitant and no retained children is dropped, and the stream goes on.
+
+    Such a node is what remains when every child of an inner node weighed nothing and was
+    discarded at expansion. It carries a key like any other and is popped like any other, so the
+    search has to recognize it and take the next node rather than yield or stall. The two children
+    here are given equal weight, and the surviving one must come out whichever order the keys put
+    them in.
+    """
+    solution = Tree("found", ())
+
+    def expand(node):
+        """Map the three nodes of a hand-built search tree.
+
+        Args:
+            node (str): The node to expand.
+
+        Returns:
+            tuple: Its inhabitant, or None, and its retained children with their log-weights.
+        """
+        if node == "root":
+            return None, [("dead", math.log(0.5)), ("alive", math.log(0.5))]
+        if node == "dead":
+            return None, []
+        return solution, []
+
+    for seed in range(20):
+        drawn = list(keyed_stream("root", 0.0, expand, random.Random(seed)))
+        assert [str(tree) for _, tree in drawn] == [str(solution)]
+
+
+def test_a_node_the_distribution_leaves_weightless_is_an_error_and_not_a_silent_zero():
+    """A retained node weighs something in exact arithmetic, so a vanishing weight is a defect.
+
+    Retention is decided by the branch counts and the weights by the distribution, and the two are
+    computed apart. If they come apart the node still carries counts while its weight is zero, and
+    a zero weight is not a small weight: the node would take a key of ``-inf``, never be drawn, and
+    remove its whole subtree from the sample with nothing in the stream to show for it. Both ways
+    the support can fail to cover a node are asserted, since they arrive at the guard by different
+    routes: an explicit ``-inf`` for the realized value, and a support that omits it, where the
+    sum runs over no terms at all.
+
+    Raises:
+        ValueError: From both calls, which is what the test asserts.
+    """
+    node = CountedNode(goal=None, inhabitant=None, children=(), counts={2: 5})
+
+    with pytest.raises(ValueError, match="come apart"):
+        WeightedTree(root=node, unit_weights={2: 0.0}, log_unit_weights={2: -math.inf}).log_weight_of(node)
+
+    with pytest.raises(ValueError, match="come apart"):
+        WeightedTree(root=node, unit_weights={}, log_unit_weights={}).log_weight_of(node)
