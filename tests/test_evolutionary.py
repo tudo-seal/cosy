@@ -4,23 +4,17 @@ from __future__ import annotations
 
 import math
 import random
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 
-from cosy.core.solution_space import SolutionSpace
-from cosy.core.tree import Path, Tree
+from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms.evolutionary import EAState, SimpleGeneticProgramming
 from cosy.evolutionary_algorithms.fitness import ScalarFitnessComparator
-from cosy.evolutionary_algorithms.mutation import ResolutionMutation
-from cosy.evolutionary_algorithms.recombination import Crossover
 from examples.example_symbolic_regression import (
     SymbolicRegression,
     run_symbolic_regression,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import MutableSequence
 
 
 class StaticInitialization:
@@ -38,10 +32,11 @@ class StaticInitialization:
         """
         self.population = list(population)
 
-    def initialize_population(self, population_size: int):
+    def initialize(self, query: Any, population_size: int):
         """_summary_.
 
         Args:
+            query (Any): _description_
             population_size (int): _description_
 
         Returns:
@@ -53,10 +48,11 @@ class StaticInitialization:
 class EmptyInitialization:
     """_summary_."""
 
-    def initialize_population(self, population_size: int):
+    def initialize(self, query: Any, population_size: int):
         """_summary_.
 
         Args:
+            query (Any): _description_
             population_size (int): _description_
 
         Returns:
@@ -76,26 +72,27 @@ class RecordingMutation:
         """_summary_."""
         self.calls: list[Tree[str]] = []
 
-    def mutate(self, tree: Tree[str]):
+    def mutate(self, query: Any, tree: Tree[str]):
         """_summary_.
 
         Args:
+            query (Any): _description_
             tree (Tree[str]): _description_
 
         Returns:
             _type_: _description_
         """
         self.calls.append(tree)
-        return []
 
 
 class EmptyRecombination:
     """_summary_."""
 
-    def recombine(self, primary: Tree[str], secondary: Tree[str]):
+    def recombine(self, query: Any, primary: Tree[str], secondary: Tree[str]):
         """_summary_.
 
         Args:
+            query (Any): _description_
             primary (Tree[str]): _description_
             secondary (Tree[str]): _description_
 
@@ -394,163 +391,60 @@ def test_symbolic_regression() -> None:
     assert test_mse >= 0
 
 
-class RecordingRandom(random.Random):
-    """A generator that remembers every sequence it was asked to draw from.
-
-    The operators below hand the pool of candidate positions to ``choice`` or ``shuffle``.  What
-    that pool contains, and in which order, is the whole of their randomness, so recording it
-    inspects the decision itself rather than the tree that comes out the other end.
+class _SingleOffspringMutation:
+    """A mutation that always produces the same offspring.
 
     Attributes:
-        pools (list[list[Path]]): One entry per draw, in the order the draws happened.
+        offspring (Tree[str]): What every call returns.
     """
 
-    def __init__(self, seed: int) -> None:
-        """Seed the generator.
+    def __init__(self, offspring: Tree[str]) -> None:
+        """Store what the operator returns.
 
         Args:
-            seed (int): The seed.
+            offspring (Tree[str]): What every call returns.
         """
-        super().__init__(seed)
-        self.pools: list[list[Any]] = []
+        self.offspring = offspring
 
-    def shuffle(self, x: MutableSequence[Any], *args: Any) -> None:
-        """Record the sequence and shuffle it.
-
-        Args:
-            x (MutableSequence[Any]): The sequence to shuffle in place.
-            *args (Any): Never used. Kept so the signature stays compatible with the one typeshed
-                declares for Python 3.10, where ``Random.shuffle`` still carries the second
-                parameter that later versions removed.
-        """
-        self.pools.append(list(x))
-        super().shuffle(x)
-
-    def choice(self, seq: Any) -> Any:
-        """Record the sequence and draw from it.
+    def mutate(self, query: Any, tree: Tree[str]):
+        """Return the fixed offspring.
 
         Args:
-            seq (Any): The sequence to draw from.
+            query (Any): Unused.
+            tree (Tree[str]): Unused.
 
         Returns:
-            Any: The drawn element.
+            Tree[str]: The fixed offspring.
         """
-        self.pools.append(list(seq))
-        return super().choice(seq)
+        return self.offspring
 
 
-class PermissiveSolutionSpace(SolutionSpace[str, str, str]):
-    """A solution space that accepts everything and samples a constant.
+def test_a_mutation_offspring_reaches_the_next_generation() -> None:
+    """What the mutation returns is what the driver carries forward.
 
-    The operators are under test here, not the space: accepting every candidate makes them run
-    their position bookkeeping to the end instead of bailing out on the first rejection, and a
-    constant sample makes the outcome depend on the chosen position alone.
+    The operator answers with one individual or with None, while the driver collects a list of
+    candidates, so the two meet through an adapter. A driver that dropped the offspring, or that
+    wrapped a None into a candidate, would still run and still terminate, and every other test here
+    would stay green because none of them lets a mutation succeed.
     """
+    parent_tree, mutant = Tree("parent"), Tree("mutant")
+    solution_space: Any = object()
+    parent_selection: Any = RecordingSelection([parent_tree])
+    survivor_selection: Any = RecordingSelection([parent_tree])
+    gp = SimpleGeneticProgramming(
+        solution_space,
+        "start",
+        lambda state: state.generation >= 1,
+        StaticInitialization([parent_tree, parent_tree]),
+        _SingleOffspringMutation(mutant),
+        EmptyRecombination(),
+        parent_selection,
+        survivor_selection,
+        ScalarFitnessComparator(),
+        rng=random.Random(0),
+        elite_count=0,
+        distribute_rngs=False,
+    )
 
-    def contains_tree(self, start: str, tree: Tree[str], interpretation: dict[str, Any] | None = None) -> bool:
-        """Accept every tree.
-
-        Args:
-            start (str): The start non-terminal.
-            tree (Tree[str]): The candidate.
-            interpretation (dict[str, Any] | None): Unused. (Default value = None)
-
-        Returns:
-            bool: Always ``True``.
-        """
-        return True
-
-    def sample_tree(
-        self,
-        start: str,
-        max_depth: int | None = None,
-        tree: Tree[str] | None = None,
-        pos: Path | None = None,
-        rng: random.Random | None = None,
-    ) -> Tree[str] | None:
-        """Return a fixed subtree.
-
-        Args:
-            start (str): The start non-terminal.
-            max_depth (int | None): Unused. (Default value = None)
-            tree (Tree[str] | None): Unused. (Default value = None)
-            pos (Path | None): Unused. (Default value = None)
-            rng (random.Random | None): Unused. (Default value = None)
-
-        Returns:
-            Tree[str] | None: A single node.
-        """
-        return Tree("SAMPLED")
-
-
-def sample_individual() -> Tree[str]:
-    """Return ``f(g(h(x), y), z)``.
-
-    Returns:
-        Tree[str]: A tree with one branch deeper than the other, so the pool of inner positions
-            has more than one element and its order is therefore observable.
-    """
-    return Tree("f", (Tree("g", (Tree("h", (Tree("x"),)), Tree("y"))), Tree("z")))
-
-
-def test_mutation_draws_from_a_pool_in_a_fixed_order() -> None:
-    """The mutation point is decided by the seed alone, not by set iteration order.
-
-    ``positions()`` answers with a set, and the order a set iterates in is an implementation
-    detail -- it shifts between interpreter versions, and it shifted when the position sets
-    changed shape.  Sorting the pool before drawing from it is what keeps a seeded run
-    reproducible across the whole test matrix.
-    """
-    rng = RecordingRandom(0)
-    mutation: ResolutionMutation[str, str, str] = ResolutionMutation(PermissiveSolutionSpace(), "S", rng=rng)
-
-    mutation.mutate(sample_individual())
-
-    assert rng.pools == [[(0,), (0, 0)]]
-
-
-def test_mutation_trims_one_level_of_leaves_per_trim_step() -> None:
-    """Each pass drops the leaves, then the positions that pass turned into leaves -- and only those.
-
-    Every pass after the first has to work out which of the remaining positions are childless
-    now; a pass that reused the leaves of the original term, or that came up with nothing at all,
-    would leave the pool one level too deep and offer a mutation point the caller excluded.  Of
-    ``f(g(h(x), y), z)`` the first pass leaves ``(0,)`` and ``(0, 0)``, the second only ``(0,)``.
-
-    The deeper term takes three passes, and that is what pins the other half: the positions a pass
-    trims are collected in a set that starts empty each time.  A set carried across the passes
-    would still hold what the pass before it trimmed and ask for those positions to be removed a
-    second time.  Two passes cannot show it, because the last pass collects nothing.
-    """
-    rng = RecordingRandom(0)
-    mutation: ResolutionMutation[str, str, str] = ResolutionMutation(PermissiveSolutionSpace(), "S", rng=rng)
-
-    mutation.mutate(sample_individual(), trim=2)
-
-    assert rng.pools == [[(0,)]]
-
-    deeper = Tree("f", (Tree("g", (Tree("h", (Tree("k", (Tree("x"),)), Tree("y"))), Tree("z"))), Tree("w")))
-    rng = RecordingRandom(0)
-    mutation = ResolutionMutation(PermissiveSolutionSpace(), "S", rng=rng)
-
-    mutation.mutate(deeper, trim=3)
-
-    assert rng.pools == [[(0,)]]
-
-
-def test_crossover_draws_from_pools_in_a_fixed_order() -> None:
-    """Both parents' crossover points are shuffled from a sorted pool -- each parent from its own.
-
-    Same reason as for mutation: the shuffle is reproducible from the seed only if the sequence
-    going into it does not depend on how a set happens to be laid out.  Each parent has more than
-    one inner position, because a pool of one element is in order whatever produced it, and the
-    two are shaped differently, because pools that read alike say nothing about which parent
-    either of them was collected from.
-    """
-    rng = RecordingRandom(0)
-    crossover: Crossover[str, str, str] = Crossover(PermissiveSolutionSpace(), "S", rng=rng)
-
-    second = Tree("F", (Tree("G", (Tree("H", (Tree("X"),)), Tree("Y"))), Tree("K", (Tree("Z"),))))
-    crossover.recombine(sample_individual(), second)
-
-    assert rng.pools == [[(0,), (0, 0)], [(0,), (0, 0), (1,)]]
+    states = list(gp.evolutionary_stream(lambda tree: 1.0 if tree == mutant else 0.0, 2, 1.0, 0.0))
+    assert any(mutant in state.offspring for state in states)

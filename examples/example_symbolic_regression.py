@@ -11,11 +11,12 @@ from cosy.core.tree import Tree
 from cosy.core.types import DataGroup, Group
 from cosy.evolutionary_algorithms.evolutionary import EAState, SimpleGeneticProgramming
 from cosy.evolutionary_algorithms.fitness import ScalarFitnessComparator
-from cosy.evolutionary_algorithms.initialisation import RandomLimitedDepthFirstInitialization
+from cosy.evolutionary_algorithms.initialisation import SampledInitialization
 from cosy.evolutionary_algorithms.mutation import ResolutionMutation
-from cosy.evolutionary_algorithms.recombination import Crossover
+from cosy.evolutionary_algorithms.recombination import SubtreeSwap
 from cosy.evolutionary_algorithms.rng.factory import RNGFactory
 from cosy.evolutionary_algorithms.selection import AgeBasedReplacement, FitnessProportionalSelection, Selection
+from cosy.search import DepthBoundedRandomSampler
 
 
 class SymbolicRegression:
@@ -168,6 +169,8 @@ def run_symbolic_regression(
     population_size: int = 50,
     max_generations: int = 20,
     max_depth: int = 4,
+    max_size: int = 40,
+    sample_depth: int = 6,
 ) -> tuple[Tree[str], float, float]:
     """Run a symbolic regression demo with optional seeding for deterministic behavior.
 
@@ -188,6 +191,11 @@ def run_symbolic_regression(
         population_size (int): EA population size (default: 12).
         max_generations (int): Maximum GA generations (default: 6).
         max_depth (int): Maximum tree depth (default: 4).
+        max_size (int): The bound of the recombination acceptance test, in function-symbol
+            occurrences. An exchange may deepen a term, and this is what bounds the growth.
+            (Default value = 40)
+        sample_depth (int): The depth bound of the sampler the initializer and the mutation draw
+            from, in edges. (Default value = 6)
 
     Returns:
         tuple[Tree[str], float, float]: (best_tree, train_mse, test_mse): Best-of-run solution and its MSE values.
@@ -270,10 +278,19 @@ def run_symbolic_regression(
         """
         return state.generation >= max_generations
 
-    # Pass seeded RNGs to all components at construction time for determinism
-    initialization = RandomLimitedDepthFirstInitialization(solution_space, target, max_depth, rng=initialization_rng)
-    mutation = ResolutionMutation(solution_space, target, max_depth, rng=mutation_rng)
-    recombination = Crossover(solution_space, target, max_depth, rng=recombination_rng)
+    # Pass seeded RNGs to all components at construction time for determinism.
+    #
+    # The sampler is the depth-bounded one. Mutation poses a fresh residual query per call, and a
+    # size-uniform sampler builds its weighted construction once per query, so a counting sampler
+    # would pay that construction on every mutation. On this space that is the difference between
+    # a fraction of a millisecond and several hundred of them per offspring.
+    initialization: SampledInitialization[Any, str, Any] = SampledInitialization(
+        DepthBoundedRandomSampler(sample_depth, initialization_rng)
+    )
+    mutation: ResolutionMutation[Any, str, Any] = ResolutionMutation(
+        DepthBoundedRandomSampler(sample_depth, mutation_rng), mutation_rng
+    )
+    recombination: SubtreeSwap[Any, str, Any] = SubtreeSwap(recombination_rng, max_size=max_size)
     parent_selection: Selection = FitnessProportionalSelection(rng=selection_rng)
     survivor_selection: Selection = AgeBasedReplacement()
     fitness_comparator = ScalarFitnessComparator(False)

@@ -1,196 +1,250 @@
-"""Recombination operators for evolutionary algorithms.
+"""Recombination: exchanging subterms, and testing what comes out.
 
-Recombination (crossover) operators combine genetic material from two parent solutions
-to create offspring. This is essential for exploiting promising areas of the search space
-by combining good building blocks from different solutions.
+Recombination is binary, and unlike mutation it can leave the tree language. The subterm a position
+admits is described by the residual there, and an arbitrary subterm of another individual need not
+lie in it. The operators here are therefore **closed by rejection**, building a candidate and
+testing its membership, where resolution mutation is closed by construction. The test is the
+*checker*: the resolution query on a ground term denotes a finite derivation tree, so membership is
+decidable, and :func:`cosy.search.queries.checker` is the named entry to it.
+
+The result of an operator is a **batch**, a multiset of at most two offspring. A move that finds no
+acceptable pair returns the empty batch, and the surrounding procedure draws new parents. A batch
+holding one offspring is deliberately absent from the swap, since the two offspring of a swap are
+the two halves of one exchange and returning only the valid one would break that.
+
+**Positions are neither root nor leaf**, for both parents. Uniform choice over all positions would
+favour the leaves, which a term has most of, and at the pair of roots a swap returns the parents
+unchanged, which would smuggle copies past the rates of the driver. The driver already makes
+copies, with the probability left over from ``mutation_rate`` and ``recombination_rate``. Mutation
+includes the root because reachability needs it there, and the asymmetry is intended.
 """
 
-import random
-from abc import ABC, abstractmethod
-from collections.abc import Hashable
-from collections.abc import Set as AbstractSet
-from itertools import product
-from typing import Generic, TypeVar
+from __future__ import annotations
 
-from cosy.core.solution_space import SolutionSpace
-from cosy.core.tree import Tree
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
-T = TypeVar("T", bound=Hashable)  # type of terminals
-G = TypeVar("G", bound=Hashable)  # type of constants
+from cosy.core.solution_space import NT, G, T
+from cosy.search.partial import term_size
+from cosy.search.queries import checker
 
-Path = tuple[int, ...]
+if TYPE_CHECKING:
+    import random
+
+    from cosy.core.tree import Path, Tree
+    from cosy.search.queries import ResolutionQuery
+
+__all__ = ["Recombination", "SubtreeGraft", "SubtreeSwap"]
 
 
-class Recombination(ABC, Generic[NT, T, G]):
-    """Abstract base class for recombination (crossover) operators.
+def _inner_positions(tree: Tree[T]) -> list[Path]:
+    """Return the positions of a term that are neither its root nor one of its leaves.
 
-    Recombination operators combine two parent individuals to create offspring.
-    Subclasses implement specific crossover strategies by implementing the recombine method.
+    Args:
+        tree (Tree[T]): The term.
+
+    Returns:
+        list[Path]: The inner positions, sorted so that the caller's shuffle is the only source
+            of order.
+    """
+    return sorted(tree.positions() - {()} - tree.leaf_positions())
+
+
+@runtime_checkable
+class Recombination(Protocol[NT, T, G]):
+    """A binary variation operator: two individuals to a batch of offspring.
+
+    The batch is a multiset of at most two individuals, all of them inhabitants; the empty batch
+    means the move found nothing acceptable.
     """
 
-    def __init__(
-        self,
-        solution_space: SolutionSpace[NT, T, G],
-        start: NT,
-        max_depth: int | None = None,
-        rng: random.Random | None = None,
-    ):
-        """Initialize the recombination operator.
+    def recombine(self, query: ResolutionQuery[NT, T, G], first: Tree[T], second: Tree[T]) -> list[Tree[T]]:
+        """Recombine two individuals.
 
         Args:
-            solution_space (SolutionSpace[NT, T, G]): The search space that defines valid individuals.
-            start (NT): The start non-terminal for generating new individuals.
-            max_depth (int | None): The maximum depth of the trees in the search space. (Default value = None)
-            rng (random.Random | None): _description_ (Default value = None)
-        """
-        self.solution_space = solution_space
-        self.start = start
-        self.max_depth = max_depth
-        self.rng = rng if rng is not None else random.Random()
-
-    @abstractmethod
-    def recombine(self, primary: Tree[T], secondary: Tree[T]) -> list[Tree[T]]:
-        """Recombine two parent trees to create offspring.
-
-        Args:
-            primary (Tree[T]): The first parent tree.
-            secondary (Tree[T]): The second parent tree.
+            query (ResolutionQuery[NT, T, G]): The generator query of the search space; the
+                operator tests membership against the space and type it names.
+            first (Tree[T]): The first parent.
+            second (Tree[T]): The second parent.
 
         Returns:
-            list[Tree[T]]: A list of valid offspring, or an empty list if recombination failed.
+            list[Tree[T]]: The batch, possibly empty.
         """
+        ...
 
 
-class Crossover(Recombination[NT, T, G], Generic[NT, T, G]):
-    """Subtree crossover operator.
+class _CheckedExchange:
+    """The acceptance test and the pair enumeration shared by the two operators.
 
-    This operator performs standard genetic programming crossover by swapping
-    random subtrees between two parents. The crossover points are selected from
-    non-leaf positions to ensure meaningful recombination.
+    Attributes:
+        rng (random.Random): The source of randomness for the order of the pairs.
+        max_size (int | None): An optional bound on the size of an offspring, tested *inside* the
+            acceptance test.
     """
 
-    def maximum_leaf_length(self, leaf_positions: AbstractSet[Path], position: Path) -> int:
-        """Calculate the maximum leaf length for a given position in the tree.
-
-        This is used to ensure that when swapping subtrees, the resulting offspring
-        do not exceed the maximum depth constraint. The maximum leaf length is
-        determined by the distance from the position to the nearest leaf in the tree.
+    def __init__(self, rng: random.Random, max_size: int | None = None) -> None:
+        """Build the shared part.
 
         Args:
-            leaf_positions (AbstractSet[Path]): The paths to the leaf nodes of the tree. Any set
-                will do; the method only reads it.
-            position (Path): The path to the current position being evaluated.
+            rng (random.Random): The source of randomness for the order of the pairs.
+            max_size (int | None): The maximum size of an offspring, or None for no bound.
+                (Default value = None)
 
-        Returns:
-            int: The maximum allowed depth for a subtree at the given position.
+        Raises:
+            ValueError: If ``max_size`` is negative.
         """
-        return max(len(leaf) - len(position) for leaf in leaf_positions if leaf[: len(position)] == position)
+        if max_size is not None and max_size < 0:
+            msg = f"a size bound counts function symbols and cannot be negative: {max_size}"
+            raise ValueError(msg)
+        self.rng = rng
+        self.max_size = max_size
 
-    def recombine(self, primary: Tree[T], secondary: Tree[T]) -> list[Tree[T]]:
-        """Exchange subtrees at randomly selected crossover points.
+    def _accepts(self, query: ResolutionQuery[NT, T, G], candidate: Tree[T]) -> bool:
+        """Decide whether a candidate offspring is accepted.
 
-        Algorithm:
-        1. Collect valid crossover points (non-leaf positions) in both parents
-        2. Randomly select a crossover point pair
-        3. Swap the corresponding subtrees
-        4. Check if offspring are valid (contained in the solution space)
-        5. If invalid, retry with other point pairs
-        6. Return valid offspring or empty list if none found
+        Two clauses, and both of them sit *in the acceptance test* rather than in a pre-filter over
+        positions. A pre-filter on precomputed subtree heights decides a different question, namely
+        what the exchange could reach rather than what this candidate is, and the size bound is
+        moreover one route to keeping the individuals a run can hold to finitely many. A candidate beyond the
+        bound is rejected exactly like one outside the language, so the next pair is tried.
 
         Args:
-            primary (Tree[T]): The primary parent tree.
-            secondary (Tree[T]): The secondary parent tree.
+            query (ResolutionQuery[NT, T, G]): The query naming the space and the type.
+            candidate (Tree[T]): The candidate offspring.
 
         Returns:
-            list[Tree[T]]: A list containing up to two offspring if valid, or an empty list if no valid
-                offspring could be produced.
+            bool: True if the candidate is an inhabitant within the bound.
         """
-        # Collect valid crossover points in the primary parent
-        # (exclude root and leaves to ensure meaningful swaps)
-        # Sorted before shuffling, so that the crossover points are a function of the seed alone
-        # rather than of the order a set happens to iterate in.
-        primary_positions = sorted(primary.positions())
-        primary_positions.remove(())  # Remove root
-        for leaf in primary.leaf_positions():
-            primary_positions.remove(leaf)  # Remove leaves
-        if not primary_positions:
-            return []
+        if self.max_size is not None and term_size(candidate) > self.max_size:
+            return False
+        return checker(query.solution_space, query.start, candidate)
 
-        # Collect valid crossover points in the secondary parent
-        secondary_positions = sorted(secondary.positions())
-        secondary_positions.remove(())  # Remove root
-        for leaf in secondary.leaf_positions():
-            secondary_positions.remove(leaf)  # Remove leaves
-        if not secondary_positions:
-            return []
+    def _pairs(self, first: Tree[T], second: Tree[T]) -> list[tuple[Path, Path]]:
+        """Enumerate the position pairs in a uniformly drawn order.
 
-        self.rng.shuffle(primary_positions)
-        self.rng.shuffle(secondary_positions)
+        The permutation runs over the **pair set**. Shuffling the two position lists separately and
+        taking their product is not the same distribution: it walks the first position of the first
+        parent against every position of the second before it ever changes it, so the order of the
+        pairs is strongly correlated and the first parent's choice dominates which exchange is
+        tried.
 
-        # Generate all possible crossover point pairs
-        possible_recombination_points = product(primary_positions, secondary_positions)
-        iterator = iter(possible_recombination_points)
+        Args:
+            first (Tree[T]): The first parent.
+            second (Tree[T]): The second parent.
 
-        # Try a random crossover point pair
-        # primary_crossover_point, secondary_crossover_point = possible_recombination_points.
-        # possible_recombination_points.remove((primary_crossover_point, secondary_crossover_point))
-        try:
-            primary_crossover_point, secondary_crossover_point = next(iterator)
-            primary_max_depth = self.maximum_leaf_length(primary.leaf_positions(), primary_crossover_point)
-            secondary_max_depth = self.maximum_leaf_length(secondary.leaf_positions(), secondary_crossover_point)
-            if self.max_depth is not None:
-                while (
-                    len(primary_crossover_point) + secondary_max_depth > self.max_depth
-                    or len(secondary_crossover_point) + primary_max_depth > self.max_depth
-                ):
-                    primary_crossover_point, secondary_crossover_point = next(iterator)
-        except StopIteration:
-            return []
+        The pair set is built and permuted in full before the first candidate is tested, so the
+        cost is quadratic in the number of inner positions whether or not the first pair is
+        accepted. A parent of a thousand nodes therefore costs a million pairs.
 
-        # Extract subtrees at crossover points
-        primary_subtree = primary.subtree_at(primary_crossover_point)
-        secondary_subtree = secondary.subtree_at(secondary_crossover_point)
+        Returns:
+            list[tuple[Path, Path]]: The pairs of inner positions, uniformly permuted; empty if
+                either parent has no inner position.
+        """
+        left = _inner_positions(first)
+        right = _inner_positions(second)
+        pairs = [(p, q) for p in left for q in right]
+        self.rng.shuffle(pairs)
+        return pairs
 
-        # Create offspring by swapping subtrees
-        primary_child = primary.replace_subtree_at(primary_crossover_point, secondary_subtree)
-        secondary_child = secondary.replace_subtree_at(secondary_crossover_point, primary_subtree)
 
-        # Check if offspring are valid
-        if self.solution_space.contains_tree(self.start, primary_child) and self.solution_space.contains_tree(
-            self.start, secondary_child
-        ):
-            return [primary_child, secondary_child]
+class SubtreeSwap(_CheckedExchange, Recombination[NT, T, G]):
+    """Exchange the subterms at a pair of inner positions.
 
-        # If offspring are invalid, retry with other crossover points
-        while (
-            not self.solution_space.contains_tree(self.start, primary_child)
-            and not self.solution_space.contains_tree(self.start, secondary_child)
-            and primary_positions
-            and secondary_positions
-        ):
-            try:
-                primary_crossover_point, secondary_crossover_point = next(iterator)
-                primary_max_depth = self.maximum_leaf_length(primary.leaf_positions(), primary_crossover_point)
-                secondary_max_depth = self.maximum_leaf_length(secondary.leaf_positions(), secondary_crossover_point)
-                if self.max_depth is not None:
-                    while (
-                        len(primary_crossover_point) + secondary_max_depth > self.max_depth
-                        or len(secondary_crossover_point) + primary_max_depth > self.max_depth
-                    ):
-                        primary_crossover_point, secondary_crossover_point = next(iterator)
-            except StopIteration:
-                break
+    Walk the pairs of inner positions in a uniformly drawn order, exchange the two subterms, and
+    return both offspring as soon as a pair passes the acceptance test for **both** of them. If no
+    pair does, the batch is empty.
 
-            primary_subtree = primary.subtree_at(primary_crossover_point)
-            secondary_subtree = secondary.subtree_at(secondary_crossover_point)
+    An exchange may make an offspring deeper than either parent, because the subterm that arrives
+    can be deeper than the one that left. That is not an error, and it is the reason a run needs a
+    route to keeping its individuals finite. ``max_size`` is one such route.
 
-            primary_child = primary.replace_subtree_at(primary_crossover_point, secondary_subtree)
-            secondary_child = secondary.replace_subtree_at(secondary_crossover_point, primary_subtree)
+    What a position admits is its residual, not a symbol. Grammar-guided crossover matches
+    nonterminals and gets closure from that. Here the residual is what decides, and it is decided by
+    a query rather than by a label.
 
-            if self.solution_space.contains_tree(self.start, primary_child) and self.solution_space.contains_tree(
-                self.start, secondary_child
-            ):
-                return [primary_child, secondary_child]
+    Attributes:
+        rng (random.Random): The source of randomness for the order of the pairs.
+        max_size (int | None): An optional bound on the size of an offspring, tested inside the
+            acceptance test.
+    """
 
+    def __init__(self, rng: random.Random, max_size: int | None = None) -> None:
+        """Build the operator.
+
+        Args:
+            rng (random.Random): The source of randomness for the order of the pairs.
+            max_size (int | None): The maximum size of an offspring, or None for no bound.
+                (Default value = None)
+
+        Raises:
+            ValueError: If ``max_size`` is negative.
+        """
+        super().__init__(rng, max_size)
+
+    def recombine(self, query: ResolutionQuery[NT, T, G], first: Tree[T], second: Tree[T]) -> list[Tree[T]]:
+        """Swap subterms until both offspring are accepted.
+
+        Args:
+            query (ResolutionQuery[NT, T, G]): The generator query of the search space.
+            first (Tree[T]): The first parent.
+            second (Tree[T]): The second parent.
+
+        Returns:
+            list[Tree[T]]: Both offspring of the first acceptable pair, or the empty batch.
+        """
+        for left, right in self._pairs(first, second):
+            first_child = first.replace_subtree_at(left, second.subtree_at(right))
+            second_child = second.replace_subtree_at(right, first.subtree_at(left))
+            if self._accepts(query, first_child) and self._accepts(query, second_child):
+                return [first_child, second_child]
+        return []
+
+
+class SubtreeGraft(_CheckedExchange, Recombination[NT, T, G]):
+    """Graft a subterm of the secondary parent into the primary one.
+
+    The same enumeration as the swap, but the parents are not symmetric. ``first`` is the *primary*
+    parent and ``second`` the *secondary* one, the only candidate of a pair is the primary with the
+    subterm at its position replaced by the secondary's, and one acceptance test decides it. The
+    batch therefore holds one offspring or none.
+
+    A drop-in alternative for the swap in the same component slot.
+
+    Residual-guided grafting, which would draw the replacement from the residual and restrict it to
+    subterms of the secondary parent, is deliberately not here: several holes would have to be drawn
+    together.
+
+    Attributes:
+        rng (random.Random): The source of randomness for the order of the pairs.
+        max_size (int | None): An optional bound on the size of an offspring, tested inside the
+            acceptance test.
+    """
+
+    def __init__(self, rng: random.Random, max_size: int | None = None) -> None:
+        """Build the operator.
+
+        Args:
+            rng (random.Random): The source of randomness for the order of the pairs.
+            max_size (int | None): The maximum size of an offspring, or None for no bound.
+                (Default value = None)
+
+        Raises:
+            ValueError: If ``max_size`` is negative.
+        """
+        super().__init__(rng, max_size)
+
+    def recombine(self, query: ResolutionQuery[NT, T, G], first: Tree[T], second: Tree[T]) -> list[Tree[T]]:
+        """Graft subterms until one offspring is accepted.
+
+        Args:
+            query (ResolutionQuery[NT, T, G]): The generator query of the search space.
+            first (Tree[T]): The primary parent, which the offspring is built from.
+            second (Tree[T]): The secondary parent, which contributes the subterm.
+
+        Returns:
+            list[Tree[T]]: The one offspring of the first acceptable pair, or the empty batch.
+        """
+        for left, right in self._pairs(first, second):
+            candidate = first.replace_subtree_at(left, second.subtree_at(right))
+            if self._accepts(query, candidate):
+                return [candidate]
         return []

@@ -16,11 +16,12 @@ from typing import Any, Generic, Literal, TypeVar, cast, get_origin, get_type_hi
 from cosy.core.solution_space import SolutionSpace
 from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator, ScalarFitnessComparator
-from cosy.evolutionary_algorithms.initialisation import Initialization
+from cosy.evolutionary_algorithms.initialisation import Initializer
 from cosy.evolutionary_algorithms.mutation import Mutation
 from cosy.evolutionary_algorithms.recombination import Recombination
 from cosy.evolutionary_algorithms.rng.factory import RNGFactory
 from cosy.evolutionary_algorithms.selection import Selection
+from cosy.search.queries import generator_query
 
 NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
 T = TypeVar("T", bound=Hashable)  # type of terminals
@@ -63,7 +64,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
         solution_space: SolutionSpace[NT, T, G],
         start: NT,
         termination_condition: Callable[[EAState[T]], bool],
-        initialization: Initialization[NT, T, G],
+        initialization: Initializer[NT, T, G],
         mutation: Mutation[NT, T, G],
         recombination: Recombination[NT, T, G],
         parent_selection: Selection[NT, T, G],
@@ -77,7 +78,7 @@ class Evolutionary(ABC, Generic[NT, T, G]):
             solution_space (SolutionSpace[NT, T, G]): Defines the search space and constraint satisfaction.
             start (NT): The start non-terminal for generating new individuals.
             termination_condition (Callable[[EAState[T]], bool]): A function that returns True when the EA should stop.
-            initialization (Initialization[NT, T, G]): Component for creating initial populations.
+            initialization (Initializer[NT, T, G]): Component for creating initial populations.
             mutation (Mutation[NT, T, G]): Component for applying mutations to individuals.
             recombination (Recombination[NT, T, G]): Component for recombining individuals.
             parent_selection (Selection[NT, T, G]): Component for selecting parents for variation.
@@ -351,7 +352,7 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
         solution_space: SolutionSpace[NT, T, G],
         start: NT,
         termination_condition: Callable[[EAState[T]], bool],
-        initialization: Initialization[NT, T, G],
+        initialization: Initializer[NT, T, G],
         mutation: Mutation[NT, T, G],
         recombination: Recombination[NT, T, G],
         parent_selection: Selection[NT, T, G],
@@ -370,7 +371,7 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
             solution_space (SolutionSpace[NT, T, G]): Defines the search space and constraint satisfaction.
             start (NT): The start non-terminal for generating new individuals.
             termination_condition (Callable[[EAState[T]], bool]): A function that returns True when the EA should stop.
-            initialization (Initialization[NT, T, G]): Component for creating initial populations.
+            initialization (Initializer[NT, T, G]): Component for creating initial populations.
             mutation (Mutation[NT, T, G]): Component for applying mutations to individuals.
             recombination (Recombination[NT, T, G]): Component for recombining individuals.
             parent_selection (Selection[NT, T, G]): Component for selecting parents for variation.
@@ -410,9 +411,13 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
 
         if distribute_rngs:
             # Create and assign child RNGs for components that expose a 'rng' attribute.
-            # This ensures each component gets an independent, deterministic RNG stream derived
-            # from the factory's master seed. Child RNGs are independent (different sequences)
-            # yet reproducible (same master seed → same child RNGs) via deterministic seeding.
+            # Child RNGs are independent (different sequences) yet reproducible (same master seed
+            # → same child RNGs) via deterministic seeding.
+            #
+            # This reaches a component's own generator only. A component that draws through a
+            # sampler carries the sampler's generator separately, and that one is not reseeded
+            # here, so seeding such a component at construction time is what makes a run
+            # reproducible.
             init_rng = self.rng_factory.child()
             mutation_rng = self.rng_factory.child()
             recomb_rng = self.rng_factory.child()
@@ -471,7 +476,8 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
             raise ValueError(msg)
 
         # Initialize the population
-        population: list[Tree[T]] = list(self.initialization.initialize_population(population_size))
+        query = generator_query(self.solution_space, self.start)
+        population: list[Tree[T]] = list(self.initialization.initialize(query, population_size))
 
         # Cache fitness values across generations to avoid recomputation for unchanged individuals.
         fitness_cache: dict[Tree[T], Fitness] = {}
@@ -555,13 +561,14 @@ class SimpleGeneticProgramming(Evolutionary[NT, T, G], Generic[NT, T, G]):
                     parent = next_parent()
                     if parent is None:
                         break
-                    candidates = self.mutation.mutate(parent)
+                    mutant = self.mutation.mutate(query, parent)
+                    candidates = [] if mutant is None else [mutant]
                 elif variation_operator == "crossover":
                     parent1 = next_parent()
                     parent2 = next_parent()
                     if parent1 is None or parent2 is None:
                         break
-                    candidates = self.recombination.recombine(parent1, parent2)
+                    candidates = self.recombination.recombine(query, parent1, parent2)
                 else:
                     survivor = next_parent()
                     if survivor is None:
