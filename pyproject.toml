@@ -114,7 +114,6 @@ exclude_lines = [
 ]
 "**/core/**/*" = [
   "FBT",      # Boolean-typed arguments in function definitions
-  "S311",     # random.Random is intentionally used for deterministic seeding
 ]
 "**/rng/**/*" = [
   "S311",     # random.Random is intentionally used for deterministic seeding

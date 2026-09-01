@@ -22,6 +22,7 @@ import pytest
 
 from cosy.core.solution_space import NonTerminalArgument, SolutionSpace, _OrderedSet
 from cosy.core.tree import Tree
+from cosy.search import DepthBoundedRandomSampler, generator_query
 from tests._determinism_grammars import A, B, C, mixed_width_space
 
 
@@ -261,27 +262,34 @@ def test_a_seeded_sample_repeats() -> None:
     """A seeded sample has to be repeatable, otherwise no experiment on this framework is.
 
     The goals of a derivation step were collected in a set, and a ``Goal`` is hashed by its address,
-    so the set handed them back in allocation order. ``sample_tree`` shuffles that order with the
+    so the set handed them back in allocation order. The sampler shuffled that order with the
     seeded generator, which made the seed permute an already random list. Combinators that are
     functions show this within one process; a set of goals with a value-based hash would instead
-    order them by string hashes, which only fresh interpreters vary.
+    order them by string hashes, which only fresh interpreters vary. (The sampler was
+    ``sample_tree`` then, and it is ``DepthBoundedRandomSampler`` now, which draws its randomness
+    from the clause order rather than from the goals. The property it needs from the engine is the
+    same one.)
     """
     sampled = set()
     for _ in range(_ROUNDS):
         _ = [object() for _ in range(50)]  # move the addresses the next grammar will be built at
-        tree = _function_terminal_space().sample_tree("S", max_depth=4, rng=random.Random(0))
-        assert tree is not None
+        query = generator_query(_function_terminal_space(), "S")
+        tree = next(iter(DepthBoundedRandomSampler(4, random.Random(0)).sample(query)))
         sampled.add(_render(tree))
 
-    assert sampled == {"top(a1, b2(b3(a2(a1))))"}, f"one seed produced {len(sampled)} different terms: {sampled}"
+    assert sampled == {"top(a2(a2(a2(a1))), b3(a2(a1)))"}, (
+        f"one seed produced {len(sampled)} different terms: {sampled}"
+    )
 
     printed = _printed_across_hash_seeds(
         "import random\n"
+        "from cosy.search import DepthBoundedRandomSampler, generator_query\n"
         "from tests._determinism_grammars import mixed_width_space\n"
-        "space = mixed_width_space()\n"
-        'print([str(space.sample_tree("S", max_depth=4, rng=random.Random(seed))) for seed in range(3)])\n'
+        'query = generator_query(mixed_width_space(), "S")\n'
+        "drawn = [DepthBoundedRandomSampler(4, random.Random(seed)).sample(query) for seed in range(3)]\n"
+        "print([str(next(iter(stream))) for stream in drawn])\n"
     )
-    assert printed == {"['top lf lf', 'top (un lf) (un lf)', 'top (un (bi (tri lf lf lf) (un lf))) lf']"}
+    assert printed == {"['top lf lf', 'top (un lf) (un lf)', 'top (un (bi (tri lf lf lf) (tri lf lf lf))) lf']"}
 
 
 # ---------------------------------------------------------------------------

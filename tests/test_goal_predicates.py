@@ -18,6 +18,7 @@ from cosy.core import Constructor, SpecificationBuilder, Synthesizer, Var
 from cosy.core.solution_space import ConstantArgument, NonTerminalArgument, SolutionSpace
 from cosy.core.tree import Tree
 from cosy.core.types import Group
+from cosy.search import DepthBoundedRandomSampler, generator_query, residual_query
 
 Term = Tree[Any]
 Repository = SolutionSpace[str, Any, None]
@@ -283,20 +284,28 @@ def test_predicate_is_enforced_when_resolving_into_a_skeleton(resolution: str) -
     assert derived == {wrap("box", digit(1)), wrap("box", digit(2))}
 
 
-def test_sample_tree_never_draws_a_forbidden_term() -> None:
+def test_sampling_never_draws_a_forbidden_term() -> None:
     """Every draw satisfies the predicate, and the seeds do reach more than a single term."""
-    drawn = {unnamed_hole_space().sample_tree("S", rng=random.Random(seed)) for seed in range(20)}
+    query = generator_query(unnamed_hole_space(), "S")
+    drawn = {next(iter(DepthBoundedRandomSampler(2, random.Random(seed)).sample(query))) for seed in range(20)}
     assert drawn <= {use(1, "a"), use(1, "b"), use(2, "a"), use(2, "b")}
     assert len(drawn) > 1
 
 
-def test_sample_tree_into_a_skeleton_never_draws_a_forbidden_term() -> None:
-    """Sampling into an open position of a given term satisfies the predicate as well."""
+def test_sampling_into_a_skeleton_never_draws_a_forbidden_term() -> None:
+    """Sampling into an open position of a given term satisfies the predicate as well.
+
+    The seeds reach both terms the predicate allows, so a draw that stopped varying fails here.
+
+    A depth bound counts the depth of the completed term and not that of the drawn subterm, so the
+    skeleton of depth 2 needs a bound of 2 here, although the hole it leaves takes a term of
+    depth 1.
+    """
     skeleton = wrap("box", digit(0))
-    drawn = {
-        ground_rule_space().sample_tree("S", tree=skeleton, pos=(0,), rng=random.Random(seed)) for seed in range(20)
-    }
+    query = residual_query(ground_rule_space(), "S", skeleton, (0,))
+    drawn = {next(iter(DepthBoundedRandomSampler(2, random.Random(seed)).sample(query))) for seed in range(20)}
     assert drawn <= {wrap("box", digit(1)), wrap("box", digit(2))}
+    assert len(drawn) > 1
 
 
 def test_resolution_enumeration_and_membership_agree() -> None:

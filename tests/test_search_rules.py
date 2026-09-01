@@ -382,21 +382,6 @@ def test_the_goal_filter_runs_on_successful_children():
     assert stream == []
 
 
-def test_a_sample_reaches_more_than_the_nullary_clause_of_the_start_symbol():
-    """A seeded sample can draw any inhabitant within its bound, not one fixed term.
-
-    ``sample_tree`` draws from the frontier, and a successful goal never entered it, so on a
-    space whose start symbol has a nullary clause every draw returned that clause's term. The
-    docstring of the method carried the defect as a note, which this change removes.
-    """
-    space = equal_width_space()
-
-    drawn = {space.sample_tree(WIDTH, max_depth=3, rng=random.Random(seed)) for seed in range(30)}
-
-    assert None not in drawn, "the fixture has to be inhabited within the bound"
-    assert len({tree.root for tree in drawn}) == 3
-
-
 def test_a_clause_order_that_drops_a_clause_is_refused():
     """An order is a permutation of what it receives.
 

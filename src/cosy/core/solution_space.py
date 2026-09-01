@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 from collections import defaultdict, deque
 from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, MutableSet, Sequence
 from collections.abc import Set as AbstractSet
@@ -1488,92 +1487,6 @@ class SolutionSpace(Generic[NT, T, G]):
             clause_order=fewest_arguments_first if clause_order is None else clause_order,
             goal_filter=goal_filter,
         )
-
-    def sample_tree(
-        self,
-        start: NT,
-        max_depth: int | None = None,
-        tree: Tree[T] | None = None,
-        pos: Path | None = None,
-        rng: random.Random | None = None,
-    ) -> Tree[T] | None:
-        """This method samples a tree top-down with possibly limited depth.
-
-        Be aware, that this method is not guaranteed to terminate if the solution space contains recursive rules and
-        max_depth is None, as it may get stuck in an infinite branch of the SLD-Derivation-Tree.
-        Additionally the user has to ensure that the solution space is not empty, as an empty solution space can lead
-        to nontermination as well.
-
-        Args:
-            start (NT): _description_
-            max_depth (int | None): _description_ (Default value = None)
-            tree (Tree[T] | None): _description_ (Default value = None)
-            pos (Path | None): _description_ (Default value = None)
-            rng (random.Random | None): _description_ (Default value = None)
-
-        Returns:
-            Tree[T] | None: _description_
-        """
-        # allow deterministic sampling by providing an RNG instance
-        rndm: random.Random = rng if rng is not None else random.Random()
-
-        def variance_strategy_push(queue: deque[Goal], new_goals: Iterable[Goal]) -> deque[Goal]:
-            """_summary_.
-
-            Args:
-                queue (deque[Goal]): _description_
-                new_goals (Iterable[Goal]): _description_
-
-            Returns:
-                deque[Goal]: _description_
-            """
-            goals = list(new_goals)
-            rndm.shuffle(goals)
-            queue.extendleft(goals)  # depth-first search <~> LIFO
-            return queue
-
-        def variance_strategy_pop(queue: deque[Goal]) -> tuple[deque[Goal], Goal]:
-            """_summary_.
-
-            Args:
-                queue (deque[Goal]): _description_
-
-            Returns:
-                tuple[deque[Goal], Goal]: _description_
-            """
-            return queue, queue.popleft()  # depth-first search <~> LIFO
-
-        def goal_selection_strategy(goal: Goal) -> tuple[Path, NonTerminalArgument[NT]]:
-            """_summary_.
-
-            Args:
-                goal (Goal): _description_
-
-            Returns:
-                tuple[Path, NonTerminalArgument[NT]]: _description_
-            """
-            max_len = max(len(p) for p in goal.subgoals)
-            filtered = list(filter(lambda x: len(x[0]) == max_len, goal.subgoals.items()))
-            return rndm.choice(filtered)
-            # assuming new subgoals (deeper positions) are added "to the left" of the old ones
-
-        trees: Iterable[Tree[T]] = self.resolution(
-            start,
-            variance_strategy_push,
-            variance_strategy_pop,
-            goal_selection_strategy,
-            max_depth=max_depth,
-            tree=tree,
-            pos=pos,
-        )
-
-        try:
-            iterator = iter(trees)
-            tree = next(iterator)
-        except StopIteration:
-            return None
-
-        return tree
 
     def breadth_first_resolution(
         self,
