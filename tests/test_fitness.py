@@ -17,6 +17,7 @@ import pytest
 
 from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms import (
+    AggregatedFitnessComparator,
     Comparison,
     ExpScalarization,
     FitnessComparator,
@@ -192,6 +193,81 @@ def test_both_comparators_satisfy_the_protocol():
     """The component class is structural."""
     assert isinstance(ScalarFitnessComparator(), FitnessComparator)
     assert isinstance(ParetoFitnessComparator(), FitnessComparator)
+
+
+# ---------------------------------------------------------------------------
+# AggregatedFitnessComparator: the total order behind a decomposed objective
+# ---------------------------------------------------------------------------
+
+
+def test_the_aggregate_orders_by_the_sum_of_the_cases():
+    """The objective is the total, and the vector is how it was taken apart."""
+    comparator = AggregatedFitnessComparator()
+    assert comparator.compare((1.0, 2.0, 3.0), (1.0, 1.0, 1.0)) is Comparison.GREATER
+    assert comparator.compare((1.0, 1.0, 1.0), (1.0, 2.0, 3.0)) is Comparison.LESS
+
+
+def test_vectors_of_equal_totals_tie_rather_than_trading_off():
+    """This is the difference from the Pareto comparator, and the reason both exist.
+
+    The same two vectors trade objectives, so componentwise dominance declines to rank them. Here
+    the sum is the objective by definition, so the two are equally good and the run may prefer
+    either.
+    """
+    trade_offs = ((0.0, 4.0), (4.0, 0.0))
+    assert AggregatedFitnessComparator().compare(*trade_offs) is Comparison.EQUAL
+    assert ParetoFitnessComparator().compare(*trade_offs) is Comparison.INCOMPARABLE
+
+
+def test_the_direction_reverses_the_aggregate_order():
+    """A loss summed over cases is minimized, and the flag is what says so."""
+    minimizing = AggregatedFitnessComparator(greater_is_better=False)
+    assert minimizing.compare((0.0, 1.0), (2.0, 2.0)) is Comparison.GREATER
+
+
+def test_a_scalar_is_its_own_total():
+    """A value that was never decomposed aggregates to itself."""
+    assert AggregatedFitnessComparator().compare(3.0, (1.0, 2.0)) is Comparison.EQUAL
+
+
+def test_a_float_like_scalar_is_not_read_as_a_vector():
+    """A value is placed by whether it has a length, not by whether it is an ``int`` or a ``float``.
+
+    ``numpy.float32`` is the case in practice: it converts to a float and carries no length, and a
+    type test would send it down the vector path, where iterating it fails.
+    """
+    assert AggregatedFitnessComparator().compare(_Float(3.0), 3.0) is Comparison.EQUAL
+
+
+def test_one_failed_case_carries_into_the_total():
+    """A sum containing ``nan`` is ``nan``, and a total that failed is not ranked."""
+    comparator = AggregatedFitnessComparator()
+    assert comparator.compare((1.0, math.nan), (1.0, 1.0)) is Comparison.INCOMPARABLE
+    assert comparator.compare((1.0, 1.0), (1.0, math.nan)) is Comparison.INCOMPARABLE
+
+
+def test_a_failed_total_is_incomparable_to_itself():
+    """Reflexivity fails, so the value is not in the codomain of a fitness function at all."""
+    assert AggregatedFitnessComparator().compare(math.nan, math.nan) is Comparison.INCOMPARABLE
+
+
+def test_the_aggregate_comparator_is_total_apart_from_failures():
+    """Every pair of measured values is ranked, which is what makes it usable for the best-so-far."""
+    comparator = AggregatedFitnessComparator()
+    values = [(0.0, 0.0), (1.0, -1.0), (2.0, 3.0), 4.0, (-1.0,)]
+    for first in values:
+        for second in values:
+            assert comparator.compare(first, second) is not Comparison.INCOMPARABLE
+
+
+def test_the_aggregate_comparator_carries_no_scalarization():
+    """A comparator carrying one invites a caller to scalarize what it could not order."""
+    assert not hasattr(AggregatedFitnessComparator(), "scalarize")
+
+
+def test_the_aggregate_comparator_satisfies_the_protocol():
+    """The component class is structural."""
+    assert isinstance(AggregatedFitnessComparator(), FitnessComparator)
 
 
 # ---------------------------------------------------------------------------
