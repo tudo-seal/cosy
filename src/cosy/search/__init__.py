@@ -8,9 +8,13 @@ its similarity to a set of reference terms, the two uninformed search rules with
 they are built from, and the branch counts that say how many inhabitants a node still reaches,
 which is what a search has to weight its choices by in order to draw from a chosen distribution.
 It also carries random search itself, which is best-first search under a randomizing cost function,
-and the two samplers the evolutionary and Bayesian methods draw their populations from.
+and the two samplers the evolutionary and Bayesian methods draw their populations from. Beside all
+of these stands the one rule that traverses no derivation tree at all: bottom-up search, which
+iterates the immediate consequence operator of a program to the least Herbrand model and reads the
+inhabitants off it.
 """
 
+from cosy.search.bottom_up import BottomUpCounters, bottom_up, least_herbrand_model
 from cosy.search.counting import (
     CountedNode,
     CoupledClause,
@@ -46,6 +50,7 @@ from cosy.search.sampling import (
 )
 
 __all__ = [
+    "BottomUpCounters",
     "CountedNode",
     "CoupledClause",
     "DepthBoundedRandomSampler",
@@ -57,6 +62,7 @@ __all__ = [
     "WeightedTable",
     "WeightedTree",
     "assert_unambiguous_within",
+    "bottom_up",
     "branch_counts",
     "branch_multiplicities",
     "breadth_first",
@@ -73,6 +79,7 @@ __all__ = [
     "holes",
     "k_sst",
     "k_st",
+    "least_herbrand_model",
     "normalized",
     "partial_inhabitant",
     "random_search",
