@@ -11,12 +11,8 @@ Where a sequence is asserted it is written out rather than checked for a propert
 order that is stable but wrong would satisfy "all runs agree" without satisfying anything else.
 """
 
-import os
 import random
-import subprocess
-import sys
 from collections.abc import Callable
-from pathlib import Path
 
 import pytest
 
@@ -24,6 +20,7 @@ from cosy.core.solution_space import NonTerminalArgument, SolutionSpace, _Ordere
 from cosy.core.tree import Tree
 from cosy.search import DepthBoundedRandomSampler, generator_query
 from tests._determinism_grammars import A, B, C, mixed_width_space
+from tests._hash_seeds import printed_across_hash_seeds
 
 
 @pytest.fixture
@@ -34,48 +31,6 @@ def space() -> SolutionSpace[str, str, None]:
         SolutionSpace[str, str, None]: The grammar.
     """
     return mixed_width_space()
-
-
-# ---------------------------------------------------------------------------
-# Running a child interpreter: only a fresh process can vary PYTHONHASHSEED
-# ---------------------------------------------------------------------------
-
-
-# The child bodies import the grammar they need themselves, so that they depend on nothing but
-# ``cosy`` -- see ``tests/_determinism_grammars``.
-_CHILD_PREAMBLE = f"import sys\nsys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
-
-_HASH_SEEDS = ("0", "1", "7", "42", "123")
-
-
-def _printed_across_hash_seeds(body: str) -> set[str]:
-    """Run ``body`` in fresh interpreters that differ only in their hash seed.
-
-    A process fixes its hash seed at startup, so a test that stays inside the current interpreter
-    cannot tell a stable order from one that is merely stable for this run.
-
-    Args:
-        body (str): Statements to run after the preamble. Whatever they print is what is compared.
-
-    Returns:
-        set[str]: The distinct outputs. Reproducibility means there is exactly one.
-    """
-    printed = set()
-    for hash_seed in _HASH_SEEDS:
-        child = subprocess.run(
-            [sys.executable, "-c", _CHILD_PREAMBLE + body],
-            capture_output=True,
-            check=False,
-            env={**os.environ, "PYTHONHASHSEED": hash_seed},
-            text=True,
-        )
-        if child.returncode != 0:
-            pytest.fail(
-                f"the child interpreter did not run to completion under PYTHONHASHSEED={hash_seed}; "
-                f"this is an environment failure, not a difference in order:\n{child.stderr}"
-            )
-        printed.add(child.stdout.strip())
-    return printed
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +236,7 @@ def test_a_seeded_sample_repeats() -> None:
         f"one seed produced {len(sampled)} different terms: {sampled}"
     )
 
-    printed = _printed_across_hash_seeds(
+    printed = printed_across_hash_seeds(
         "import random\n"
         "from cosy.search import DepthBoundedRandomSampler, generator_query\n"
         "from tests._determinism_grammars import mixed_width_space\n"
@@ -324,7 +279,7 @@ def test_enumerate_trees_is_reproducible_across_processes() -> None:
     at a time; on a grammar with a single recursive non-terminal the working set never holds more
     than one element and its order cannot be observed.
     """
-    printed = _printed_across_hash_seeds(
+    printed = printed_across_hash_seeds(
         "from tests._determinism_grammars import branching_space, mixed_width_space\n"
         'print([str(tree) for tree in mixed_width_space().enumerate_trees("S", max_count=5)])\n'
         'print([str(tree) for tree in branching_space().enumerate_trees("S", max_count=6)])\n'
@@ -432,7 +387,7 @@ def test_prune_reports_its_nonterminals_in_discovery_order() -> None:
     one ground type makes three non-terminals productive at once, so the order in which its
     consumers are visited decides the result.
     """
-    printed = _printed_across_hash_seeds(
+    printed = printed_across_hash_seeds(
         "from tests._determinism_grammars import fan_out_space, mixed_width_space, three_ground_types_space\n"
         "for grammar in (mixed_width_space, three_ground_types_space, fan_out_space):\n"
         "    print(list(grammar().prune().nonterminals()))\n"
