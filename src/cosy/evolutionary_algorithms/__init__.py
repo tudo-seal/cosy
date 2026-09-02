@@ -13,9 +13,9 @@ for what each of them contributes to the convergence argument below.
 | Initialization | :class:`SampledInitialization`, :class:`MixtureInitializer` |
 | Mutation | :class:`ResolutionMutation` |
 | Recombination | :class:`SubtreeSwap`, :class:`SubtreeGraft` |
-| Parent selection | :class:`TournamentSelection`, :class:`RankBasedSelection`, :class:`FitnessProportionalSelection` |
+| Parent selection | :class:`TournamentSelection`, :class:`RankBasedSelection`, :class:`FitnessProportionalSelection`, :class:`LexicaseSelection` |
 | Survivor selection | :class:`GenerousConservativeReplacement`, :class:`FitnessBasedReplacement` |
-| Termination | :class:`Generations`, :class:`NoImprovement` |
+| Termination | :class:`Generations`, :class:`NoImprovement`, :class:`TargetFitness`, combined by :class:`AnyOf` |
 | Evaluation | :class:`FitnessComparator`, plus a :class:`Scalarization` where numbers are needed |
 
 :class:`EvolutionarySearch` assembles them into one algorithm. The samplers the
@@ -39,9 +39,12 @@ docstring:
 Two of the five are easy to miss:
 
 * **Tournament selection is not generous** for a tournament size of 2 or more. The least fit member
-  of a population wins no tournament it can enter, so its probability is zero.
+  of a population wins no tournament it can enter, so its probability is zero. **Neither is
+  lexicase selection**, and there for a reason no parameter reaches: an individual elite on no case
+  is filtered out at the first case of every order, and :class:`LexicaseSelection` carries
+  ``uniform_share`` because that is what restores the condition.
   :class:`FitnessProportionalSelection` and :class:`RankBasedSelection` below a selection pressure
-  of 2 are the two that give every member a positive share.
+  of 2 are the two that give every member a positive share without being asked.
 * **The two bounds must measure the same thing.** Reachability asks that every individual the run
   can hold lie within the bound *of the sampler*. The ``max_size`` of the recombination acceptance
   test establishes that against a :class:`~cosy.search.samplers.SizeUniformSampler`, which bounds
@@ -57,6 +60,7 @@ from cosy.evolutionary_algorithms.evolutionary import (
     FitnessFunctionMode,
 )
 from cosy.evolutionary_algorithms.fitness import (
+    AggregatedFitnessComparator,
     Comparison,
     ExpScalarization,
     Fitness,
@@ -82,6 +86,7 @@ from cosy.evolutionary_algorithms.selection import (
     FitnessBasedReplacement,
     FitnessProportionalSelection,
     GenerousConservativeReplacement,
+    LexicaseSelection,
     ParentSelection,
     RankBasedSelection,
     SurvivorSelection,
@@ -89,12 +94,16 @@ from cosy.evolutionary_algorithms.selection import (
     dominance_fronts,
 )
 from cosy.evolutionary_algorithms.termination import (
+    AnyOf,
     Generations,
     NoImprovement,
+    TargetFitness,
     Termination,
 )
 
 __all__ = [
+    "AggregatedFitnessComparator",
+    "AnyOf",
     "Comparison",
     "EAState",
     "EvolutionarySearch",
@@ -108,6 +117,7 @@ __all__ = [
     "GenerousConservativeReplacement",
     "InitializationError",
     "Initializer",
+    "LexicaseSelection",
     "MixtureInitializer",
     "Mutation",
     "NoImprovement",
@@ -122,6 +132,7 @@ __all__ = [
     "SubtreeGraft",
     "SubtreeSwap",
     "SurvivorSelection",
+    "TargetFitness",
     "Termination",
     "TournamentSelection",
     "dominance_fronts",

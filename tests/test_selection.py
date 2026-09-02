@@ -25,11 +25,14 @@ import pytest
 
 from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms import (
+    AggregatedFitnessComparator,
     Comparison,
     ExpScalarization,
+    Fitness,
     FitnessBasedReplacement,
     FitnessProportionalSelection,
     GenerousConservativeReplacement,
+    LexicaseSelection,
     ParentSelection,
     ParetoFitnessComparator,
     RankBasedSelection,
@@ -123,6 +126,7 @@ def test_dominance_fronts_keep_the_input_order():
         TournamentSelection(2, random.Random(0)),
         FitnessProportionalSelection(ExpScalarization(), random.Random(0)),
         RankBasedSelection(1.7, random.Random(0)),
+        LexicaseSelection(random.Random(0)),
     ],
 )
 def test_parent_selection_returns_a_pair_of_members(operator):
@@ -145,6 +149,7 @@ def test_parent_selection_returns_a_pair_of_members(operator):
         TournamentSelection(2, random.Random(0)),
         FitnessProportionalSelection(ExpScalarization(), random.Random(0)),
         RankBasedSelection(1.7, random.Random(0)),
+        LexicaseSelection(random.Random(0)),
     ],
 )
 def test_parent_selection_refuses_an_empty_population(operator):
@@ -532,6 +537,232 @@ def test_the_stored_ranking_does_not_change_the_draw():
     rebuilt = [rebuilding.select_parents(population, dict(fitness), MAXIMIZING) for _ in range(200)]
 
     assert reused == rebuilt
+
+
+# ---------------------------------------------------------------------------
+# Lexicase selection
+# ---------------------------------------------------------------------------
+
+
+def by_case(vectors: list[tuple[float, ...]]) -> tuple[list[Tree], dict[Tree, Fitness]]:
+    """Build individuals carrying the given vectors of per-case outcomes.
+
+    Args:
+        vectors (list[tuple[float, ...]]): One vector of cases per individual.
+
+    Returns:
+        tuple[list[Tree], dict[Tree, Fitness]]: The population and its fitness mapping.
+    """
+    population = individuals(len(vectors))
+    return population, dict(zip(population, vectors, strict=True))
+
+
+class _RefusingComparator:
+    """A comparator that fails the test if anything asks it to compare."""
+
+    def compare(self, first: Fitness, second: Fitness) -> Comparison:
+        """Refuse to compare.
+
+        Args:
+            first (Fitness): Unused.
+            second (Fitness): Unused.
+
+        Returns:
+            Comparison: Never returns.
+
+        Raises:
+            AssertionError: Always.
+        """
+        del first, second
+        msg = "lexicase orders by cases and must not consult a comparator"
+        raise AssertionError(msg)
+
+
+def test_lexicase_selects_the_specialists_an_aggregate_hides():
+    """Three individuals of one aggregate, two of which the cases separate.
+
+    Every vector here totals 4, so an order over aggregates ranks the three equal and has nothing
+    to select on. The cases tell them apart: two are best on one case each, and the third, second
+    best on both and best on neither, is filtered out at the first case of every order. That is
+    what lexicase is for, and it is at the same time the reason the method is not generous. Its
+    probability is not small, it is zero, and no parameter but ``uniform_share`` reaches it.
+    """
+    population, fitness = by_case([(2.0, 2.0), (0.0, 4.0), (4.0, 0.0)])
+    aggregate = AggregatedFitnessComparator(greater_is_better=False)
+    assert aggregate.compare(fitness[population[0]], fitness[population[1]]) is Comparison.EQUAL
+    selection = LexicaseSelection(random.Random(0))
+    drawn = {parent for _ in range(200) for parent in selection.select_parents(population, fitness, MAXIMIZING)}
+    assert drawn == {population[1], population[2]}
+
+
+def test_a_positive_uniform_share_makes_every_member_reachable():
+    """The parameter that restores the condition the method otherwise fails.
+
+    On the share of draws that ignores the cases every member is equally likely, so the individual
+    of the test above gets a positive probability rather than none.
+    """
+    population, fitness = by_case([(2.0, 2.0), (0.0, 4.0), (4.0, 0.0)])
+    selection = LexicaseSelection(random.Random(2), uniform_share=0.5)
+    drawn = {parent for _ in range(200) for parent in selection.select_parents(population, fitness, MAXIMIZING)}
+    assert drawn == set(population)
+
+
+def test_the_uniform_draw_is_uniform():
+    """At a share of one the cases are never read, and every member is equally likely.
+
+    Reachability alone does not pin this. The never-elite member sits first in the population
+    above, so a uniform branch always returning the first member would satisfy that test, the
+    case-wise branch supplying the other two.
+    """
+    population, fitness = by_case([(2.0, 2.0), (0.0, 4.0), (4.0, 0.0)])
+    selection = LexicaseSelection(random.Random(3), uniform_share=1.0)
+    counts = Counter(parent for _ in range(300) for parent in selection.select_parents(population, fitness, MAXIMIZING))
+    assert set(counts) == set(population)
+    assert min(counts.values()) > 100
+
+
+def test_the_direction_decides_which_value_is_elite():
+    """Elite is the smallest value on a case under minimization and the largest under maximization."""
+    population, fitness = by_case([(0.0, 0.0), (2.0, 2.0), (4.0, 4.0)])
+    minimizing = LexicaseSelection(random.Random(0))
+    maximizing = LexicaseSelection(random.Random(0), maximize=True)
+    assert {p for _ in range(50) for p in minimizing.select_parents(population, fitness, MAXIMIZING)} == {population[0]}
+    assert {p for _ in range(50) for p in maximizing.select_parents(population, fitness, MAXIMIZING)} == {population[2]}
+
+
+def test_a_scalar_fitness_is_a_single_case():
+    """A value that was never decomposed is one case, and the method reduces to taking the best."""
+    population, fitness = scored([3.0, 1.0, 2.0])
+    selection = LexicaseSelection(random.Random(0))
+    drawn = {parent for _ in range(50) for parent in selection.select_parents(population, fitness, MAXIMIZING)}
+    assert drawn == {population[1]}
+
+
+def test_epsilon_keeps_the_near_elite():
+    """Epsilon-lexicase: within the tolerance of the best on a case is elite too.
+
+    Exact equality almost never holds on continuous errors, and plain lexicase there decides every
+    draw on the first case it reads.
+    """
+    population, fitness = by_case([(1.0,), (1.2,), (1.6,)])
+    strict = LexicaseSelection(random.Random(4))
+    assert {p for _ in range(50) for p in strict.select_parents(population, fitness, MAXIMIZING)} == {population[0]}
+    tolerant = LexicaseSelection(random.Random(4), epsilon=0.5)
+    assert {p for _ in range(50) for p in tolerant.select_parents(population, fitness, MAXIMIZING)} == {
+        population[0],
+        population[1],
+    }
+
+
+def test_epsilon_keeps_the_near_elite_under_maximization_too():
+    """The tolerance widens the bound downwards where a larger value is the better one.
+
+    The minimizing case above cannot see the sign of the term on this branch, and neither can the
+    maximizing test above it, which runs at the default tolerance of zero.
+    """
+    population, fitness = by_case([(1.6,), (1.4,), (1.0,)])
+    strict = LexicaseSelection(random.Random(4), maximize=True)
+    assert {p for _ in range(50) for p in strict.select_parents(population, fitness, MAXIMIZING)} == {population[0]}
+    tolerant = LexicaseSelection(random.Random(4), maximize=True, epsilon=0.5)
+    assert {p for _ in range(50) for p in tolerant.select_parents(population, fitness, MAXIMIZING)} == {
+        population[0],
+        population[1],
+    }
+
+
+def test_down_sampling_reads_fewer_cases_and_filters_less():
+    """``case_sample`` is the whole difference between a decided draw and an undecided one.
+
+    Case 0 separates nothing and case 1 separates the two. Reading both cases therefore always
+    ends at the first individual, in either order. Reading one case ends at both whenever the one
+    read is case 0, so the second individual becomes reachable.
+    """
+    population, fitness = by_case([(0.0, 1.0), (0.0, 2.0)])
+    every_case = LexicaseSelection(random.Random(5))
+    assert {p for _ in range(50) for p in every_case.select_parents(population, fitness, MAXIMIZING)} == {population[0]}
+    sampled = LexicaseSelection(random.Random(5), case_sample=1)
+    assert {p for _ in range(50) for p in sampled.select_parents(population, fitness, MAXIMIZING)} == set(population)
+
+
+def test_a_case_no_one_could_be_measured_on_is_skipped():
+    """A case on which every individual failed says nothing about any of them.
+
+    Filtering on it would compare against a value that is not one, and every individual would fail
+    the comparison, leaving no one to draw from.
+    """
+    population, fitness = by_case([(math.nan, 1.0), (math.nan, 0.0)])
+    selection = LexicaseSelection(random.Random(6))
+    drawn = {parent for _ in range(50) for parent in selection.select_parents(population, fitness, MAXIMIZING)}
+    assert drawn == {population[1]}
+
+
+@pytest.mark.parametrize("maximize", [False, True])
+def test_a_failed_measurement_is_not_elite_on_its_case(maximize):
+    """Where some individuals were measured, the ones that were not are not the best of them.
+
+    The failed measurement comes first, which is what makes the test see the filtering. Taking the
+    extremum over the pool as it stands returns ``nan`` when a ``nan`` is at the front and returns
+    the measured value when it is at the back, so a version skipping the filter passes with the
+    failure in second place and fails here.
+
+    Args:
+        maximize (bool): The direction under test. The bound is read on both branches.
+    """
+    population, fitness = by_case([(math.nan, 0.0), (1.0, 0.0)])
+    selection = LexicaseSelection(random.Random(7), maximize=maximize)
+    drawn = {parent for _ in range(50) for parent in selection.select_parents(population, fitness, MAXIMIZING)}
+    assert drawn == {population[1]}
+
+
+def test_the_two_parents_are_drawn_under_case_orders_of_their_own():
+    """Each parent gets its own shuffle, so a population with two winners yields both.
+
+    The parametrized contract above leaves lexicase out of the pair that may differ: on a single
+    case with one best value the method is deterministic and the two parents always coincide,
+    which is a property of the method rather than a breach of the contract.
+    """
+    population, fitness = by_case([(0.0, 4.0), (4.0, 0.0)])
+    selection = LexicaseSelection(random.Random(8))
+    pairs = [selection.select_parents(population, fitness, MAXIMIZING) for _ in range(50)]
+    assert any(len(set(pair)) == 1 for pair in pairs)
+    assert any(len(set(pair)) == 2 for pair in pairs)
+
+
+def test_lexicase_never_consults_the_comparator():
+    """It reads the cases, and an order over aggregates is the thing it exists to avoid."""
+    population, fitness = by_case([(0.0, 4.0), (4.0, 0.0)])
+    selection = LexicaseSelection(random.Random(9))
+    assert len(selection.select_parents(population, fitness, _RefusingComparator())) == 2
+
+
+def test_a_population_of_mixed_case_counts_is_refused():
+    """Two individuals measured on different numbers of cases share no notion of "case k"."""
+    population, fitness = by_case([(1.0, 2.0), (1.0,)])
+    selection = LexicaseSelection(random.Random(10))
+    with pytest.raises(ValueError, match="one case count"):
+        selection.select_parents(population, fitness, MAXIMIZING)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"epsilon": -0.1}, "tolerance"),
+        ({"epsilon": math.nan}, "finite"),
+        ({"epsilon": math.inf}, "finite"),
+        ({"uniform_share": 1.5}, "probability"),
+        ({"uniform_share": -0.1}, "probability"),
+        ({"case_sample": 0}, "reads no case"),
+    ],
+)
+def test_lexicase_refuses_settings_outside_their_range(kwargs, message):
+    """Each parameter states its range, and a value outside it is a misconfiguration.
+
+    Args:
+        kwargs: The setting under test.
+        message (str): Part of the message it should be refused with.
+    """
+    with pytest.raises(ValueError, match=message):
+        LexicaseSelection(random.Random(0), **kwargs)
 
 
 # ---------------------------------------------------------------------------

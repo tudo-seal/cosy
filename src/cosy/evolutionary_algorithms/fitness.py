@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 Fitness = float | Sequence[float]
 
 __all__ = [
+    "AggregatedFitnessComparator",
     "Comparison",
     "ExpScalarization",
     "Fitness",
@@ -304,6 +305,70 @@ class ParetoFitnessComparator:
         if never_better:
             return Comparison.LESS
         return Comparison.INCOMPARABLE
+
+
+@dataclass(frozen=True)
+class AggregatedFitnessComparator:
+    """Order vectors of per-case outcomes by their sum: the total order behind the cases.
+
+    This is **not** a scalarization standing in for a partial order, which is the substitution
+    :class:`ParetoFitnessComparator` exists to avoid. It is the opposite situation. The objective
+    is a single number by definition, a total error over a set of cases, and the vector is that
+    number's *decomposition*, carried so that a case-wise component such as
+    :class:`~cosy.evolutionary_algorithms.selection.LexicaseSelection` can read the parts. Adding
+    them up recovers the objective that was decomposed, and no weights are chosen on the way.
+
+    Where a run has several genuinely incommensurable objectives this comparator is the wrong one
+    and :class:`ParetoFitnessComparator` is the right one. What separates the two cases is whether
+    the sum means anything: here it is the definition of the objective, there it is a trade the
+    run never stated.
+
+    Attributes:
+        greater_is_better (bool): Whether a larger aggregate is the fitter one.
+    """
+
+    greater_is_better: bool = True
+
+    @staticmethod
+    def _aggregate(fitness: Fitness) -> float:
+        """Add up the cases of a fitness value.
+
+        A value is placed by whether it *has a length* rather than by its type, for the reason
+        :func:`_single_objective` gives: ``numpy.ndarray`` carries a length without being a
+        ``Sequence``, and a float-like scalar such as ``numpy.float32`` carries none.
+
+        Args:
+            fitness (Fitness): A vector of cases, or a scalar, which is its own total.
+
+        Returns:
+            float: The total over the cases.
+        """
+        try:
+            cases = tuple(float(case) for case in fitness)  # type: ignore[union-attr]
+        except TypeError:
+            return float(fitness)  # type: ignore[arg-type]
+        return float(sum(cases))
+
+    def compare(self, first: Fitness, second: Fitness) -> Comparison:
+        """Compare two fitness values by their aggregates.
+
+        Args:
+            first (Fitness): The first value.
+            second (Fitness): The second value.
+
+        Returns:
+            Comparison: The order of the two aggregates, or ``INCOMPARABLE`` if either of them is
+                ``nan``. A failed measurement goes unranked here as in every comparator in this
+                module, and one failed case carries into the total.
+        """
+        left = self._aggregate(first)
+        right = self._aggregate(second)
+        if math.isnan(left) or math.isnan(right):
+            return Comparison.INCOMPARABLE
+        if left == right:
+            return Comparison.EQUAL
+        fitter = left > right if self.greater_is_better else left < right
+        return Comparison.GREATER if fitter else Comparison.LESS
 
 
 @dataclass(frozen=True)

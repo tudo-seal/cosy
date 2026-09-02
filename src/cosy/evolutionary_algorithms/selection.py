@@ -47,6 +47,7 @@ __all__ = [
     "FitnessBasedReplacement",
     "FitnessProportionalSelection",
     "GenerousConservativeReplacement",
+    "LexicaseSelection",
     "ParentSelection",
     "RankBasedSelection",
     "SurvivorSelection",
@@ -495,6 +496,203 @@ class RankBasedSelection(ParentSelection[T]):
         ranked, weights = self._ranking(population, fitness, comparator)
         first, second = self.rng.choices(ranked, weights=weights, k=2)
         return first, second
+
+
+class LexicaseSelection(ParentSelection[T]):
+    """Filter the population case by case in a random order, never aggregating.
+
+    Every other component in this module reads one fitness *value* per individual. This one reads
+    the **vector** of per-case outcomes and never sums it: to draw one parent it shuffles the
+    cases, then walks them, keeping at each step only the individuals that are elite on the
+    current case, until one individual is left or the cases run out.
+
+    **What it is for.** An aggregate hides which cases an individual solves. Where many
+    individuals share one aggregate value the order over them is flat and selection has nothing to
+    work with, while those same individuals may differ sharply in *which* cases they get right,
+    which is the information the sum destroys. Lexicase reads exactly that information, and what
+    it selects are **specialists**: individuals excellent on a few cases and unremarkable overall.
+    A method reading the aggregate cannot prefer such an individual for what it is good at, the
+    aggregate carrying no record of it, so a specialist competes there on a rank that hides its
+    specialization and an aggregate-worst specialist is not drawn at all.
+
+    **This method is not generous, and the reason is structural.** Almost sure convergence asks
+    that every member of the population be drawn as a parent with positive probability. An
+    individual elite on *no* case is filtered out at the first case of every order, so its
+    probability is exactly zero, and unlike the tournament there is no parameter to raise that
+    changes it. ``uniform_share`` is what changes it: it is the probability that a draw ignores
+    the cases and takes a member uniformly, so any positive value restores the condition. The
+    default is 0, which is the method as the literature defines it, and a run that wants the
+    guarantee sets the share and pays for it in selectivity.
+
+    **Ties and near ties.** Elite means equal to the best value on that case. With ``epsilon`` a
+    value within that distance of the best counts as elite too, which is epsilon-lexicase, the
+    variant for continuous errors, where exact equality almost never holds and plain lexicase
+    collapses to a selection on one case. On integer-valued cases the default 0 is the right one.
+
+    A case on which every individual failed to be measured carries no information about any of
+    them, and it is skipped rather than emptying the pool. On a case where only some failed, the
+    failures are not elite, which is the answer a failed measurement gets throughout the package.
+
+    Attributes:
+        rng (random.Random): The source of randomness, for the case order and for the final tie.
+        maximize (bool): Whether a larger per-case value is the better one.
+        epsilon (float): How far below the best value on a case still counts as elite.
+        uniform_share (float): The probability of drawing uniformly instead, which is what makes
+            the method generous.
+        case_sample (int | None): Read only this many cases per draw, so fewer cases filter the
+            pool and more members reach the final tie. None reads all. Down-sampled lexicase in
+            the literature draws its subset *before* evaluating and saves the evaluations of the
+            cases it drops. Here the fitness values arrive already computed, so what this
+            parameter changes is the filtering and not the cost of it.
+    """
+
+    def __init__(
+        self,
+        rng: random.Random,
+        *,
+        maximize: bool = False,
+        epsilon: float = 0.0,
+        uniform_share: float = 0.0,
+        case_sample: int | None = None,
+    ) -> None:
+        """Build the operator.
+
+        Args:
+            rng (random.Random): The source of randomness.
+            maximize (bool): Whether larger per-case values are better. (Default value = False)
+            epsilon (float): The tolerance for counting as elite. (Default value = 0.0)
+            uniform_share (float): The probability of a uniform draw. (Default value = 0.0)
+            case_sample (int | None): Cases per draw, or None for all. (Default value = None)
+
+        Raises:
+            ValueError: If the tolerance is not a finite number that is at least zero, if the
+                uniform share is not a probability, or if the case sample is not positive. A
+                tolerance wider than the values it compares would empty the pool, which is a
+                misconfiguration to report here rather than an index error to raise mid-run.
+        """
+        if not (epsilon >= 0.0 and math.isfinite(epsilon)):
+            msg = f"epsilon is a tolerance and has to be a finite number that is not negative: {epsilon}"
+            raise ValueError(msg)
+        if not 0.0 <= uniform_share <= 1.0:
+            msg = f"uniform_share is a probability: {uniform_share}"
+            raise ValueError(msg)
+        if case_sample is not None and case_sample < 1:
+            msg = f"a draw that reads no case cannot filter anything: {case_sample}"
+            raise ValueError(msg)
+        self.rng = rng
+        self.maximize = maximize
+        self.epsilon = float(epsilon)
+        self.uniform_share = float(uniform_share)
+        self.case_sample = case_sample
+
+    @staticmethod
+    def _cases(fitness: Fitness) -> tuple[float, ...]:
+        """Read a fitness value as a vector of per-case outcomes.
+
+        A value is placed by whether it *has a length* rather than by its type, for the reason
+        :func:`~cosy.evolutionary_algorithms.fitness._single_objective` gives: ``numpy.ndarray``
+        carries a length without being a ``Sequence``, and a float-like scalar such as
+        ``numpy.float32`` carries none.
+
+        Args:
+            fitness (Fitness): The value to read.
+
+        Returns:
+            tuple[float, ...]: Its cases. A scalar is a single case.
+        """
+        try:
+            return tuple(float(case) for case in fitness)  # type: ignore[union-attr]
+        except TypeError:
+            return (float(fitness),)  # type: ignore[arg-type]
+
+    def _elite(self, pool: list[Tree[T]], values: Mapping[Tree[T], float]) -> list[Tree[T]]:
+        """Keep the members of the pool that are elite on one case.
+
+        Args:
+            pool (list[Tree[T]]): The members still in contention.
+            values (Mapping[Tree[T], float]): Their value on the case being read.
+
+        Returns:
+            list[Tree[T]]: Those within ``epsilon`` of the best value, in the order they came in.
+                A case on which every member failed to be measured leaves the pool untouched.
+        """
+        measured = [value for value in (values[member] for member in pool) if not math.isnan(value)]
+        if not measured:
+            return pool
+        # A failed measurement compares false in either direction, so it falls out of the bound
+        # below on its own and needs no test of its own to keep it from counting as elite.
+        if self.maximize:
+            bound = max(measured) - self.epsilon
+            return [member for member in pool if values[member] >= bound]
+        bound = min(measured) + self.epsilon
+        return [member for member in pool if values[member] <= bound]
+
+    def _select_one(
+        self,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+    ) -> Tree[T]:
+        """Draw one parent.
+
+        Args:
+            population (Sequence[Tree[T]]): The population to draw from, of at least one member.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+
+        Returns:
+            Tree[T]: The individual drawn.
+
+        Raises:
+            ValueError: If the individuals carry different numbers of cases, which would leave
+                "the same case" meaning different things for different individuals.
+        """
+        if self.uniform_share > 0 and self.rng.random() < self.uniform_share:
+            return self.rng.choice(list(population))
+
+        vectors = {member: self._cases(fitness[member]) for member in population}
+        widths = {len(vector) for vector in vectors.values()}
+        if len(widths) > 1:
+            msg = f"lexicase needs one case count for the whole population, got {sorted(widths)}"
+            raise ValueError(msg)
+
+        order = list(range(widths.pop()))
+        self.rng.shuffle(order)
+        if self.case_sample is not None:
+            order = order[: self.case_sample]
+
+        pool = list(population)
+        for case in order:
+            if len(pool) <= 1:
+                break
+            pool = self._elite(pool, {member: vectors[member][case] for member in pool})
+        return self.rng.choice(pool)
+
+    def select_parents(
+        self,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+    ) -> tuple[Tree[T], Tree[T]]:
+        """Draw two parents, each under a case order of its own.
+
+        The comparator is not consulted. Lexicase orders by cases, and an order over aggregates is
+        the thing it exists to avoid. It stays in the signature because the protocol has it.
+
+        Args:
+            population (Sequence[Tree[T]]): The current population.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): Unused, for the reason above.
+
+        Returns:
+            tuple[Tree[T], Tree[T]]: The two parents.
+
+        Raises:
+            ValueError: If the population is empty.
+        """
+        del comparator
+        if not population:
+            msg = "parent selection needs a non-empty population"
+            raise ValueError(msg)
+        return self._select_one(population, fitness), self._select_one(population, fitness)
 
 
 class FitnessBasedReplacement(SurvivorSelection[T]):
