@@ -15,6 +15,11 @@ randomizing cost function, and the two samplers the evolutionary and Bayesian me
 populations from. Beside all of these stands the one rule that traverses no derivation tree at all:
 bottom-up search, which iterates the immediate consequence operator of a program to the least
 Herbrand model and reads the inhabitants off it.
+
+One thing here searches nothing. Determinization rewrites a program before any search runs. A
+predicate that factors through a finite abstraction is compiled into the non-terminals by a product
+construction, and what comes out carries no predicate over a hole, so the branch counts apply to a
+program whose original form they refuse.
 """
 
 from cosy.search.bottom_up import BottomUpCounters, bottom_up, least_herbrand_model
@@ -48,6 +53,14 @@ from cosy.search.counting import (
     retained_node_count,
     size_table,
 )
+from cosy.search.determinize import (
+    Determinization,
+    MergedNonTerminal,
+    ProductNonTerminal,
+    determinize,
+    recognizable_or_raise,
+    unabstracted_clauses,
+)
 from cosy.search.gumbel import condition_on_maximum, gumbel_key, gumbel_noise
 from cosy.search.kernels import k_sst, k_st, normalized, reference_score
 from cosy.search.partial import Hole, holes, partial_inhabitant, term_depth, term_size
@@ -80,11 +93,14 @@ __all__ = [
     "CountedNode",
     "CoupledClause",
     "DepthBoundedRandomSampler",
+    "Determinization",
     "Frontier",
     "HeapFrontier",
     "Hole",
     "LinearScanFrontier",
+    "MergedNonTerminal",
     "NonNegativeReals",
+    "ProductNonTerminal",
     "Reals",
     "ResolutionQuery",
     "Sampler",
@@ -107,6 +123,7 @@ __all__ = [
     "decomposable_or_raise",
     "deepest_first_subgoal",
     "depth_first",
+    "determinize",
     "fewest_arguments_first",
     "generator_query",
     "greedy",
@@ -120,6 +137,7 @@ __all__ = [
     "partial_inhabitant",
     "random_search",
     "random_search_keyed",
+    "recognizable_or_raise",
     "reference_score",
     "residual_query",
     "retained_node_count",
@@ -127,6 +145,7 @@ __all__ = [
     "size_uniform",
     "term_depth",
     "term_size",
+    "unabstracted_clauses",
     "uniform_cost",
     "uniform_random_clause_order",
     "weighted_table",
