@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 
 from typing import Any
 
+from cosy.core.recognizable import (
+    RecognizableConstraint,
+    StateRelation,
+    TreeAbstraction,
+)
 from cosy.core.types import (
     Abstraction,
     Group,
@@ -176,6 +181,45 @@ class SpecificationBuilder:
 
         self._result = new_result
         return self
+
+    def recognizable_constraint(
+        self,
+        abstraction: TreeAbstraction,
+        relation: StateRelation,
+    ) -> SpecificationBuilder:
+        """Constraint stated as a relation on a finite abstraction of its arguments.
+
+        The same constraint as :meth:`constraint`, and the engine evaluates it the same way, but
+        stated in the form condition **(REC)** asks for: a finite, bottom-up computable
+        ``abstraction`` and a ``relation`` on its values, with the predicate *derived* as the one
+        after the other (:class:`cosy.core.recognizable.RecognizableConstraint`).
+
+        What this buys is :func:`cosy.search.determinize.determinize`. A constraint in this form
+        can be pushed into the non-terminals by a product construction, after which the program is
+        predicate-free and countable from the program alone, which is the table form of counting
+        instead of a materialized search tree. The cost is paid in the size of the program and of
+        the bound rather than in the number of inhabitants. A constraint stated with
+        :meth:`constraint` cannot be pushed anywhere, because a predicate records nothing about
+        what it reads.
+
+        The price is that the abstraction has to be *finite*: two terms of the same value are
+        interchangeable everywhere the relation looks. Where no such abstraction exists, and a
+        predicate comparing two subterms for equality over an infinite sort is the standard
+        example, :meth:`constraint` is the honest choice and the tree form of counting is what
+        pays for it.
+
+        Args:
+            abstraction (TreeAbstraction): ``alpha``, applied to every symbol the program writes:
+                ``(symbol, states of the arguments) -> state``. A literal is a nullary symbol, so
+                it receives the empty tuple. Returning the value itself is the identity choice and
+                lets the relation read a literal exactly as a predicate would.
+            relation (StateRelation): ``R``, deciding on states. It receives the substitution a
+                predicate receives, with every term replaced by its state.
+
+        Returns:
+            SpecificationBuilder: The SpecificationBuilder object.
+        """
+        return self.constraint(RecognizableConstraint(abstraction=abstraction, relation=relation))
 
     def suffix(self, suffix: Type) -> Specification:
         """Constructs the final specification wrapping the given `Type` `suffix`.

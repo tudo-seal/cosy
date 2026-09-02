@@ -14,6 +14,13 @@ Small enough to enumerate exhaustively, so expected answers are computed rather 
   ``offset_cut_space``: the spaces that decide which predicates a table indexed by the
   non-terminal can count, one shape of predicate each. ``two_predicate_space`` carries two
   predicates on one clause, where "all of them hold" and "some of them holds" differ.
+* ``recognizable_cut_space``, ``recognizable_pair_space``, ``avl_space``: predicates stated as
+  an abstraction and a relation on its values, so that a determinization can compile them into the
+  non-terminals. Two of them have a control that states the *same* condition as a plain predicate,
+  ``cut_space`` and ``avl_coupled_space``, and comparing the languages is what makes those pairs
+  say something. ``constrained_space`` is not that for the third: it states a *different*
+  condition, term inequality rather than core inequality, and the pair is a contrast between a
+  condition inside the recognizable class and one outside it.
 
 A plain module rather than a ``conftest.py``: ``Tree`` memoizes its positions on the instance and
 the suite runs randomized and in parallel, so a shared instance would let tests observe each
@@ -1234,3 +1241,317 @@ def hole_tuple_space():
         mixed_holes: SpecificationBuilder().argument("left", SORT_A).argument("right", SORT_B).suffix(TUPLE_SORT),
     }
     return Synthesizer(specs).construct_solution_space(TUPLE_SORT)
+
+
+# ---------------------------------------------------------------------------
+# The cut of V, stated through an abstraction: alpha = capped size, R = "at most two"
+# ---------------------------------------------------------------------------
+
+
+def capped_size(_symbol, states) -> int:
+    """Abstract a term by its size, capped at three.
+
+    An algebra with a three-element carrier: sizes 1 and 2 are told apart and everything from 3 on
+    is one class. That is enough to decide "at most two symbols" and no more, which is what makes
+    it finite. The uncapped size is the standard slip and has no finite carrier at all.
+
+    Args:
+        _symbol: The function symbol. The size does not depend on which one it is.
+        states: The sizes of the arguments.
+
+    Returns:
+        int: ``min(1 + sum of the argument sizes, 3)``.
+    """
+    return min(1 + sum(states), 3)
+
+
+def at_most_two(substitution) -> bool:
+    """Accept a boxed value of at most two symbols, which is the relation on states.
+
+    Args:
+        substitution: The clause's substitution, with the hole carrying its abstraction.
+
+    Returns:
+        bool: True when the capped size of the boxed value is at most two.
+    """
+    return substitution["inner"] <= 2
+
+
+def recognizable_cut_space():
+    """Build :func:`cut_space` with its predicate stated as an abstraction and a relation.
+
+    Same language, same counts, same clause structure, and countable from the program, because a
+    determinization can split ``V`` into the sorts "one symbol", "two symbols" and "three or more"
+    and drop the predicate. The pair with :func:`cut_space` is the point: a repository decides
+    whether the table form applies to it, by how it states its constraint.
+
+    Returns:
+        SolutionSpace: The space, started at ``Box``.
+    """
+    specs = {
+        v_zero: SpecificationBuilder().suffix(CUT_SORT),
+        v_one: SpecificationBuilder().suffix(CUT_SORT),
+        v_wrap: SpecificationBuilder().argument("inner", CUT_SORT).suffix(CUT_SORT),
+        box: SpecificationBuilder()
+        .argument("inner", CUT_SORT)
+        .recognizable_constraint(capped_size, at_most_two)
+        .suffix(BOX),
+    }
+    return Synthesizer(specs).construct_solution_space(BOX)
+
+
+# ---------------------------------------------------------------------------
+# Coupled and still recognizable: Pair -> pair(W, W) with different innermost letters
+# ---------------------------------------------------------------------------
+
+
+def innermost(symbol, states) -> int:
+    """Abstract a word by the letter at its core.
+
+    Args:
+        symbol: The function symbol.
+        states: The abstractions of the arguments, empty on a letter.
+
+    Returns:
+        int: 0 or 1, the letter ``wrap`` was applied to.
+    """
+    return states[0] if states else (0 if symbol is zero else 1)
+
+
+def different_cores(substitution) -> bool:
+    """Accept two words whose innermost letters differ, which is the relation on states.
+
+    Args:
+        substitution: The clause's substitution, with both holes carrying their abstraction.
+
+    Returns:
+        bool: True when the two letters differ.
+    """
+    return substitution["left"] != substitution["right"]
+
+
+def recognizable_pair_space():
+    """Build a space whose predicate couples two holes and still factors through two states.
+
+    The contrast is to :func:`constrained_space`, which is this space with ``left != right`` on
+    the *terms*. Over a sort with infinitely many terms, term equality has no finite abstraction,
+    so that space is outside (REC) and this one is inside it. Both couple, both break the
+    decomposition the counting recursion assumes, and only one of them can be determinized, which
+    is what makes (REC) the condition rather than "no coupling".
+
+    A word of size ``s`` is ``wrap`` applied ``s - 1`` times to a letter, so there are two words
+    of every size, one per core. A pair of size ``n`` spends one symbol on ``pair`` and splits the
+    remaining ``n - 1`` over two words of at least one symbol each, which is ``n - 2`` splits, and
+    of the four core combinations at each split the relation admits the two that differ. So the
+    space holds ``2 (n - 2)`` pairs of size ``n`` for ``n >= 2``.
+
+    Returns:
+        SolutionSpace: The space, started at ``Pair``.
+    """
+    specs = {
+        zero: SpecificationBuilder().suffix(WORD),
+        one: SpecificationBuilder().suffix(WORD),
+        wrap: SpecificationBuilder().argument("inner", WORD).suffix(WORD),
+        pair: SpecificationBuilder()
+        .argument("left", WORD)
+        .argument("right", WORD)
+        .recognizable_constraint(innermost, different_cores)
+        .suffix(PAIR),
+    }
+    return Synthesizer(specs).construct_solution_space(PAIR)
+
+
+# ---------------------------------------------------------------------------
+# AVL trees: AVL -> avl_node(key, cached height, AVL, AVL) | avl_leaf
+# ---------------------------------------------------------------------------
+
+AVL = Constructor("AVL")
+AVL_KEYS = tuple(range(10))
+"""The key set of the AVL trees Goldstein and Pierce (2022) generate in their Table 1."""
+
+LEAF_STATE = (0, None, None)
+"""``alpha`` of the empty tree: height zero, no smallest key, no greatest key."""
+
+
+def avl_leaf() -> str:
+    """Build the empty tree.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "E"
+
+
+def avl_node(x: int, h: int, left: str, right: str) -> str:
+    """Build an inner node carrying its key and its cached height.
+
+    Args:
+        x (int): The key.
+        h (int): The cached height.
+        left (str): The interpreted left subtree.
+        right (str): The interpreted right subtree.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"({left} {x}:{h} {right})"
+
+
+def avl_summary(symbol, states):
+    """Abstract a tree by its height and its extreme keys, which is ``alpha`` for the AVL condition.
+
+    All three parts of the validity condition read only this much of a subtree: balance reads the
+    heights, the cache reads the heights, and the ordering reads the extreme keys. The extreme keys
+    are bounded by the key set. The height is not bounded by this function, which adds one per
+    level without a cap, but by the relation: it admits a node only where the cached height comes
+    from a finite group and the ordering is strict, so at most as many nodes nest as there are
+    keys. What the determinization reaches is therefore finite even though ``alpha`` alone would
+    not make it so.
+
+    Args:
+        symbol: The function symbol, or a literal value.
+        states: The abstractions of the arguments.
+
+    Returns:
+        tuple: ``(height, smallest key, greatest key)`` on a tree, the value itself on a literal.
+    """
+    if symbol is avl_leaf:
+        return LEAF_STATE
+    if symbol is avl_node:
+        key, _cached, left, right = states
+        return (
+            1 + max(left[0], right[0]),
+            left[1] if left[1] is not None else key,
+            right[2] if right[2] is not None else key,
+        )
+    return symbol  # a literal is its own abstraction
+
+
+def avl_relation(substitution) -> bool:
+    """Decide the validity condition on the states of one node.
+
+    Args:
+        substitution: The clause's substitution, with both subtrees carrying their abstraction.
+
+    Returns:
+        bool: True when the node is balanced, caches its height correctly and orders its keys.
+    """
+    key, cached = substitution["x"], substitution["h"]
+    left, right = substitution["l"], substitution["r"]
+    if abs(left[0] - right[0]) > 1:  # balance
+        return False
+    if cached != 1 + max(left[0], right[0]):  # the cached height is the true one
+        return False
+    if left[2] is not None and left[2] >= key:  # ordering, to the left
+        return False
+    return not (right[1] is not None and right[1] <= key)  # ordering, to the right
+
+
+def tree_summary(term):
+    """Compute height and extreme keys of a grounded AVL term, without the abstraction.
+
+    Written independently of :func:`avl_summary` on purpose. It is what the coupled space's
+    predicate reads, and if the two agreed by construction the contrast between the two spaces
+    would prove nothing.
+
+    Args:
+        term (Tree): A grounded term over ``avl_leaf`` and ``avl_node``.
+
+    Returns:
+        tuple: ``(height, smallest key, greatest key)``.
+    """
+    if not term.children:
+        return LEAF_STATE
+    key = term.children[0].root
+    left = tree_summary(term.children[2])
+    right = tree_summary(term.children[3])
+    return (
+        1 + max(left[0], right[0]),
+        left[1] if left[1] is not None else key,
+        right[2] if right[2] is not None else key,
+    )
+
+
+def avl_valid(substitution) -> bool:
+    """Decide the validity condition on the grounded subtrees of one node.
+
+    Reads both subtrees in full, plus the two literals: a genuine relation over the holes, stated
+    the way a repository states one when it has no abstraction to state instead.
+
+    Args:
+        substitution: The clause's substitution, two grounded subtrees and two literals.
+
+    Returns:
+        bool: True when the node is a valid AVL node.
+    """
+    key, cached = substitution["x"], substitution["h"]
+    left, right = tree_summary(substitution["l"]), tree_summary(substitution["r"])
+    if abs(left[0] - right[0]) > 1:
+        return False
+    if cached != 1 + max(left[0], right[0]):
+        return False
+    if left[2] is not None and left[2] >= key:
+        return False
+    return not (right[1] is not None and right[1] <= key)
+
+
+def _avl_specification(keys, constrain):
+    """Build the AVL specification, with the constraint stated either way.
+
+    Args:
+        keys (tuple): The admissible key values.
+        constrain (Callable): Applied to the ``avl_node`` builder to attach the constraint.
+
+    Returns:
+        dict: The specification.
+    """
+    return {
+        avl_leaf: SpecificationBuilder().suffix(AVL),
+        avl_node: constrain(
+            SpecificationBuilder()
+            .parameter("x", DataGroup("key", tuple(keys)))
+            .parameter("h", DataGroup("height", tuple(range(1, len(keys) + 1))))
+            .argument("l", AVL)
+            .argument("r", AVL)
+        ).suffix(AVL),
+    }
+
+
+def avl_coupled_space(keys=AVL_KEYS):
+    """Build the AVL space with the validity condition as a plain predicate over the holes.
+
+    This is what a repository writes without an abstraction, and what the framework cannot count
+    from the program: the predicate reads both subtrees, so the residual at ``avl_node`` is a
+    relation and not a product. Counting it means building the retained tree, which is why the
+    tests below run it on a few keys and its recognizable twin on all of them.
+
+    A node costs three symbols, the terminal and two literals, and a leaf costs one, so a tree of
+    ``k`` nodes has size ``4k + 1``. Ordering is strict, so at most ``len(keys)`` nodes fit and no
+    tree exceeds a size of ``4 len(keys) + 1``. That size is reached rather than approached, the
+    tree using every key being a tree of the language.
+
+    Args:
+        keys (tuple): The admissible key values. (Default value = ``AVL_KEYS``)
+
+    Returns:
+        SolutionSpace: The space, started at ``AVL``.
+    """
+    specs = _avl_specification(keys, lambda builder: builder.constraint(avl_valid))
+    return Synthesizer(specs).construct_solution_space(AVL).prune()
+
+
+def avl_space(keys=AVL_KEYS):
+    """Build the AVL space with the validity condition stated as an abstraction and a relation.
+
+    The same language as :func:`avl_coupled_space`, in the form the determinization consumes. The
+    height a generator would otherwise have to guess becomes part of the non-terminal, and the
+    program that comes out carries no predicate at all.
+
+    Args:
+        keys (tuple): The admissible key values. (Default value = ``AVL_KEYS``)
+
+    Returns:
+        SolutionSpace: The space, started at ``AVL``.
+    """
+    specs = _avl_specification(keys, lambda builder: builder.recognizable_constraint(avl_summary, avl_relation))
+    return Synthesizer(specs).construct_solution_space(AVL).prune()
