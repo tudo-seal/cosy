@@ -103,14 +103,10 @@ exclude_lines = [
   "FBT",
 ]
 "**/evolutionary_algorithms/**/*" = [
-  "FBT",      # Boolean-typed arguments in function definitions
   "ARG002",   # Unused method arguments for interface compatibility
   "ARG005",   # Unused lambda arguments for algebra operations
   "S311",     # random.Random is intentionally used for deterministic seeding
-  "B008",     # Mutable default argument in helper interface
-  "B023",     # Function definition does not bind loop variable (intentional for generator pattern)
   "B904",     # Exception chaining (pre-existing code pattern)
-  "T201",     # Use of print() for optional logging in evolutionary algorithm implementations
 ]
 "**/core/**/*" = [
   "FBT",      # Boolean-typed arguments in function definitions

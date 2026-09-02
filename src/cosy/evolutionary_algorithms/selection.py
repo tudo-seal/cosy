@@ -1,394 +1,642 @@
-"""Selection operators for evolutionary algorithms.
+"""Selection: the parent selection and the survivor selection of a run.
 
-Selection operators are responsible for choosing individuals from a population based on their fitness.
-They are used for both parent selection (choosing individuals for reproduction) and survivor selection
-(choosing individuals to survive to the next generation).
+This module holds a curated inventory of standard methods rather than a complete one. What it adds
+to each of them is the record of which condition for almost sure convergence it discharges, and
+that record is the reason the inventory is curated.
 
-This module provides several selection strategies that balance exploitation (favoring good solutions)
-with exploration (maintaining diversity).
+**Two contracts, not one.** A parent selection method maps a population to a **pair** of its
+members. A survivor selection method maps the parents and the offspring **together** to a
+population of mu individuals among them. They are separate protocols with separate method names,
+so passing a replacement where a parent selection belongs is a type error rather than a silent
+misconfiguration.
+
+**The order is partial**, and every order-based component here consumes it through
+:class:`~cosy.evolutionary_algorithms.fitness.Comparison`. Where a total order is needed, as in
+ranking and in truncation, the canonical construction over a partial order is used: *dominance
+fronts*, the individuals no other dominates, then the same among the rest, and so on. Under a total
+order the fronts are exactly the classes of equally fit individuals, so every component below
+reduces to its textbook form and equally fit individuals keep sharing a rank.
+
+**Where numbers are needed, a scalarization is passed in.** Only proportional drawing needs them.
+A scalarization is strictly positive by definition, so the weights *are* its values and nothing is
+lifted, shifted or floored on the way to them. A lift applied to negative values would move every
+share along with it, and nothing here needs lifting.
 """
 
-import random
-from abc import ABC, abstractmethod
-from collections.abc import Hashable, Iterable, Mapping, Sequence
-from typing import Generic, TypeVar
+from __future__ import annotations
 
-from cosy.core.tree import Tree
-from cosy.evolutionary_algorithms.fitness import Fitness, FitnessComparator
+import math
+from typing import TYPE_CHECKING, Protocol, TypeVar, runtime_checkable
 
-NT = TypeVar("NT", bound=Hashable)  # type of non-terminals
-T = TypeVar("T", bound=Hashable)  # type of terminals
-G = TypeVar("G", bound=Hashable)  # type of constants
+from cosy.evolutionary_algorithms.fitness import Comparison
+
+if TYPE_CHECKING:
+    import random
+    from collections.abc import Hashable, Mapping, Sequence
+
+    from cosy.core.tree import Tree
+    from cosy.evolutionary_algorithms.fitness import (
+        Fitness,
+        FitnessComparator,
+        Scalarization,
+    )
+
+T = TypeVar("T", bound="Hashable")  # type of terminals
+
+__all__ = [
+    "FitnessBasedReplacement",
+    "FitnessProportionalSelection",
+    "GenerousConservativeReplacement",
+    "ParentSelection",
+    "RankBasedSelection",
+    "SurvivorSelection",
+    "TournamentSelection",
+    "dominance_fronts",
+]
 
 
-class Selection(ABC, Generic[NT, T, G]):
-    """Abstract base class for selection operators.
+def dominance_fronts(
+    individuals: Sequence[Tree[T]],
+    fitness: Mapping[Tree[T], Fitness],
+    comparator: FitnessComparator,
+) -> list[list[Tree[T]]]:
+    """Sort individuals into dominance fronts, fittest front first.
 
-    Selection operators are responsible for choosing individuals from a population.
-    They can be used for parent selection (producing a mating pool) or
-    survivor selection (choosing individuals for the next generation).
+    The first front holds the individuals no other individual is fitter than, the second holds
+    those of the rest, and so on. This is the canonical linearization of a partial order into
+    ranks: it uses only the relation, it makes no arbitrary choice among incomparable individuals,
+    and under a total order it degenerates to the ordinary ranking with equally fit individuals
+    sharing a front.
+
+    Finding one front scans each individual not yet in a front against the others. A scan ends at
+    the first individual that is fitter, so a front costs at most the square of the number not yet
+    in a front. The construction does that once per front. A population in which no member is
+    fitter than any other is a single front, so the cost is quadratic in the number of individuals.
+    A total order with no two members equally fit gives every member a front of its own, so the
+    cost is at most cubic. A population that arrives fittest first stays quadratic even then, since
+    removing a front keeps the order and every scan but the fittest individual's ends at the first
+    individual it meets.
+
+    Args:
+        individuals (Sequence[Tree[T]]): The individuals to rank. Repetitions are kept, since a
+            population is a multiset and a repeated individual occupies a place of its own.
+        fitness (Mapping[Tree[T], Fitness]): The fitness of each individual.
+        comparator (FitnessComparator): The partial order.
+
+    Returns:
+        list[list[Tree[T]]]: The fronts, fittest first. Within a front the input order is kept,
+            so a caller that has to cut a front short cuts it deterministically.
+    """
+    remaining = list(individuals)
+    fronts: list[list[Tree[T]]] = []
+    while remaining:
+        front = [
+            candidate
+            for candidate in remaining
+            if not any(
+                comparator.compare(fitness[other], fitness[candidate]) is Comparison.GREATER for other in remaining
+            )
+        ]
+        fronts.append(front)
+        # Removing by identity of the front's membership would drop every copy of a repeated
+        # individual at once, which is correct: copies are equally fit, so they share a front.
+        front_members = set(front)
+        remaining = [candidate for candidate in remaining if candidate not in front_members]
+    return fronts
+
+
+def _proportional_weights(values: Sequence[float]) -> list[float]:
+    """Turn scalarized fitness values into drawing weights.
+
+    A scalarization takes strictly positive values, so the weights *are* the values and no lift,
+    shift or normalization is involved. What remains is the policy for values a measurement
+    can produce but the definition of a scalarization excludes. An infinitely good individual is
+    the limit of proportional selection and takes the whole mass. A value that is not a number is a
+    failed measurement, takes none, and is never drawn. A population in which every value failed is
+    drawn uniformly, there being nothing left to prefer.
+
+    The asymmetry between the two policies is deliberate and worth naming, because both end in a
+    weight of zero. ``nan`` and ``inf`` are properties of the *fitness*: a measurement failed, or
+    an individual is infinitely good, and the scalarization reports them faithfully. A value of
+    zero or below is a property of the *scalarization*: it was handed an ordinary number and
+    returned something outside its own codomain. The first is data the caller cannot avoid, so it
+    gets a documented policy. The second is a broken contract, so it is reported.
+
+    Args:
+        values (Sequence[float]): The scalarized fitness values.
+
+    Returns:
+        list[float]: Finite, non-negative weights, not all zero.
+
+    Raises:
+        ValueError: If a value is zero or negative. A scalarization maps into the *positive* reals,
+            so this is a broken component contract rather than a degenerate population, and it is
+            reachable numerically. ``math.exp`` underflows to 0.0 below about -745, so a fitness
+            that far from zero silently loses the positivity that a generous parent selection rests
+            on. The fix is the ``scale`` parameter of
+            :class:`~cosy.evolutionary_algorithms.fitness.ExpScalarization`.
+    """
+    if any(value <= 0.0 for value in values):
+        offenders = [value for value in values if value <= 0.0]
+        msg = (
+            f"a scalarization maps into the strictly positive reals, but produced {offenders!r}. "
+            "With an exponential scalarization this is underflow, and the fix is to scale the "
+            "fitness rather than to floor the weight"
+        )
+        raise ValueError(msg)
+    if any(value == math.inf for value in values):
+        return [1.0 if value == math.inf else 0.0 for value in values]
+    weights = [value if math.isfinite(value) else 0.0 for value in values]
+    if not any(weight > 0.0 for weight in weights):
+        return [1.0] * len(values)
+    return weights
+
+
+@runtime_checkable
+class ParentSelection(Protocol[T]):
+    """A map from a population to a pair of its members.
+
+    The pair is drawn with replacement, so the two parents may be the same individual, exactly as
+    two independent tournaments may have the same winner.
     """
 
-    @abstractmethod
-    def select(
+    def select_parents(
         self,
-        population_fitness: Mapping[Tree[T], Fitness],
-        population_size: int,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
         comparator: FitnessComparator,
-        previous_generation_fitness: Mapping[Tree[T], Fitness] | None = None,
-        ages: Mapping[Tree[T], int] | None = None,
-        previous_generation_ages: Mapping[Tree[T], int] | None = None,
-    ) -> Iterable[Tree[T]]:
-        """Select population_size individuals from the given population.
+    ) -> tuple[Tree[T], Tree[T]]:
+        """Draw two parents.
 
         Args:
-            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to their fitness values.
-            population_size (int): The number of individuals to select.
-            comparator (FitnessComparator): The fitness comparator for comparing individuals.
-            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Optional fitness values from the previous generation (for survivor selection). (Default value = None)
-            ages (Mapping[Tree[T], int] | None): Optional ages of individuals (for age-aware selection). (Default value = None)
-            previous_generation_ages (Mapping[Tree[T], int] | None): Optional ages from the previous generation. (Default value = None)
-
-        Yields:
-            Tree[T]: Selected individuals up to population_size.
-        """
-
-
-class TournamentSelection(Selection[NT, T, G]):
-    """Tournament selection: select best from random tournaments.
-
-    In each round, this operator selects tournament_size random individuals from the population
-    and returns the best one. This process is repeated to generate population_size selections.
-
-    Tournament selection is effective for parent selection as it balances selection pressure
-    and diversity without requiring global fitness rankings.
-
-    Attributes:
-        tournament_size (int): The number of individuals in each tournament.
-    """
-
-    _TIE_PROBABILITY = 0.5
-
-    def __init__(self, tournament_size: int, rng: random.Random | None = None):
-        """Initialize tournament selection.
-
-        Args:
-            tournament_size (int): Number of individuals per tournament (typically 2-5).
-            rng (random.Random | None): Optional random number generator for reproducibility. (Default value = None)
-        """
-        self.tournament_size = tournament_size
-        self.rng = rng if rng is not None else random.Random()
-
-    def select(
-        self,
-        population_fitness: Mapping[Tree[T], Fitness],
-        population_size: int,
-        comparator: FitnessComparator,
-        previous_generation_fitness: Mapping[Tree[T], Fitness] | None = None,
-        ages: Mapping[Tree[T], int] | None = None,
-        previous_generation_ages: Mapping[Tree[T], int] | None = None,
-    ) -> Iterable[Tree[T]]:
-        """Conduct population_size tournaments and yield the winner of each.
-
-        Args:
-            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to fitness values.
-            population_size (int): Number of individuals to select.
-            comparator (FitnessComparator): The fitness comparator.
-            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Unused (for interface compatibility). (Default value = None)
-            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
-            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
-
-        Yields:
-            Tree[T]: Winners of each tournament.
-        """
-        population = list(population_fitness.keys())
-        if not population_size or not population:
-            return
-
-        for _ in range(population_size):
-            # Create a tournament with random individuals
-            tournament = self.rng.sample(population, min(self.tournament_size, len(population)))
-            best = tournament[0]
-            best_score = comparator.sort_key(population_fitness[best])
-
-            # Find the best individual in the tournament
-            for candidate in tournament[1:]:
-                candidate_score = comparator.sort_key(population_fitness[candidate])
-                if candidate_score > best_score or (
-                    candidate_score == best_score and self.rng.random() < self._TIE_PROBABILITY
-                ):
-                    best = candidate
-                    best_score = candidate_score
-
-            yield best
-
-
-class FitnessProportionalSelection(Selection[NT, T, G]):
-    """Fitness proportional selection: probability proportional to fitness.
-
-    Individuals with higher fitness have higher probability of selection.
-    Handles negative fitness values by shifting them, and avoids division by zero
-    when all individuals have zero fitness.
-
-    This is a classic selection method that provides strong selection pressure
-    but can suffer from loss of diversity in later generations.
-    """
-
-    def __init__(self, rng: random.Random | None = None):
-        """Initialize fitness proportional selection.
-
-        Args:
-            rng (random.Random | None): Optional random number generator for reproducibility. (Default value = None)
-        """
-        self.rng = rng if rng is not None else random.Random()
-
-    @staticmethod
-    def _weights(fitness_values: Sequence[Fitness], comparator: FitnessComparator) -> list[float]:
-        """Compute selection weights from fitness values.
-
-        Handles negative fitness by shifting all values above zero.
-        If all weights are zero, uses uniform weights.
-
-        Args:
-            fitness_values (Sequence[Fitness]): The fitness values.
-            comparator (FitnessComparator): The fitness comparator.
+            population (Sequence[Tree[T]]): The current population as a multiset.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): The partial order on fitness values.
 
         Returns:
-            list[float]: A list of non-negative weights usable for weighted selection.
+            tuple[Tree[T], Tree[T]]: The two parents.
         """
-        values = [comparator.scalarize(fitness) for fitness in fitness_values]
-        minimum = min(values)
-        weights = [value - minimum if minimum < 0 else value for value in values]
+        ...
 
-        if not any(weight > 0 for weight in weights):
-            return [1.0] * len(fitness_values)
-        return [float(weight) for weight in weights]
 
-    def select(
+@runtime_checkable
+class SurvivorSelection(Protocol[T]):
+    """A map from the parents and the offspring together to the next population.
+
+    Receiving both is the contract, not a convenience: generational replacement is the instance
+    that ignores the parents, and it is exactly the instance the convergence guarantee excludes.
+    A component that only ever sees the offspring could not be anything else.
+    """
+
+    def select_survivors(
         self,
-        population_fitness: Mapping[Tree[T], Fitness],
-        population_size: int,
+        parents: Sequence[Tree[T]],
+        offspring: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
         comparator: FitnessComparator,
-        previous_generation_fitness: Mapping[Tree[T], Fitness] | None = None,
-        ages: Mapping[Tree[T], int] | None = None,
-        previous_generation_ages: Mapping[Tree[T], int] | None = None,
-    ) -> Iterable[Tree[T]]:
-        """Select individuals proportional to their fitness.
+        size: int,
+    ) -> list[Tree[T]]:
+        """Choose the next population.
 
         Args:
-            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to fitness values.
-            population_size (int): Number of individuals to select.
-            comparator (FitnessComparator): The fitness comparator.
-            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Unused (for interface compatibility). (Default value = None)
-            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
-            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
+            parents (Sequence[Tree[T]]): The population of the finished generation.
+            offspring (Sequence[Tree[T]]): The offspring produced from it.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of every individual in either.
+            comparator (FitnessComparator): The partial order on fitness values.
+            size (int): The population size mu.
 
-        Yields:
-            Tree[T]: population_size individuals selected proportional to fitness.
+        Returns:
+            list[Tree[T]]: Exactly ``size`` individuals drawn from the parents and the offspring.
         """
-        population = list(population_fitness.keys())
-        if not population_size or not population:
-            return
-
-        fitness_values = [population_fitness[tree] for tree in population]
-        weights = self._weights(fitness_values, comparator)
-
-        for _ in range(population_size):
-            yield self.rng.choices(population, weights=weights, k=1)[0]
+        ...
 
 
-class RankBasedSelection(Selection[NT, T, G]):
-    """Rank-based selection: probability based on rank not absolute fitness.
+class TournamentSelection(ParentSelection[T]):
+    """Draw a tournament uniformly and keep an individual no member of it is fitter than.
 
-    Individuals are ranked by fitness and selected with probabilities determined by their rank.
-    This provides more stable selection pressure than fitness-proportional selection since
-    it doesn't depend on absolute fitness differences.
+    **A tournament of size 2 or more is not generous**, and the reasoning is worth writing out.
+    Almost sure convergence asks that *every* member of the population be drawn as a parent with
+    positive probability. A tournament is sampled without replacement, so the least fit member of a
+    population with pairwise distinct fitness meets a fitter competitor in every tournament it
+    enters, and it wins none. Its probability is exactly zero. Only ``tournament_size == 1``, which
+    is uniform parent selection, gives every member a positive share, and it does so for the
+    trivial reason. Tournament selection is in the inventory because it is the standard method with
+    a tunable pressure, not because it carries the guarantee.
+    :class:`FitnessProportionalSelection` and :class:`RankBasedSelection` below a pressure of 2 are
+    the two that do.
+
+    Under a partial order a tournament can have several undominated members, and one of them is
+    taken uniformly. A tie is treated the same way, so equally fit members share the win evenly
+    rather than through a chain of coin flips.
 
     Attributes:
-        selection_pressure (_type_): Controls the pressure toward higher-ranked individuals (1.0-2.0).
-            1.0 = uniform selection, 2.0 = maximum pressure toward best.
+        tournament_size (int): The number of individuals per tournament.
+        rng (random.Random): The source of randomness.
     """
 
-    _SELECTION_PRESSURE_LOWER_BOUND = 1.0
-    _SELECTION_PRESSURE_UPPER_BOUND = 2.0
-
-    def __init__(self, selection_pressure: float = 1.7, rng: random.Random | None = None):
-        """Initialize rank-based selection.
+    def __init__(self, tournament_size: int, rng: random.Random) -> None:
+        """Build the operator.
 
         Args:
-            selection_pressure (float): Strength of preference for better-ranked individuals (1.0-2.0). (Default value = 1.7)
-            rng (random.Random | None): Optional random number generator for reproducibility. (Default value = None)
+            tournament_size (int): Individuals per tournament, at least 1.
+            rng (random.Random): The source of randomness.
 
         Raises:
-            ValueError: If selection_pressure is not in [1.0, 2.0].
+            ValueError: If the tournament size is smaller than 1.
         """
-        if not self._SELECTION_PRESSURE_LOWER_BOUND <= selection_pressure <= self._SELECTION_PRESSURE_UPPER_BOUND:
+        if tournament_size < 1:
+            msg = f"a tournament needs at least one participant: {tournament_size}"
+            raise ValueError(msg)
+        self.tournament_size = tournament_size
+        self.rng = rng
+
+    def _winner(
+        self,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+    ) -> Tree[T]:
+        """Run one tournament.
+
+        Args:
+            population (Sequence[Tree[T]]): The population to draw from.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): The partial order.
+
+        Returns:
+            Tree[T]: The winner.
+        """
+        tournament = self.rng.sample(list(population), min(self.tournament_size, len(population)))
+        undominated = [
+            candidate
+            for candidate in tournament
+            if not any(
+                comparator.compare(fitness[other], fitness[candidate]) is Comparison.GREATER for other in tournament
+            )
+        ]
+        return self.rng.choice(undominated)
+
+    def select_parents(
+        self,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+    ) -> tuple[Tree[T], Tree[T]]:
+        """Run two tournaments.
+
+        Args:
+            population (Sequence[Tree[T]]): The current population.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): The partial order.
+
+        Returns:
+            tuple[Tree[T], Tree[T]]: The two winners.
+
+        Raises:
+            ValueError: If the population is empty.
+        """
+        if not population:
+            msg = "parent selection needs a non-empty population"
+            raise ValueError(msg)
+        return (
+            self._winner(population, fitness, comparator),
+            self._winner(population, fitness, comparator),
+        )
+
+
+class FitnessProportionalSelection(ParentSelection[T]):
+    """Draw parents with probability proportional to their scalarized fitness.
+
+    Every member receives a positive share *because* a scalarization is strictly positive, so this
+    method is generous, and that is the reason the definition of a scalarization demands positivity
+    in the first place.
+
+    The scalarization is a parameter of the components that draw proportionally, this one and
+    :class:`GenerousConservativeReplacement`, rather than of the search.
+    :class:`~cosy.evolutionary_algorithms.evolutionary.EvolutionarySearch` does not take
+    one as an input, and this is why: only proportional drawing needs numbers.
+
+    Attributes:
+        scalarization (Scalarization): The map into the positive reals.
+        rng (random.Random): The source of randomness.
+    """
+
+    def __init__(self, scalarization: Scalarization, rng: random.Random) -> None:
+        """Build the operator.
+
+        Args:
+            scalarization (Scalarization): The map into the positive reals. It must be monotone
+                in the same direction as the comparator the search runs with.
+            rng (random.Random): The source of randomness.
+        """
+        self.scalarization = scalarization
+        self.rng = rng
+
+    def select_parents(
+        self,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+    ) -> tuple[Tree[T], Tree[T]]:
+        """Draw two parents proportionally.
+
+        Args:
+            population (Sequence[Tree[T]]): The current population.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): Unused. A proportional draw reads the scalarization,
+                not the order. The parameter is part of the contract every parent selection
+                shares.
+
+        Returns:
+            tuple[Tree[T], Tree[T]]: The two parents.
+
+        Raises:
+            ValueError: If the population is empty, or if the scalarization returns a value that is
+                zero or below for a member. The second is the case a run meets in practice,
+                ``math.exp`` underflowing on a fitness far below zero. The mirror case, ``math.exp``
+                overflowing above 710, is reported by
+                :class:`~cosy.evolutionary_algorithms.fitness.ExpScalarization` before the value
+                arrives here.
+        """
+        if not population:
+            msg = "parent selection needs a non-empty population"
+            raise ValueError(msg)
+        weights = _proportional_weights([self.scalarization.scalarize(fitness[member]) for member in population])
+        first, second = self.rng.choices(list(population), weights=weights, k=2)
+        return first, second
+
+
+class RankBasedSelection(ParentSelection[T]):
+    """Draw parents with probability determined by their rank, not by their fitness values.
+
+    The rank comes from the dominance fronts, so the component works under a partial order. The
+    members of a front share the average of the ranks they occupy, which keeps the weights summing
+    to the population size and decides a tie by the draw rather than by the order the population
+    was built in.
+
+    Every member receives a positive share for ``selection_pressure < 2``, so this method is
+    generous below that value. At exactly 2 the linear ranking formula gives the last rank weight
+    0, so the worst front cannot be drawn at all. That is documented rather than forbidden, because
+    the boundary value is the textbook maximum and a caller may want it knowingly.
+
+    Attributes:
+        selection_pressure (float): 1.0 is uniform, 2.0 is maximum pressure.
+        rng (random.Random): The source of randomness.
+    """
+
+    _PRESSURE_LOWER_BOUND = 1.0
+    _PRESSURE_UPPER_BOUND = 2.0
+
+    def __init__(self, selection_pressure: float = 1.7, rng: random.Random | None = None) -> None:
+        """Build the operator.
+
+        Args:
+            selection_pressure (float): Preference for better ranks, in [1.0, 2.0].
+                (Default value = 1.7)
+            rng (random.Random | None): The source of randomness. (Default value = None)
+
+        Raises:
+            ValueError: If the pressure lies outside [1.0, 2.0], or if no generator is given.
+        """
+        if not self._PRESSURE_LOWER_BOUND <= selection_pressure <= self._PRESSURE_UPPER_BOUND:
             msg = "selection_pressure must be in [1.0, 2.0]"
             raise ValueError(msg)
+        if rng is None:
+            msg = "rank-based selection draws and needs its own random.Random"
+            raise ValueError(msg)
         self.selection_pressure = float(selection_pressure)
-        self.rng = rng if rng is not None else random.Random()
+        self.rng = rng
+        # The ranking of the population this operator was last asked about, and the arguments it
+        # was built from. See :meth:`_ranking`.
+        self._ranked: list[Tree[T]] = []
+        self._weights: list[float] = []
+        self._ranked_from: tuple[tuple[Tree[T], ...], Mapping[Tree[T], Fitness], FitnessComparator] | None = None
 
-    def select(
+    def _ranking(
         self,
-        population_fitness: Mapping[Tree[T], Fitness],
-        population_size: int,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
         comparator: FitnessComparator,
-        previous_generation_fitness: Mapping[Tree[T], Fitness] | None = None,
-        ages: Mapping[Tree[T], int] | None = None,
-        previous_generation_ages: Mapping[Tree[T], int] | None = None,
-    ) -> Iterable[Tree[T]]:
-        """Select individuals based on their fitness rank.
+    ) -> tuple[list[Tree[T]], list[float]]:
+        """Return the population in rank order together with its drawing weights.
+
+        The ranking is a function of the three arguments alone, and a driver asks for one pair per
+        variation pass, every pass of a generation over the same population. Building the dominance
+        fronts is quadratic in what each front leaves behind, so answering every pass from scratch
+        multiplies that cost by the number of passes, which is where a run of a few hundred
+        individuals spends nearly all of its time. The last ranking is therefore kept.
+
+        It answers again only if the population holds the same individuals in the same order **and**
+        the fitness mapping and the comparator are the very objects of the previous call. Identity
+        is the right test for those two: a driver builds a fresh mapping for each generation, and a
+        comparator is a component of the run. The population is compared member by member instead,
+        so a caller that edits its list in place is ranked again rather than answered from a stale
+        ranking.
 
         Args:
-            population_fitness (Mapping[Tree[T], Fitness]): Mapping from individuals to fitness values.
-            population_size (int): Number of individuals to select.
-            comparator (FitnessComparator): The fitness comparator.
-            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Unused (for interface compatibility). (Default value = None)
-            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
-            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
+            population (Sequence[Tree[T]]): The current population, of at least two members.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): The partial order the fronts come from.
 
-        Yields:
-            Tree[T]: population_size individuals selected according to their rank.
+        Returns:
+            tuple[list[Tree[T]], list[float]]: The members in front order, and the weight of each.
+                Both lists belong to this object and are read here, never handed on.
         """
-        population = list(population_fitness.keys())
-        if not population_size or not population:
-            return
+        members = tuple(population)
+        if self._ranked_from is not None:
+            previous_members, previous_fitness, previous_comparator = self._ranked_from
+            if previous_fitness is fitness and previous_comparator is comparator and previous_members == members:
+                return self._ranked, self._weights
 
-        # Sort population by fitness (best first)
-        ranked = sorted(
-            population,
-            key=lambda tree: comparator.sort_key(population_fitness[tree]),
-            reverse=True,
-        )
-        count = len(ranked)
-
-        # Special case: single individual
-        if count == 1:
-            for _ in range(population_size):
-                yield ranked[0]
-            return
-
-        # Compute rank-based weights using linear ranking formula
+        count = len(population)
+        ranked: list[Tree[T]] = []
+        weights: list[float] = []
         pressure = self.selection_pressure
-        weights = [(2 - pressure) + (2 * (pressure - 1) * (count - rank - 1) / (count - 1)) for rank in range(count)]
+        placed = 0
+        for front in dominance_fronts(population, fitness, comparator):
+            # The formula is affine in the rank, so sharing the average rank over a front leaves
+            # the total weight at the population size.
+            shared_rank = (placed + placed + len(front) - 1) / 2
+            weight = (2 - pressure) + (2 * (pressure - 1) * (count - shared_rank - 1) / (count - 1))
+            ranked.extend(front)
+            weights.extend([weight] * len(front))
+            placed += len(front)
 
-        for _ in range(population_size):
-            yield self.rng.choices(ranked, weights=weights, k=1)[0]
+        self._ranked = ranked
+        self._weights = weights
+        self._ranked_from = (members, fitness, comparator)
+        return ranked, weights
 
-
-class FitnessBasedReplacement(Selection[NT, T, G]):
-    """Fitness-based survivor selection: select best individuals from all candidates.
-
-    This strategy combines offspring and previous generation members (if provided),
-    and selects the population_size best individuals by fitness. This implements
-    (μ+λ) survivor selection and can be used for elitist replacement strategies.
-    """
-
-    def __init__(self):
-        """Initialize fitness-based replacement."""
-
-    def select(
+    def select_parents(
         self,
-        population_fitness: Mapping[Tree[T], Fitness],
-        population_size: int,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
         comparator: FitnessComparator,
-        previous_generation_fitness: Mapping[Tree[T], Fitness] | None = None,
-        ages: Mapping[Tree[T], int] | None = None,
-        previous_generation_ages: Mapping[Tree[T], int] | None = None,
-    ) -> Iterable[Tree[T]]:
-        """Select the population_size best individuals from the current and previous generation.
+    ) -> tuple[Tree[T], Tree[T]]:
+        """Draw two parents by rank.
 
         Args:
-            population_fitness (Mapping[Tree[T], Fitness]): Mapping from offspring to fitness values.
-            population_size (int): Number of individuals to select.
-            comparator (FitnessComparator): The fitness comparator.
-            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Fitness values from the previous generation (combined with current). (Default value = None)
-            ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
-            previous_generation_ages (Mapping[Tree[T], int] | None): Unused (for interface compatibility). (Default value = None)
+            population (Sequence[Tree[T]]): The current population.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): The partial order the fronts come from.
 
-        Yields:
-            Tree[T]: The population_size best individuals by fitness.
+        Returns:
+            tuple[Tree[T], Tree[T]]: The two parents.
+
+        Raises:
+            ValueError: If the population is empty.
         """
-        if not population_size:
-            return
+        if not population:
+            msg = "parent selection needs a non-empty population"
+            raise ValueError(msg)
+        if len(population) == 1:
+            return population[0], population[0]
 
-        # Combine current and previous generation fitness
-        combined: dict[Tree[T], Fitness] = dict(population_fitness)
-        if previous_generation_fitness is not None:
-            for tree, fitness in previous_generation_fitness.items():
-                combined.setdefault(tree, fitness)
-
-        # Select the best individuals
-        ranked = sorted(combined.keys(), key=lambda tree: comparator.sort_key(combined[tree]), reverse=True)
-        for tree in ranked[:population_size]:
-            yield tree
+        ranked, weights = self._ranking(population, fitness, comparator)
+        first, second = self.rng.choices(ranked, weights=weights, k=2)
+        return first, second
 
 
-class AgeBasedReplacement(Selection[NT, T, G]):
-    """Age-based survivor selection: prefer younger individuals, break ties by fitness.
+class FitnessBasedReplacement(SurvivorSelection[T]):
+    """(mu + lambda) truncation: keep the fittest ``size`` of parents and offspring together.
 
-    This strategy selects survivors primarily based on age (younger is better),
-    using fitness as a tie-breaker. This is useful for maintaining diversity
-    by preventing individuals from dominating for too many generations.
+    **Neither generous nor conservative in the sense the guarantee asks.** An individual outside
+    the fittest ``size`` survives with probability zero, so it is not generous. It always keeps a
+    maximal element, since the first front is never empty, but the convergence condition asks for a
+    member of greatest *scalarized* fitness, and under a partial order the two differ: a member of
+    the first front can be cut while another of the same front carries the greater scalarized
+    value. Under a total order they coincide. It is in the inventory because truncation is the
+    standard elitist replacement and converges fast in practice.
+    :class:`GenerousConservativeReplacement` is the one to reach for when the guarantee is wanted.
+
+    Under a partial order the fronts are taken in order. A front that does not fit entirely is cut
+    in the order the individuals were passed in, which makes the cut deterministic.
     """
 
-    def __init__(self):
-        """Initialize age-based replacement."""
-
-    def select(
+    def select_survivors(
         self,
-        population_fitness: Mapping[Tree[T], Fitness],
-        population_size: int,
+        parents: Sequence[Tree[T]],
+        offspring: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
         comparator: FitnessComparator,
-        previous_generation_fitness: Mapping[Tree[T], Fitness] | None = None,
-        ages: Mapping[Tree[T], int] | None = None,
-        previous_generation_ages: Mapping[Tree[T], int] | None = None,
-    ) -> Iterable[Tree[T]]:
-        """Select population_size individuals primarily by age, secondarily by fitness.
+        size: int,
+    ) -> list[Tree[T]]:
+        """Keep the fittest individuals of both populations together.
 
         Args:
-            population_fitness (Mapping[Tree[T], Fitness]): Mapping from offspring to fitness values.
-            population_size (int): Number of individuals to select.
-            comparator (FitnessComparator): The fitness comparator.
-            previous_generation_fitness (Mapping[Tree[T], Fitness] | None): Optional fitness values from previous generation. (Default value = None)
-            ages (Mapping[Tree[T], int] | None): Ages of current generation individuals. (Default value = None)
-            previous_generation_ages (Mapping[Tree[T], int] | None): Ages from the previous generation. (Default value = None)
+            parents (Sequence[Tree[T]]): The finished generation.
+            offspring (Sequence[Tree[T]]): Its offspring.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of every individual.
+            comparator (FitnessComparator): The partial order.
+            size (int): The population size mu.
 
-        Yields:
-            Tree[T]: population_size individuals selected by age (younger first) and fitness.
+        Returns:
+            list[Tree[T]]: The fittest ``size`` individuals.
+
+        Raises:
+            ValueError: If fewer than ``size`` individuals were offered.
         """
-        if not population_size:
-            return
+        pool = [*parents, *offspring]
+        if len(pool) < size:
+            msg = f"survivor selection was offered {len(pool)} individuals for {size} places"
+            raise ValueError(msg)
+        survivors: list[Tree[T]] = []
+        for front in dominance_fronts(pool, fitness, comparator):
+            survivors.extend(front[: size - len(survivors)])
+            if len(survivors) == size:
+                break
+        return survivors
 
-        # If no age information, fall back to fitness-based selection
-        if ages is None:
-            selected: list[Tree[T]] = list(population_fitness.keys())
-            if len(selected) < population_size and previous_generation_fitness is not None:
-                for tree in previous_generation_fitness:
-                    if tree not in population_fitness:
-                        selected.append(tree)
-                    if len(selected) >= population_size:
-                        break
-            for tree in selected[:population_size]:
-                yield tree
-            return
 
-        # Combine current and previous generation fitness and ages
-        combined_fitness: dict[Tree[T], Fitness] = dict(population_fitness)
-        combined_ages: dict[Tree[T], int] = dict(ages)
+class GenerousConservativeReplacement(SurvivorSelection[T]):
+    """Keep one fittest individual for certain, and fill the rest so nobody is excluded.
 
-        if previous_generation_fitness is not None:
-            for tree, fitness in previous_generation_fitness.items():
-                combined_fitness.setdefault(tree, fitness)
-                if previous_generation_ages is not None:
-                    combined_ages.setdefault(tree, previous_generation_ages.get(tree, combined_ages.get(tree, 0) + 1))
-                else:
-                    combined_ages.setdefault(tree, combined_ages.get(tree, 0) + 1)
+    The component that carries the survivor-selection half of almost sure convergence outright.
+    Both words are Eiben, Aarts and Van Hee's: a selection function is *conservative* if it always
+    keeps one of the strongest individuals of any population, and *generous* if it gives every
+    individual a positive chance to survive. Their convergence theorem needs both, and Rudolph's
+    results show what the conservative half buys. The canonical genetic algorithm without it does
+    not converge, since the probability of sitting in a population without an optimum stays
+    positive forever, while the variant maintaining the best solution found does converge.
 
-        # Sort by age (ascending) and then by fitness (descending)
-        ranked = sorted(
-            combined_fitness.keys(),
-            key=lambda tree: (combined_ages.get(tree, 0), -comparator.sort_key(combined_fitness[tree])),
-        )
-        for tree in ranked[:population_size]:
-            yield tree
+    The construction: one individual of greatest scalarized fitness takes a place outright, and the
+    remaining ``size - 1`` places are drawn proportionally to the scalarization from parents and
+    offspring together, with replacement. Positivity of the scalarization makes every individual's
+    chance positive, and the reserved place makes the choice conservative. Drawing with replacement
+    is what keeps the two properties independent of the population's composition. A population is a
+    multiset, so a repeated draw is a legitimate outcome rather than a defect.
+
+    Attributes:
+        scalarization (Scalarization): The map into the positive reals that both halves are read
+            through.
+        rng (random.Random): The source of randomness.
+    """
+
+    def __init__(self, scalarization: Scalarization, rng: random.Random) -> None:
+        """Build the operator.
+
+        Args:
+            scalarization (Scalarization): The map into the positive reals. "Greatest scalarized
+                fitness" is read through it, so it must be monotone in the comparator's direction.
+            rng (random.Random): The source of randomness.
+        """
+        self.scalarization = scalarization
+        self.rng = rng
+
+    def select_survivors(
+        self,
+        parents: Sequence[Tree[T]],
+        offspring: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+        size: int,
+    ) -> list[Tree[T]]:
+        """Reserve a place for a fittest individual and draw the rest proportionally.
+
+        Args:
+            parents (Sequence[Tree[T]]): The finished generation.
+            offspring (Sequence[Tree[T]]): Its offspring.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of every individual.
+            comparator (FitnessComparator): Unused. The reserved place goes to an individual of
+                greatest *scalarized* fitness, which the scalarization decides on its own and
+                totally. The parameter is part of the contract every survivor selection shares.
+            size (int): The population size mu.
+
+        Returns:
+            list[Tree[T]]: The survivors, the reserved one first.
+
+        Raises:
+            ValueError: If ``size`` is negative, if a positive ``size`` was asked for without a
+                single individual being offered, or if the scalarization returns a value that is
+                zero or below for a member of the pool. The last is the case a run meets in
+                practice, ``math.exp`` underflowing on a fitness far below zero. The mirror case,
+                ``math.exp`` overflowing above 710, is reported by
+                :class:`~cosy.evolutionary_algorithms.fitness.ExpScalarization` before the value
+                arrives here.
+        """
+        if size < 0:
+            msg = f"a population size cannot be negative: {size}"
+            raise ValueError(msg)
+        if size == 0:
+            return []
+        pool = [*parents, *offspring]
+        if not pool:
+            msg = "survivor selection was offered no individuals"
+            raise ValueError(msg)
+
+        values = [self.scalarization.scalarize(fitness[member]) for member in pool]
+        weights = _proportional_weights(values)
+        # The champion is read off the *weights*, not off the raw values. The weights are where
+        # the policy for values outside the codomain already lives, a failed measurement weighing
+        # nothing and an infinite one taking the mass. Reading ``max`` off the raw values instead
+        # makes the choice depend on the order the pool was assembled in: ``max`` returns ``nan``
+        # when it comes first and a number when it does not, and in the first case no member equals
+        # it, so the draw would be made from an empty sequence.
+        best = max(weights)
+        # Several individuals may share the greatest weight. Taking one of them uniformly keeps
+        # the choice from depending on the pool's order.
+        champions = [member for member, weight in zip(pool, weights, strict=True) if weight == best]
+        survivors = [self.rng.choice(champions)]
+        if size > 1:
+            survivors.extend(self.rng.choices(pool, weights=weights, k=size - 1))
+        return survivors
