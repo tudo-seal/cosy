@@ -39,8 +39,9 @@ needs the guarantee checks it.
 
 **Best-first, specialized.** The keys are reals, so the frontier here is a binary heap over a total
 order rather than the partial-order frontier best-first search is defined with. The general
-frontier arrives with the cost layer. This one is its total-order fast path, and the two must agree
-where they overlap.
+frontier is :class:`cosy.search.costs.LinearScanFrontier`, and its total-order fast path is
+:class:`cosy.search.costs.HeapFrontier`. This heap is that fast path written out in place, and the
+two must agree where they overlap.
 
 **Two ways to the weights, one search.** Read the construction again and notice what the frontier
 actually asks of a node: whether it is a success node, its children in clause order, and one number

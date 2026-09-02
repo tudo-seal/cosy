@@ -7,14 +7,35 @@ of a search node as the partial inhabitant it denotes, the tree kernels that sco
 its similarity to a set of reference terms, the two uninformed search rules with the clause orders
 they are built from, and the branch counts that say how many inhabitants a node still reaches,
 which is what a search has to weight its choices by in order to draw from a chosen distribution.
-It also carries random search itself, which is best-first search under a randomizing cost function,
-and the two samplers the evolutionary and Bayesian methods draw their populations from. Beside all
-of these stands the one rule that traverses no derivation tree at all: bottom-up search, which
-iterates the immediate consequence operator of a program to the least Herbrand model and reads the
-inhabitants off it.
+It carries the cost layer an informed rule reads its order off, which is to say the orders a cost
+function may map into, the best-first frontier over them, and the additive cost algebras that split
+the cost of a search node into what its partial inhabitant has already cost and what its holes are
+estimated to add. It also carries random search itself, which is best-first search under a
+randomizing cost function, and the two samplers the evolutionary and Bayesian methods draw their
+populations from. Beside all of these stands the one rule that traverses no derivation tree at all:
+bottom-up search, which iterates the immediate consequence operator of a program to the least
+Herbrand model and reads the inhabitants off it.
 """
 
 from cosy.search.bottom_up import BottomUpCounters, bottom_up, least_herbrand_model
+from cosy.search.costs import (
+    AdditiveCostAlgebra,
+    ComponentwiseTuples,
+    CostDomain,
+    CostFunction,
+    CostOrder,
+    Frontier,
+    HeapFrontier,
+    LinearScanFrontier,
+    NonNegativeReals,
+    Reals,
+    a_star,
+    assert_uniform_cost_complete,
+    best_first,
+    best_first_frontier,
+    greedy,
+    uniform_cost,
+)
 from cosy.search.counting import (
     CountedNode,
     CoupledClause,
@@ -50,18 +71,32 @@ from cosy.search.sampling import (
 )
 
 __all__ = [
+    "AdditiveCostAlgebra",
     "BottomUpCounters",
+    "ComponentwiseTuples",
+    "CostDomain",
+    "CostFunction",
+    "CostOrder",
     "CountedNode",
     "CoupledClause",
     "DepthBoundedRandomSampler",
+    "Frontier",
+    "HeapFrontier",
     "Hole",
+    "LinearScanFrontier",
+    "NonNegativeReals",
+    "Reals",
     "ResolutionQuery",
     "Sampler",
     "SizeTable",
     "SizeUniformSampler",
     "WeightedTable",
     "WeightedTree",
+    "a_star",
     "assert_unambiguous_within",
+    "assert_uniform_cost_complete",
+    "best_first",
+    "best_first_frontier",
     "bottom_up",
     "branch_counts",
     "branch_multiplicities",
@@ -74,6 +109,7 @@ __all__ = [
     "depth_first",
     "fewest_arguments_first",
     "generator_query",
+    "greedy",
     "gumbel_key",
     "gumbel_noise",
     "holes",
@@ -91,6 +127,7 @@ __all__ = [
     "size_uniform",
     "term_depth",
     "term_size",
+    "uniform_cost",
     "uniform_random_clause_order",
     "weighted_table",
     "weighted_tree",
