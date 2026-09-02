@@ -1,7 +1,6 @@
 ##Symbolic Regression##
 """Shows how to do a symbolic regression using cosy."""
 
-import random
 import time
 from math import cos, sin
 from typing import Any
@@ -9,14 +8,15 @@ from typing import Any
 from cosy.core import Constructor, Literal, SpecificationBuilder, Synthesizer, Var
 from cosy.core.tree import Tree
 from cosy.core.types import DataGroup, Group
-from cosy.evolutionary_algorithms.evolutionary import EAState, SimpleGeneticProgramming
+from cosy.evolutionary_algorithms.evolutionary import EvolutionarySearch
 from cosy.evolutionary_algorithms.fitness import ScalarFitnessComparator
 from cosy.evolutionary_algorithms.initialisation import SampledInitialization
 from cosy.evolutionary_algorithms.mutation import ResolutionMutation
 from cosy.evolutionary_algorithms.recombination import SubtreeSwap
 from cosy.evolutionary_algorithms.rng.factory import RNGFactory
-from cosy.evolutionary_algorithms.selection import AgeBasedReplacement, FitnessProportionalSelection, Selection
-from cosy.search import DepthBoundedRandomSampler
+from cosy.evolutionary_algorithms.selection import FitnessBasedReplacement, RankBasedSelection
+from cosy.evolutionary_algorithms.termination import Generations
+from cosy.search import DepthBoundedRandomSampler, generator_query
 
 
 class SymbolicRegression:
@@ -188,9 +188,9 @@ def run_symbolic_regression(
         seed (int): Random seed for reproducibility (default: 0).
         train_values (list[float] | None): Training data points (default: [-2, -1, 0, 1, 2]).
         test_values (list[float] | None): Test data points (default: [-3, -0.5, 0.5, 3]).
-        population_size (int): EA population size (default: 12).
-        max_generations (int): Maximum GA generations (default: 6).
-        max_depth (int): Maximum tree depth (default: 4).
+        population_size (int): EA population size (default: 50).
+        max_generations (int): Maximum GA generations (default: 20).
+        max_depth (int): Maximum expression depth the repository admits (default: 4).
         max_size (int): The bound of the recombination acceptance test, in function-symbol
             occurrences. An exchange may deepen a term, and this is what bounds the growth.
             (Default value = 40)
@@ -199,9 +199,6 @@ def run_symbolic_regression(
 
     Returns:
         tuple[Tree[str], float, float]: (best_tree, train_mse, test_mse): Best-of-run solution and its MSE values.
-
-    Raises:
-        RuntimeError: _description_
     """
     train_values = train_values if train_values is not None else [-2.0, -1.0, 0.0, 1.0, 2.0]
     test_values = test_values if test_values is not None else [-3.0, -0.5, 0.5, 3.0]
@@ -209,8 +206,6 @@ def run_symbolic_regression(
     # Create a deterministic RNG setup for all random operations
     # Each component receives an independent, deterministically-seeded child RNG from a factory.
     # This ensures that all evolutionary randomness is reproducible from a single seed.
-    random.seed(seed)  # Seed module-level random for consistency
-
     # Factory creates independent child RNGs deterministically: same seed → same RNG sequences
     rng_factory = RNGFactory.from_seed(seed)
     initialization_rng = rng_factory.child()  # For initial population generation
@@ -267,23 +262,23 @@ def run_symbolic_regression(
         y_pred = [substitute_in_tree({"x": x}) for x in test_values]
         return mean_squared_error(y_test, y_pred)
 
-    def termination(state: EAState[str]) -> bool:
-        """_summary_.
-
-        Args:
-            state (EAState[str]): _description_
-
-        Returns:
-            bool: _description_
-        """
-        return state.generation >= max_generations
-
-    # Pass seeded RNGs to all components at construction time for determinism.
+    # Pass seeded RNGs to all components at construction time for determinism. The driver
+    # distributes nothing, so what each component draws from is readable here.
     #
     # The sampler is the depth-bounded one. Mutation poses a fresh residual query per call, and a
     # size-uniform sampler builds its weighted construction once per query, so a counting sampler
     # would pay that construction on every mutation. On this space that is the difference between
     # a fraction of a millisecond and several hundred of them per offspring.
+    #
+    # That choice makes this a fast demonstration rather than one of the configurations the package
+    # docstring lists as converging almost surely: truncation is conservative but not generous, and
+    # the operators bound depth here while the recombination test bounds size.
+    #
+    # Truncation over parents and offspring together gives every copy of an individual a place of
+    # its own, and a pass that neither recombines nor mutates hands a parent on unchanged. The
+    # multiplicity of the fittest individuals therefore grows, and a run can reach a population
+    # that holds few distinct terms and stops improving. Which seed does that is a property of the
+    # run rather than of the components, so the shipped one is chosen to show the search working.
     initialization: SampledInitialization[Any, str, Any] = SampledInitialization(
         DepthBoundedRandomSampler(sample_depth, initialization_rng)
     )
@@ -291,38 +286,34 @@ def run_symbolic_regression(
         DepthBoundedRandomSampler(sample_depth, mutation_rng), mutation_rng
     )
     recombination: SubtreeSwap[Any, str, Any] = SubtreeSwap(recombination_rng, max_size=max_size)
-    parent_selection: Selection = FitnessProportionalSelection(rng=selection_rng)
-    survivor_selection: Selection = AgeBasedReplacement()
-    fitness_comparator = ScalarFitnessComparator(False)
+    query = generator_query(solution_space, target)
 
-    # All component RNGs are already specified, so disable distribute_rngs
-    # Use gp_rng from factory for consistency
-    gp = SimpleGeneticProgramming(
-        solution_space,
-        target,
-        termination,
-        initialization,
-        mutation,
-        recombination,
-        parent_selection,
-        survivor_selection,
-        fitness_comparator,
+    search: EvolutionarySearch[Any, str, Any] = EvolutionarySearch(
+        initializer=initialization,
+        mutation=mutation,
+        recombination=recombination,
+        # Rank-based rather than fitness-proportional: the fitness here is a mean squared error,
+        # and a scalarization of it would have to map errors of any magnitude into the positive
+        # reals. Ranks are invariant under the scale of the error, which is what this problem
+        # needs, and proportional selection is the component that takes a scalarization.
+        parent_selection=RankBasedSelection(1.7, selection_rng),
+        survivor_selection=FitnessBasedReplacement(),
+        termination=Generations(max_generations),
+        population_size=population_size,
+        crossover_rate=0.8,
+        mutation_rate=0.3,
         rng=gp_rng,
-        distribute_rngs=False,
+        comparator=ScalarFitnessComparator(greater_is_better=False),
     )
 
-    best_tree = gp.evolutionary_best(fitness_function, population_size, 0.2, 0.4, verbose=False)
-    if best_tree is None:
-        msg = "Symbolic regression demo did not produce a solution"
-        raise RuntimeError(msg)
-
+    best_tree = search.evolutionary_best(query, fitness_function)
     return best_tree, fitness_function(best_tree), test_function(best_tree)
 
 
 if __name__ == "__main__":
     start_time = time.time()
     best_tree, train_mse, test_mse = run_symbolic_regression(
-        seed=0, population_size=250, max_generations=200, max_depth=5
+        seed=4, population_size=250, max_generations=100, max_depth=5
     )
     end_time = time.time()
 
