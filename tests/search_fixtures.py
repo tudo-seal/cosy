@@ -21,6 +21,13 @@ Small enough to enumerate exhaustively, so expected answers are computed rather 
   say something. ``constrained_space`` is not that for the third: it states a *different*
   condition, term inequality rather than core inequality, and the pair is a contrast between a
   condition inside the recognizable class and one outside it.
+* ``priced_space``, ``round_space``, ``idle_space``: the cost table's spaces. The first is finite
+  and has every arity, the second recurses through clauses that a test algebra charges nothing,
+  and the third closes a loop with such a clause alone, which is what the cost table refuses.
+  ``three_cycle_space``, ``split_space``, ``ternary_tails_space``, ``loop_space``, ``hollow_space``
+  and ``pair_edge_space`` reach what those three left out: a component of three, several tuples
+  split inside one component, two tails of one length, loops closed through a clause's second hole
+  or through two clauses, a hole no clause fills, and an order decided by a clause of two holes.
 
 A plain module rather than a ``conftest.py``: ``Tree`` memoizes its positions on the instance and
 the suite runs randomized and in parallel, so a shared instance would let tests observe each
@@ -1555,3 +1562,733 @@ def avl_space(keys=AVL_KEYS):
     """
     specs = _avl_specification(keys, lambda builder: builder.recognizable_constraint(avl_summary, avl_relation))
     return Synthesizer(specs).construct_solution_space(AVL).prune()
+
+
+# ---------------------------------------------------------------------------
+# The cost table's spaces. Which symbol costs what is the test's algebra and not the space's, so
+# the spaces carry shapes only: a finite one with every arity, a recursion that passes through a
+# clause of cost zero, and a loop that nothing but a clause of cost zero closes.
+# ---------------------------------------------------------------------------
+
+PRICED = Constructor("P")
+PRICED_Q = Constructor("Q")
+PRICED_R = Constructor("R")
+PRICED_S = Constructor("S")
+
+
+def s_a() -> str:
+    """Build the first leaf of ``S``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "a"
+
+
+def s_b() -> str:
+    """Build the second leaf of ``S``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "b"
+
+
+def s_c(d: int) -> str:
+    """Build the leaf of ``S`` that fixes a digit.
+
+    Args:
+        d (int): The digit, a constant argument and hence a leaf of the term.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"c{d}"
+
+
+def r_one() -> str:
+    """Build the leaf of ``R``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "r"
+
+
+def r_wrap(inner: str) -> str:
+    """Build an ``R`` around an ``S``.
+
+    Args:
+        inner (str): The interpreted ``S``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"w({inner})"
+
+
+def q_pair(left: str, right: str) -> str:
+    """Build a ``Q`` from an ``R`` and an ``S``.
+
+    Args:
+        left (str): The interpreted ``R``.
+        right (str): The interpreted ``S``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"qp({left},{right})"
+
+
+def q_twin(left: str, right: str) -> str:
+    """Build a ``Q`` from two ``R``: the same first hole as :func:`q_pair`, another tail.
+
+    Args:
+        left (str): The interpreted first ``R``.
+        right (str): The interpreted second ``R``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"qt({left},{right})"
+
+
+def q_three(first: str, second: str, third: str) -> str:
+    """Build a ``Q`` from three holes, so that a tail of two holes has to be multiplied out.
+
+    Args:
+        first (str): The interpreted first ``S``.
+        second (str): The interpreted second ``S``.
+        third (str): The interpreted ``R``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"q3({first},{second},{third})"
+
+
+def p_top(inner: str) -> str:
+    """Build a ``P`` around a ``Q``.
+
+    Args:
+        inner (str): The interpreted ``Q``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"top({inner})"
+
+
+def p_join(left: str, right: str) -> str:
+    """Build a ``P`` from a ``Q`` and an ``S``.
+
+    Args:
+        left (str): The interpreted ``Q``.
+        right (str): The interpreted ``S``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"join({left},{right})"
+
+
+def p_join_again(left: str, right: str) -> str:
+    """Build a ``P`` from a ``Q`` and an ``S`` under another symbol: a second clause of one shape.
+
+    Args:
+        left (str): The interpreted ``Q``.
+        right (str): The interpreted ``S``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"again({left},{right})"
+
+
+def p_link(left: str, right: str) -> str:
+    """Build a ``P`` from a ``Q`` and an ``R``: the first hole of :func:`p_join` with another tail.
+
+    Args:
+        left (str): The interpreted ``Q``.
+        right (str): The interpreted ``R``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"link({left},{right})"
+
+
+def priced_space():
+    """Build the finite space the cost table is compared with the tree form on.
+
+    Acyclic, so its language is finite and a cap above its dearest term covers all of it, which is
+    the one situation in which the table's stream and the tree form's are the same question. Every
+    arity occurs, one clause fixes a digit, two clauses on one head share a shape, and two pairs of
+    clauses share a first hole with different tails, which is what the fill groups by.
+
+    Returns:
+        SolutionSpace: The space, started at ``P``.
+    """
+    digits = DataGroup("digit", (0, 1))
+    specs = {
+        s_a: SpecificationBuilder().suffix(PRICED_S),
+        s_b: SpecificationBuilder().suffix(PRICED_S),
+        s_c: SpecificationBuilder().parameter("d", digits).suffix(PRICED_S),
+        r_one: SpecificationBuilder().suffix(PRICED_R),
+        r_wrap: SpecificationBuilder().argument("inner", PRICED_S).suffix(PRICED_R),
+        q_pair: SpecificationBuilder().argument("left", PRICED_R).argument("right", PRICED_S).suffix(PRICED_Q),
+        q_twin: SpecificationBuilder().argument("left", PRICED_R).argument("right", PRICED_R).suffix(PRICED_Q),
+        q_three: SpecificationBuilder()
+        .argument("first", PRICED_S)
+        .argument("second", PRICED_S)
+        .argument("third", PRICED_R)
+        .suffix(PRICED_Q),
+        p_top: SpecificationBuilder().argument("inner", PRICED_Q).suffix(PRICED),
+        p_join: SpecificationBuilder().argument("left", PRICED_Q).argument("right", PRICED_S).suffix(PRICED),
+        p_join_again: SpecificationBuilder().argument("left", PRICED_Q).argument("right", PRICED_S).suffix(PRICED),
+        p_link: SpecificationBuilder().argument("left", PRICED_Q).argument("right", PRICED_R).suffix(PRICED),
+    }
+    return Synthesizer(specs).construct_solution_space(PRICED)
+
+
+ROUND = Constructor("Round")
+ROUND_INNER = Constructor("Inner")
+
+
+def round_stop() -> str:
+    """Build the leaf of ``Round``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "o"
+
+
+def round_wrap(inner: str) -> str:
+    """Build a ``Round`` around an ``Inner``.
+
+    Args:
+        inner (str): The interpreted ``Inner``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"rw({inner})"
+
+
+def round_pair(left: str, right: str) -> str:
+    """Build a ``Round`` from two ``Inner``.
+
+    Args:
+        left (str): The interpreted first ``Inner``.
+        right (str): The interpreted second ``Inner``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"rp({left},{right})"
+
+
+def inner_leaf() -> str:
+    """Build the leaf of ``Inner``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "i"
+
+
+def inner_step(inner: str) -> str:
+    """Build an ``Inner`` around a ``Round``, which closes the recursion.
+
+    Args:
+        inner (str): The interpreted ``Round``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"st({inner})"
+
+
+def round_space():
+    """Build a recursion that passes through clauses of cost zero under the test algebra.
+
+    ``Round -> round_wrap(Inner) | round_pair(Inner, Inner) | round_stop`` and
+    ``Inner -> inner_step(Round) | inner_leaf``: the two sorts form one cycle, and under an algebra
+    that charges ``inner_step`` alone, a cost value is realized by finitely many terms while the two
+    ``Round`` clauses read ``Inner`` at the very cost they are filling. That is what makes the order
+    inside one cost value matter.
+
+    Returns:
+        SolutionSpace: The space, started at ``Round``.
+    """
+    specs = {
+        round_stop: SpecificationBuilder().suffix(ROUND),
+        round_wrap: SpecificationBuilder().argument("inner", ROUND_INNER).suffix(ROUND),
+        round_pair: SpecificationBuilder().argument("left", ROUND_INNER).argument("right", ROUND_INNER).suffix(ROUND),
+        inner_leaf: SpecificationBuilder().suffix(ROUND_INNER),
+        inner_step: SpecificationBuilder().argument("inner", ROUND).suffix(ROUND_INNER),
+    }
+    return Synthesizer(specs).construct_solution_space(ROUND)
+
+
+IDLE = Constructor("Idle")
+
+
+def idle_halt() -> str:
+    """Build the leaf of ``Idle``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "h"
+
+
+def idle_again(inner: str) -> str:
+    """Build an ``Idle`` around an ``Idle``: the loop a clause of cost zero closes.
+
+    Args:
+        inner (str): The interpreted ``Idle``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"z({inner})"
+
+
+def idle_space():
+    """Build the loop that an algebra charging ``idle_again`` nothing turns into infinitely many terms of one cost.
+
+    Returns:
+        SolutionSpace: The space, started at ``Idle``.
+    """
+    specs = {
+        idle_halt: SpecificationBuilder().suffix(IDLE),
+        idle_again: SpecificationBuilder().argument("inner", IDLE).suffix(IDLE),
+    }
+    return Synthesizer(specs).construct_solution_space(IDLE)
+
+
+# The shapes the first test spaces left out: the reviews of the cost table found that the fill's grouping, the order inside a
+# cyclic component, the kept splits and a component of more than two members were all reachable only by programs not in the
+# suite. Each space below is small enough to count by expanding the engine's goals.
+
+CYCLE_A = Constructor("CycleA")
+CYCLE_B = Constructor("CycleB")
+CYCLE_C = Constructor("CycleC")
+
+
+def cycle_leaf() -> str:
+    """Build the leaf of ``CycleA``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "a"
+
+
+def cycle_ab(inner: str) -> str:
+    """Build a ``CycleA`` around a ``CycleB``.
+
+    Args:
+        inner (str): The interpreted ``CycleB``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"ab({inner})"
+
+
+def cycle_bc(inner: str) -> str:
+    """Build a ``CycleB`` around a ``CycleC``.
+
+    Args:
+        inner (str): The interpreted ``CycleC``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"bc({inner})"
+
+
+def cycle_ca(inner: str) -> str:
+    """Build a ``CycleC`` around a ``CycleA``, which closes a cycle of three sorts.
+
+    Args:
+        inner (str): The interpreted ``CycleA``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"ca({inner})"
+
+
+def three_cycle_space():
+    """Build one strongly connected component of three members.
+
+    Returns:
+        SolutionSpace: The space, started at ``CycleA``.
+    """
+    specs = {
+        cycle_leaf: SpecificationBuilder().suffix(CYCLE_A),
+        cycle_ab: SpecificationBuilder().argument("inner", CYCLE_B).suffix(CYCLE_A),
+        cycle_bc: SpecificationBuilder().argument("inner", CYCLE_C).suffix(CYCLE_B),
+        cycle_ca: SpecificationBuilder().argument("inner", CYCLE_A).suffix(CYCLE_C),
+    }
+    return Synthesizer(specs).construct_solution_space(CYCLE_A)
+
+
+SPLIT = Constructor("Split")
+SCALAR = Constructor("Scalar")
+
+
+def split_leaf() -> str:
+    """Build the leaf of ``Split``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "x"
+
+
+def split_sum(left: str, right: str) -> str:
+    """Build a ``Split`` from two, a tuple of holes inside the component.
+
+    Args:
+        left (str): The interpreted first ``Split``.
+        right (str): The interpreted second ``Split``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"({left}+{right})"
+
+
+def split_scale(left: str, right: str) -> str:
+    """Build a ``Split`` from one and a ``Scalar``: a tuple whose second hole is outside the component.
+
+    Args:
+        left (str): The interpreted ``Split``.
+        right (str): The interpreted ``Scalar``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"({left}*{right})"
+
+
+def split_rescale(left: str, right: str) -> str:
+    """Build a ``Split`` from a ``Scalar`` and one: a tuple whose FIRST hole is outside the component.
+
+    Args:
+        left (str): The interpreted ``Scalar``.
+        right (str): The interpreted ``Split``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"({left}#{right})"
+
+
+def scalar_one() -> str:
+    """Build the first ``Scalar``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "1"
+
+
+def scalar_two() -> str:
+    """Build the second ``Scalar``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "2"
+
+
+def split_space():
+    """Build a recursion whose clauses open three different tuples of two holes.
+
+    The fill by cost levels splits each tuple at each total once and keeps the split, and one of the
+    tuples starts with a sort outside the component, whose row is finished before the fill starts.
+
+    Returns:
+        SolutionSpace: The space, started at ``Split``.
+    """
+    specs = {
+        split_leaf: SpecificationBuilder().suffix(SPLIT),
+        split_sum: SpecificationBuilder().argument("left", SPLIT).argument("right", SPLIT).suffix(SPLIT),
+        split_scale: SpecificationBuilder().argument("left", SPLIT).argument("right", SCALAR).suffix(SPLIT),
+        split_rescale: SpecificationBuilder().argument("left", SCALAR).argument("right", SPLIT).suffix(SPLIT),
+        scalar_one: SpecificationBuilder().suffix(SCALAR),
+        scalar_two: SpecificationBuilder().suffix(SCALAR),
+    }
+    return Synthesizer(specs).construct_solution_space(SPLIT)
+
+
+TAILS = Constructor("Tails")
+TAIL_A = Constructor("TailA")
+TAIL_B = Constructor("TailB")
+
+
+def tail_a0() -> str:
+    """Build the first ``TailA``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "a0"
+
+
+def tail_a1() -> str:
+    """Build the second ``TailA``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "a1"
+
+
+def tail_b0() -> str:
+    """Build the ``TailB``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "b0"
+
+
+def tails_same(first: str, second: str, third: str) -> str:
+    """Build a ``Tails`` from three ``TailA``: its tail is ``(TailA, TailA)``.
+
+    Args:
+        first (str): The interpreted first hole.
+        second (str): The interpreted second hole.
+        third (str): The interpreted third hole.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"s({first},{second},{third})"
+
+
+def tails_mixed(first: str, second: str, third: str) -> str:
+    """Build a ``Tails`` from two ``TailA`` and a ``TailB``: a tail of the same length, other sorts.
+
+    Args:
+        first (str): The interpreted first hole.
+        second (str): The interpreted second hole.
+        third (str): The interpreted third hole.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"m({first},{second},{third})"
+
+
+def ternary_tails_space():
+    """Build one head with two ternary clauses whose tails have the same length and different sorts.
+
+    Returns:
+        SolutionSpace: The space, started at ``Tails``.
+    """
+    specs = {
+        tail_a0: SpecificationBuilder().suffix(TAIL_A),
+        tail_a1: SpecificationBuilder().suffix(TAIL_A),
+        tail_b0: SpecificationBuilder().suffix(TAIL_B),
+        tails_same: SpecificationBuilder()
+        .argument("first", TAIL_A)
+        .argument("second", TAIL_A)
+        .argument("third", TAIL_A)
+        .suffix(TAILS),
+        tails_mixed: SpecificationBuilder()
+        .argument("first", TAIL_A)
+        .argument("second", TAIL_A)
+        .argument("third", TAIL_B)
+        .suffix(TAILS),
+    }
+    return Synthesizer(specs).construct_solution_space(TAILS)
+
+
+LOOP = Constructor("Loop")
+LOOP_SIDE = Constructor("LoopSide")
+LOOP_OTHER = Constructor("LoopOther")
+
+
+def loop_leaf() -> str:
+    """Build the leaf of ``Loop``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "l"
+
+
+def loop_fold(side: str, inner: str) -> str:
+    """Build a ``Loop`` from a ``LoopSide`` and a ``Loop``: a loop closed through a clause's SECOND hole.
+
+    Args:
+        side (str): The interpreted ``LoopSide``.
+        inner (str): The interpreted ``Loop``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"fold({side},{inner})"
+
+
+def loop_side() -> str:
+    """Build the ``LoopSide``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "s"
+
+
+def loop_there(inner: str) -> str:
+    """Build a ``Loop`` around a ``LoopOther``.
+
+    Args:
+        inner (str): The interpreted ``LoopOther``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"there({inner})"
+
+
+def loop_back(inner: str) -> str:
+    """Build a ``LoopOther`` around a ``Loop``, which closes a loop of two clauses.
+
+    Args:
+        inner (str): The interpreted ``Loop``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"back({inner})"
+
+
+def loop_space():
+    """Build two loops a test algebra can close with clauses of cost zero.
+
+    ``loop_fold`` closes one through the second hole of a clause of two, ``loop_there`` and ``loop_back``
+    one of two clauses. Whether either is a loop of cost zero is the algebra's to decide.
+
+    Returns:
+        SolutionSpace: The space, started at ``Loop``.
+    """
+    specs = {
+        loop_leaf: SpecificationBuilder().suffix(LOOP),
+        loop_fold: SpecificationBuilder().argument("side", LOOP_SIDE).argument("inner", LOOP).suffix(LOOP),
+        loop_side: SpecificationBuilder().suffix(LOOP_SIDE),
+        loop_there: SpecificationBuilder().argument("inner", LOOP_OTHER).suffix(LOOP),
+        loop_back: SpecificationBuilder().argument("inner", LOOP).suffix(LOOP_OTHER),
+    }
+    return Synthesizer(specs).construct_solution_space(LOOP)
+
+
+HOLLOW = Constructor("Hollow")
+NOWHERE = Constructor("Nowhere")
+
+
+def hollow_leaf() -> str:
+    """Build the leaf of ``Hollow``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "h"
+
+
+def hollow_needs(inner: str) -> str:
+    """Build a ``Hollow`` from a ``Nowhere``, a sort no clause derives.
+
+    Args:
+        inner (str): The interpreted ``Nowhere``, which never exists.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"needs({inner})"
+
+
+def hollow_space():
+    """Build an unpruned space with a clause whose hole no clause can fill.
+
+    Returns:
+        SolutionSpace: The space, started at ``Hollow``, NOT pruned.
+    """
+    specs = {
+        hollow_leaf: SpecificationBuilder().suffix(HOLLOW),
+        hollow_needs: SpecificationBuilder().argument("inner", NOWHERE).suffix(HOLLOW),
+    }
+    return Synthesizer(specs).construct_solution_space(HOLLOW)
+
+
+OUTER = Constructor("Outer")
+INNER = Constructor("InnerPair")
+
+
+def outer_stop() -> str:
+    """Build the leaf of ``Outer``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "o"
+
+
+def outer_wrap(inner: str) -> str:
+    """Build an ``Outer`` around an ``InnerPair``.
+
+    Args:
+        inner (str): The interpreted ``InnerPair``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"ow({inner})"
+
+
+def inner_leaf_pair() -> str:
+    """Build the leaf of ``InnerPair``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "p"
+
+
+def inner_pair(left: str, right: str) -> str:
+    """Build an ``InnerPair`` from two ``Outer``, which closes the recursion through a clause of two holes.
+
+    Args:
+        left (str): The interpreted first ``Outer``.
+        right (str): The interpreted second ``Outer``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"ip({left},{right})"
+
+
+def pair_edge_space():
+    """Build a recursion whose one clause of cost zero, under a test algebra, opens two holes.
+
+    Charged so that ``inner_pair`` alone costs nothing inside the cycle, the only edge that decides the
+    order within a cost value comes from a clause of two holes, pointing from ``InnerPair`` to ``Outer``.
+
+    Returns:
+        SolutionSpace: The space, started at ``Outer``.
+    """
+    specs = {
+        outer_stop: SpecificationBuilder().suffix(OUTER),
+        outer_wrap: SpecificationBuilder().argument("inner", INNER).suffix(OUTER),
+        inner_leaf_pair: SpecificationBuilder().suffix(INNER),
+        inner_pair: SpecificationBuilder().argument("left", OUTER).argument("right", OUTER).suffix(INNER),
+    }
+    return Synthesizer(specs).construct_solution_space(OUTER)

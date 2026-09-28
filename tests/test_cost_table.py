@@ -13,23 +13,63 @@ every expansion adds to the cost so far, so that summed along a derivation it gi
 finished term. The second is checked against :meth:`~cosy.search.costs.AdditiveCostAlgebra.cost_so_far`
 and :meth:`~cosy.search.costs.AdditiveCostAlgebra.fold`, which read the partial inhabitant and never
 the rule, so the two computations share nothing but the algebra.
+
+The rest of the file is the cost table itself (:mod:`cosy.search.cost_tables`), held to three
+oracles that share none of its counting. Under the unit algebra it is the size table, row for row,
+and it streams what the size table's form streams, key for key. Below the cap its root row is what
+the engine's own expansion finds when it is cut at the cap, and on the reference spaces what the
+tree form counts under a size bound that provably covers the cap. On a finite space, with the cap
+at its dearest term, it streams what the tree form streams, key for key, from every position of a
+term and under a distribution that is not uniform. What it refuses is pinned beside that: a loop
+that clauses of cost zero close, a cost that is not a whole number, a negative cap, a predicate that
+reads a hole, and a table filled under another algebra or to a lower cap.
 """
+
+import math
+import random
 
 import pytest
 
+import cosy.search.cost_tables as cost_tables_module
 from cosy.core import Constructor, SpecificationBuilder, Synthesizer
 from cosy.core.solution_space import ConstantArgument, Goal, NonTerminalArgument
 from cosy.core.types import DataGroup
+from cosy.search import generator_query, residual_query
+from cosy.search.cost_tables import CostTable, _initial_cost_nodes, _product, cost_table, weighted_cost_table
 from cosy.search.costs import AdditiveCostAlgebra, ComponentwiseTuples, NonNegativeReals
-from cosy.search.counting import _added_symbols, rule_cost
+from cosy.search.counting import _added_symbols, branch_counts, rule_cost, size_table
 from cosy.search.partial import partial_inhabitant, term_size
 from cosy.search.rules import deepest_first_subgoal
+from cosy.search.samplers import CostTableSampler, Sampler
+from cosy.search.sampling import log_sum_exp, weighted_table, weighted_tree
 from tests.search_fixtures import (
+    AMBIGUOUS_TARGET,
+    BOX,
+    CHAIN,
     EXPR,
+    IDLE,
     LIST,
+    PRICED,
+    PRICED_Q,
+    ROUND,
     TAGGED,
+    TUPLE_SORT,
+    ambiguous_space,
+    chain_space,
+    cut_space,
     expression_space,
+    hole_tuple_space,
+    hollow_space,
+    idle_space,
     list_space,
+    literal_predicate_space,
+    loop_space,
+    pair_edge_space,
+    priced_space,
+    round_space,
+    split_space,
+    ternary_tails_space,
+    three_cycle_space,
     two_symbol_clause_space,
 )
 
@@ -130,6 +170,31 @@ COMBINATOR_COSTS = {
     "lit": 0,
     "neg": 2,
     "add": 1,
+    # the cost table's spaces: several clauses of cost zero, one of them on every level
+    "s_a": 0,
+    "s_b": 1,
+    "s_c": 1,
+    "r_one": 2,
+    "r_wrap": 0,
+    "q_pair": 0,
+    "q_twin": 0,
+    "q_three": 0,
+    "p_top": 0,
+    "p_join": 1,
+    "p_join_again": 1,
+    "p_link": 1,
+    "round_stop": 0,
+    "round_wrap": 0,
+    "round_pair": 0,
+    "inner_leaf": 0,
+    "inner_step": 1,
+    "idle_halt": 1,
+    "idle_again": 0,
+    "a_zero": 0,
+    "a_one": 1,
+    "b_single": 2,
+    "same_holes": 0,
+    "mixed_holes": 1,
 }
 
 
@@ -304,3 +369,613 @@ def test_a_symbol_cost_outside_the_domain_is_refused():
     rule = next(rule for nonterminal in space.nonterminals() for rule in space.get(nonterminal) or ())
     with pytest.raises(ValueError, match="the symbol cost returned -1"):
         rule_cost(rule, negative)
+
+
+# ---------------------------------------------------------------------------------------------
+# The cost table
+# ---------------------------------------------------------------------------------------------
+
+# The reference spaces the size table is checked on, with the cap each one is streamed to in full.
+UNIT_SPACES = [
+    ("list", list_space, LIST),
+    ("expression", expression_space, EXPR),
+    ("ambiguous", ambiguous_space, AMBIGUOUS_TARGET),
+    ("two symbols per clause", two_symbol_clause_space, TAGGED),
+    ("chain", chain_space, CHAIN),
+]
+FULL_STREAM_CAPS = {"list": 7, "expression": 7, "ambiguous": 4, "two symbols per clause": 9, "chain": 7}
+
+# The recursive spaces the root row is checked on below a cap, under the weighted algebra. The third
+# entry bounds the size of a term by its cost: a list of cost ``a`` has at most ``a`` conses, an
+# expression at most ``a`` operators and so at most ``a + 1`` literals, a tagged term at most
+# ``a / 2`` tags of two symbols each. Under that size bound the tree form counts every term below the
+# cap, so its counts are an oracle for the table's. The round space has no such bound worth the tree
+# form's cost and is checked against the cut expansion alone.
+RECURSIVE_SPACES = [
+    ("list", list_space, LIST, lambda cap: cap + 1),
+    ("expression", expression_space, EXPR, lambda cap: 2 * cap + 1),
+    ("two symbols per clause", two_symbol_clause_space, TAGGED, lambda cap: cap + 1),
+    ("round", round_space, ROUND, None),
+]
+
+# The finite spaces the streams are compared on, with a size bound above every term they have.
+FINITE_SPACES = [
+    ("priced", priced_space, PRICED),
+    ("hole tuples", hole_tuple_space, TUPLE_SORT),
+]
+SIZE_OF_EVERYTHING = 30
+
+
+def uniform(_value):
+    """Weight every realized cost value alike.
+
+    Args:
+        _value: The cost value. Ignored.
+
+    Returns:
+        float: One; the constructions normalize over the realized values.
+    """
+    return 1.0
+
+
+def falling(value):
+    """Weight a cost value by ``1 / (1 + a)``, a distribution that is not uniform.
+
+    Args:
+        value: The cost value.
+
+    Returns:
+        float: Its weight.
+    """
+    return 1.0 / (1.0 + value)
+
+
+def assert_streams_agree(expected, actual):
+    """Assert that two keyed streams coincide term for term and key for key.
+
+    Args:
+        expected (list): The keyed stream of the oracle.
+        actual (list): The keyed stream of the cost table.
+    """
+    assert len(expected) == len(actual)
+    assert [term for _, term in expected] == [term for _, term in actual]
+    for (expected_key, _), (actual_key, _) in zip(expected, actual, strict=True):
+        assert math.isclose(expected_key, actual_key, rel_tol=1e-12, abs_tol=1e-12)
+
+
+def cut_expansion_counts(space, start, algebra, cap):
+    """Count the terms below a cost cap by expanding the engine's goals and cutting at the cap.
+
+    The oracle that shares nothing with the table's arithmetic: the retained derivation tree, cut
+    where the cost so far passes the cap, which is exact because no cost comes back down. It
+    terminates on a space without a loop of clauses of cost zero.
+
+    Args:
+        space (SolutionSpace): The program.
+        start: The queried non-terminal.
+        algebra (AdditiveCostAlgebra): The algebra.
+        cap (int): The cost cap.
+
+    Returns:
+        dict[int, int]: The number of success branches per fold value up to the cap.
+    """
+    counts: dict[int, int] = {}
+    pending = [goal for rule in space.get(start) or () if (goal := Goal.from_rhs_rule(rule)) is not None]
+    while pending:
+        goal = pending.pop()
+        if algebra.cost_so_far(goal) > cap:
+            continue
+        if goal.success:
+            value = int(algebra.fold(goal.grounded[()][1]))
+            counts[value] = counts.get(value, 0) + 1
+            continue
+        position, argument = deepest_first_subgoal(goal)
+        for rule in space.get(argument.origin) or ():
+            child = goal.update(rule, position)
+            if child is not None:
+                pending.append(child)
+    return counts
+
+
+@pytest.mark.parametrize(("name", "build"), [(name, build) for name, build, _start in UNIT_SPACES])
+@pytest.mark.parametrize("cap", [1, 2, 3, 5, 6])
+def test_under_the_unit_algebra_the_cost_table_is_the_size_table(name, build, cap):
+    """One per symbol makes the cost the size, and then the two tables are one, row for row.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        cap (int): The cap, which is then the size bound.
+    """
+    space = build()
+    costs = cost_table(space, UNIT, cap)
+    sizes = size_table(space, cap)
+    assert set(costs.counts) == set(sizes.counts), name
+    for nonterminal in sizes.counts:
+        expected = {size: sizes.of(nonterminal, size) for size in range(cap + 1) if sizes.of(nonterminal, size)}
+        assert dict(costs.counts[nonterminal]) == expected, (name, nonterminal)
+    if cap >= 5:
+        assert any(costs.counts.values()), "an empty table would make the comparison vacuous"
+
+
+@pytest.mark.parametrize(("name", "build", "start"), UNIT_SPACES)
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_under_the_unit_algebra_the_cost_table_streams_what_the_size_table_streams(name, build, start, seed):
+    """The same oracle from another table: the same stream, term for term and key for key.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+        seed (int): The seed under test.
+    """
+    cap = FULL_STREAM_CAPS[name]
+    query = generator_query(build(), start)
+    sized = list(weighted_table(query, cap, uniform).keyed_stream(random.Random(seed)))
+    costed = list(weighted_cost_table(query, UNIT, uniform, cap).keyed_stream(random.Random(seed)))
+    assert sized, "an empty stream would make the comparison vacuous"
+    assert_streams_agree(sized, costed)
+
+
+@pytest.mark.parametrize(("name", "build", "start", "size_for"), RECURSIVE_SPACES)
+@pytest.mark.parametrize("cap", [0, 1, 3, 4])
+def test_below_the_cap_the_root_row_is_what_the_cut_expansion_and_the_tree_form_count(
+    name, build, start, size_for, cap
+):
+    """Clauses of cost zero, a recursion, and the rows agree with two oracles below the cap.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+        size_for (Callable | None): A size bound that covers every term below the cap, or None.
+        cap (int): The cost cap.
+    """
+    space = build()
+    table = cost_table(space, WEIGHTED, cap)
+    expected = cut_expansion_counts(space, start, WEIGHTED, cap)
+    assert dict(table.counts[start]) == expected, name
+    if cap >= 3:
+        assert len(expected) >= 2, "a row of one value would make the comparison weak"
+    if size_for is not None:
+        tree = branch_counts(generator_query(space, start), size_for(cap), WEIGHTED.fold)
+        assert {int(value): count for value, count in tree.counts.items() if value <= cap} == expected, name
+
+
+def test_a_loop_of_positive_cost_is_counted_value_by_value():
+    """``Idle -> idle_again(Idle) | idle_halt`` with the loop charged: one term per cost value."""
+    charged = AdditiveCostAlgebra(NonNegativeReals(), lambda symbol: 1 if getattr(symbol, "__name__", "") else 0)
+    table = cost_table(idle_space(), charged, 4)
+    assert dict(table.counts[IDLE]) == {1: 1, 2: 1, 3: 1, 4: 1}
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+@pytest.mark.parametrize("seed", [0, 1, 7, 23])
+def test_on_a_finite_space_the_cost_table_streams_what_the_tree_form_streams(name, build, start, seed):
+    """A cap above the dearest term: the same question as the tree form's, and the same stream.
+
+    Under a distribution that is not uniform, so that the unit weights differ between cost values.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+        seed (int): The seed under test.
+    """
+    query = generator_query(build(), start)
+    eager = weighted_tree(query, SIZE_OF_EVERYTHING, WEIGHTED.fold, falling)
+    wider = branch_counts(query, SIZE_OF_EVERYTHING + 10, WEIGHTED.fold)
+    assert wider.counts == eager.root.counts, (name, "the size bound must hold every term of the finite space")
+    dearest = int(max(eager.root.counts))
+    assert len(eager.root.counts) >= 3, (name, "too few cost values to say anything")
+    lazy = weighted_cost_table(query, WEIGHTED, falling, dearest)
+    assert lazy.total == eager.root.total, name
+    assert_streams_agree(
+        list(eager.keyed_stream(random.Random(seed))),
+        list(lazy.keyed_stream(random.Random(seed))),
+    )
+
+
+@pytest.mark.parametrize("cap", [0, 2, 4, 6])
+def test_a_cap_below_the_dearest_term_streams_exactly_the_terms_within_it_once_each(cap):
+    """The cap cuts the language, and the stream is the language below it, without repeats.
+
+    Args:
+        cap (int): The cost cap.
+    """
+    query = generator_query(priced_space(), PRICED)
+    everything = list(weighted_tree(query, SIZE_OF_EVERYTHING, WEIGHTED.fold, uniform).stream(random.Random(0)))
+    within = {term for term in everything if WEIGHTED.fold(term) <= cap}
+    streamed = list(weighted_cost_table(query, WEIGHTED, uniform, cap).stream(random.Random(3)))
+    assert set(streamed) == within
+    assert len(streamed) == len(within)
+    assert within, "an empty language below the cap would make the comparison vacuous"
+
+
+def test_a_partial_term_is_completed_as_the_tree_form_completes_it_at_every_position():
+    """The prescribed symbols are charged, at the root, the leaves, the literals and everything between.
+
+    The cost of the prescribed part counts against the cap in both constructions, and both start
+    from the goals ``goal_from_tree`` derives, so the residual streams agree position by position.
+    """
+    space = priced_space()
+    eager_all = weighted_tree(generator_query(space, PRICED), SIZE_OF_EVERYTHING, WEIGHTED.fold, uniform)
+    dearest = int(max(eager_all.root.counts))
+    parent = max(eager_all.stream(random.Random(5)), key=lambda term: (term.depth, str(term)))
+    positions = sorted(parent.positions())
+    assert len(positions) >= 4, "a shallow parent would leave the deep positions untested"
+    assert any(not callable(parent.subtree_at(position).root) for position in positions), "no literal leaf"
+    for position in positions:
+        query = residual_query(space, PRICED, parent, position)
+        eager = weighted_tree(query, SIZE_OF_EVERYTHING, WEIGHTED.fold, falling)
+        lazy = weighted_cost_table(query, WEIGHTED, falling, dearest)
+        assert lazy.total == eager.root.total > 0, position
+        assert_streams_agree(
+            list(eager.keyed_stream(random.Random(11))),
+            list(lazy.keyed_stream(random.Random(11))),
+        )
+
+
+def test_clauses_of_cost_zero_that_close_a_cycle_are_refused_and_named():
+    """``idle_again`` costs nothing and opens its own sort: infinitely many terms of one cost."""
+    with pytest.raises(ValueError, match="clauses of cost zero close a cycle") as refused:
+        cost_table(idle_space(), WEIGHTED, 5)
+    assert "idle_again" in str(refused.value)
+
+
+def test_a_cost_that_is_not_a_whole_number_is_refused():
+    """A half is not rounded: a coarser algebra is a different algebra and the caller's to choose."""
+    halves = AdditiveCostAlgebra(NonNegativeReals(), lambda _symbol: 0.5)
+    with pytest.raises(ValueError, match="takes whole-number costs"):
+        cost_table(list_space(), halves, 4)
+
+
+def test_a_negative_cap_is_refused():
+    """A cost value below zero is a caller's mistake, in the table and in the search alike."""
+    with pytest.raises(ValueError, match="the cost cap is a cost value"):
+        cost_table(list_space(), WEIGHTED, -1)
+    with pytest.raises(ValueError, match="the cost cap is a cost value"):
+        weighted_cost_table(generator_query(list_space(), LIST), WEIGHTED, uniform, -1)
+
+
+def test_a_program_whose_predicate_reads_a_hole_is_refused():
+    """The holes of a clause must be filled independently, or the product overcounts."""
+    with pytest.raises(ValueError, match="reading a hole in a predicate"):
+        cost_table(cut_space(), WEIGHTED, 4)
+    with pytest.raises(ValueError, match="reading a hole in a predicate"):
+        weighted_cost_table(generator_query(cut_space(), BOX), WEIGHTED, uniform, 4)
+
+
+def test_a_table_handed_in_must_be_filled_under_the_same_algebra_to_at_least_the_cap():
+    """A prebuilt table is no way around the algebra or the cap."""
+    space = list_space()
+    query = generator_query(space, LIST)
+    other = AdditiveCostAlgebra(NonNegativeReals(), weighted_symbol_cost)
+    with pytest.raises(ValueError, match="filled under another algebra"):
+        weighted_cost_table(query, WEIGHTED, uniform, 3, table=cost_table(space, other, 3))
+    with pytest.raises(ValueError, match="filled to the cost cap 2"):
+        weighted_cost_table(query, WEIGHTED, uniform, 3, table=cost_table(space, WEIGHTED, 2))
+    shared = cost_table(space, WEIGHTED, 5)
+    assert isinstance(shared, CostTable)
+    assert list(weighted_cost_table(query, WEIGHTED, uniform, 5, table=shared).stream(random.Random(2))) == list(
+        weighted_cost_table(query, WEIGHTED, uniform, 5).stream(random.Random(2))
+    )
+
+
+def test_the_table_reads_zero_outside_what_it_holds():
+    """Outside the cap, for an unknown non-terminal, and for a split beyond the cap."""
+    table = cost_table(list_space(), WEIGHTED, 3)
+    assert table.of(LIST, 0) == 1
+    assert table.of(LIST, 4) == 0
+    assert table.of(LIST, -1) == 0
+    assert table.of("no such sort", 0) == 0
+    assert table.split_counts((), 0) == 1
+    assert table.split_counts((LIST, LIST), 0) == 1
+    assert table.split_counts((LIST, LIST), 4) == 0
+
+
+def test_the_sampler_streams_the_weighted_table_and_knows_how_many_terms_it_holds():
+    """The ``Sampler`` a pipeline consumes: the same stream, an exact count, a refusal of a negative cap."""
+    query = generator_query(priced_space(), PRICED)
+    sampler = CostTableSampler(WEIGHTED, falling, 6, random.Random(9))
+    assert isinstance(sampler, Sampler)
+    total = weighted_cost_table(query, WEIGHTED, falling, 6).total
+    assert total > 0
+    assert sampler.at_least(query, total)
+    assert not sampler.at_least(query, total + 1)
+    assert sampler.at_least(query, 0)
+    expected = list(weighted_cost_table(query, WEIGHTED, falling, 6).stream(random.Random(9)))
+    assert list(sampler.sample(query)) == expected
+    sampler.forget()
+    with pytest.raises(ValueError, match="the cost cap is a cost value"):
+        CostTableSampler(WEIGHTED, falling, -1, random.Random(0))
+
+
+def test_a_cap_below_the_cheapest_term_gives_an_empty_stream():
+    """Emptiness below the cap is a legitimate answer, not an error."""
+    charged = AdditiveCostAlgebra(NonNegativeReals(), lambda symbol: 1 if getattr(symbol, "__name__", "") else 0)
+    query = generator_query(idle_space(), IDLE)
+    lazy = weighted_cost_table(query, charged, uniform, 0)
+    assert lazy.total == 0
+    assert list(lazy.stream(random.Random(0))) == []
+    assert not CostTableSampler(charged, uniform, 0, random.Random(0)).at_least(query, 1)
+    # the control: one cost value up, the cheapest term is there, and one more up, the next
+    assert weighted_cost_table(query, charged, uniform, 1).total == 1
+    assert weighted_cost_table(query, charged, uniform, 2).total == 2
+    assert CostTableSampler(charged, uniform, 2, random.Random(0)).at_least(query, 2)
+
+
+# ---------------------------------------------------------------------------------------------
+# What the reviews of the cost table found unexercised
+# ---------------------------------------------------------------------------------------------
+
+
+def by_name(costs, literal=lambda value: value + 1):
+    """Build an algebra that charges each combinator its entry and a literal ``literal(value)``.
+
+    Args:
+        costs (dict): The combinators' costs, by function name.
+        literal (Callable): The cost of a literal value.
+
+    Returns:
+        AdditiveCostAlgebra: The algebra.
+    """
+
+    def symbol_cost(symbol):
+        name = getattr(symbol, "__name__", None)
+        return costs[name] if name is not None else literal(symbol)
+
+    return AdditiveCostAlgebra(NonNegativeReals(), symbol_cost)
+
+
+# The spaces every row of the table is checked on, each with the algebra that reaches the branch it
+# was built for: the shared first holes of the priced space, a recursion read at the value it fills
+# from a single hole and from a clause of two holes, three different tuples split in one component,
+# a component of three members, two ternary tails of one length, and a clause whose hole no clause
+# fills.
+EVERY_ROW = [
+    ("priced", priced_space, WEIGHTED, 6, 3),
+    # a cap below several leaves: a clause dearer than the cap contributes nothing, not a value above it
+    ("priced, a low cap", priced_space, WEIGHTED, 1, 3),
+    (
+        "round, the order reversed",
+        round_space,
+        by_name({"round_stop": 1, "round_wrap": 1, "round_pair": 1, "inner_leaf": 1, "inner_step": 0}),
+        5,
+        3,
+    ),
+    (
+        "pair edge",
+        pair_edge_space,
+        by_name({"outer_stop": 0, "outer_wrap": 1, "inner_leaf_pair": 1, "inner_pair": 0}),
+        6,
+        3,
+    ),
+    (
+        "split",
+        split_space,
+        by_name(
+            {"split_leaf": 1, "split_sum": 1, "split_scale": 1, "split_rescale": 2, "scalar_one": 1, "scalar_two": 2}
+        ),
+        6,
+        3,
+    ),
+    ("three cycle", three_cycle_space, by_name({"cycle_leaf": 1, "cycle_ab": 1, "cycle_bc": 1, "cycle_ca": 1}), 9, 3),
+    (
+        "ternary tails",
+        ternary_tails_space,
+        by_name({"tail_a0": 0, "tail_a1": 1, "tail_b0": 3, "tails_same": 1, "tails_mixed": 1}),
+        8,
+        3,
+    ),
+    (
+        "a loop that pays for its side",
+        loop_space,
+        by_name({"loop_leaf": 1, "loop_fold": 0, "loop_side": 1, "loop_there": 1, "loop_back": 1}),
+        5,
+        3,
+    ),
+    # one term in all: the point is the clause whose hole nothing fills, counted as nothing
+    ("hollow", hollow_space, by_name({"hollow_leaf": 1, "hollow_needs": 0}), 3, 1),
+]
+
+
+@pytest.mark.parametrize(("name", "build", "algebra", "cap", "at_least"), EVERY_ROW)
+def test_every_row_is_what_the_cut_expansion_counts_from_its_sort(name, build, algebra, cap, at_least):
+    """Not the start row alone: every non-terminal's row, against the engine's own expansion from it.
+
+    Args:
+        name (str): The case's name, for the test id.
+        build (Callable): Builds the space.
+        algebra (AdditiveCostAlgebra): The algebra that reaches the case's branch.
+        cap (int): The cost cap.
+        at_least (int): How many realized values the case must have for the comparison to say anything.
+    """
+    space = build()
+    table = cost_table(space, algebra, cap)
+    realized = 0
+    for nonterminal in space.nonterminals():
+        expected = cut_expansion_counts(space, nonterminal, algebra, cap)
+        assert dict(table.counts[nonterminal]) == expected, (name, nonterminal)
+        assert all(value <= cap for value in table.counts[nonterminal]), (name, nonterminal)
+        realized += len(expected)
+    assert realized >= at_least, (name, "too few realized values to say anything")
+
+
+@pytest.mark.parametrize(
+    ("name", "build"),
+    [
+        ("priced", priced_space),
+        ("round", round_space),
+        ("pair edge", pair_edge_space),
+        ("split", split_space),
+        ("three cycle", three_cycle_space),
+        ("ternary tails", ternary_tails_space),
+        ("literal predicate", literal_predicate_space),
+    ],
+)
+@pytest.mark.parametrize("cap", [3, 5, 8])
+def test_under_the_unit_algebra_every_other_space_is_the_size_table_too(name, build, cap):
+    """The grouping, the literal-only predicates and the cyclic fills, held to the size table.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        cap (int): The cap, which is then the size bound.
+    """
+    space = build()
+    costs = cost_table(space, UNIT, cap)
+    sizes = size_table(space, cap)
+    for nonterminal in sizes.counts:
+        expected = {size: sizes.of(nonterminal, size) for size in range(cap + 1) if sizes.of(nonterminal, size)}
+        assert dict(costs.counts[nonterminal]) == expected, (name, nonterminal)
+
+
+def test_the_priced_space_groups_clauses_by_cost_and_first_hole():
+    """The weighted algebra gives the clauses that share a first hole one cost, so the fill groups them."""
+    space = priced_space()
+    shared = {}
+    for nonterminal in space.nonterminals():
+        for rule in space.get(nonterminal) or ():
+            holes_of = tuple(
+                argument.origin for argument in rule.arguments if isinstance(argument, NonTerminalArgument)
+            )
+            if len(holes_of) >= 2:
+                key = (nonterminal, rule_cost(rule, WEIGHTED), holes_of[0])
+                shared.setdefault(key, []).append(holes_of[1:])
+    tails = [tuple(group) for group in shared.values() if len(group) > 1]
+    assert tails, "no two clauses share their cost and their first hole"
+    assert any(len(set(group)) < len(group) for group in tails), "no tail is repeated within a group"
+    assert any(len(set(group)) > 1 for group in tails), "no group has two different tails"
+
+
+@pytest.mark.parametrize(
+    ("algebra", "named"),
+    [
+        # through a clause's second hole, its first a side that costs nothing
+        (by_name({"loop_leaf": 1, "loop_fold": 0, "loop_side": 0, "loop_there": 1, "loop_back": 1}), ["loop_fold"]),
+        # the same, with the loop's own sort free too, so that every hole of the clause is a free edge
+        (by_name({"loop_leaf": 0, "loop_fold": 0, "loop_side": 0, "loop_there": 1, "loop_back": 1}), ["loop_fold"]),
+        # through two clauses of one hole each
+        (
+            by_name({"loop_leaf": 1, "loop_fold": 1, "loop_side": 0, "loop_there": 0, "loop_back": 0}),
+            ["loop_there", "loop_back"],
+        ),
+    ],
+)
+def test_a_loop_that_pumps_without_paying_is_refused_and_named(algebra, named):
+    """Through a clause of two holes whose side costs nothing, and through two clauses of one hole each.
+
+    Args:
+        algebra (AdditiveCostAlgebra): The algebra that closes the loop at no cost.
+        named (list[str]): The clauses the message must name.
+    """
+    with pytest.raises(ValueError, match="close a cycle whose other holes can be filled at cost zero") as refused:
+        cost_table(loop_space(), algebra, 4)
+    for clause in named:
+        assert clause in str(refused.value), clause
+
+
+def test_a_cap_is_a_whole_number_and_a_whole_float_is_one():
+    """A fold of the algebra is a float; four point oh is four, four and a half is refused."""
+    query = generator_query(list_space(), LIST)
+    as_int = list(weighted_cost_table(query, WEIGHTED, uniform, 4).keyed_stream(random.Random(1)))
+    as_float = list(weighted_cost_table(query, WEIGHTED, uniform, 4.0).keyed_stream(random.Random(1)))
+    assert as_int
+    assert_streams_agree(as_int, as_float)
+    assert CostTableSampler(WEIGHTED, uniform, 4.0, random.Random(0)).at_least(query, 1)
+    for bad in (4.5, float("inf"), True, "4"):
+        with pytest.raises(ValueError, match="must be a nonnegative whole number"):
+            weighted_cost_table(query, WEIGHTED, uniform, bad)
+        with pytest.raises(ValueError, match="must be a nonnegative whole number"):
+            cost_table(list_space(), WEIGHTED, bad)
+
+
+def test_a_table_filled_for_another_program_is_refused():
+    """The rows are indexed by one program's non-terminals; another program's query reads them wrongly."""
+    one, other = list_space(), list_space()
+    with pytest.raises(ValueError, match="filled for another program"):
+        weighted_cost_table(generator_query(other, LIST), WEIGHTED, uniform, 3, table=cost_table(one, WEIGHTED, 3))
+
+
+def test_a_table_filled_to_a_higher_cap_is_read_up_to_the_searchs():
+    """The branch counts stop at the search's cap, not the table's: the same keys as a table of its own."""
+    space = list_space()
+    query = generator_query(space, LIST)
+    wide = cost_table(space, WEIGHTED, 8)
+    for seed in (0, 1, 2):
+        assert_streams_agree(
+            list(weighted_cost_table(query, WEIGHTED, falling, 4).keyed_stream(random.Random(seed))),
+            list(weighted_cost_table(query, WEIGHTED, falling, 4, table=wide).keyed_stream(random.Random(seed))),
+        )
+
+
+def test_the_table_reads_the_cap_itself():
+    """The cap is included: a term of exactly the cap's cost is counted."""
+    table = cost_table(list_space(), WEIGHTED, 3)
+    assert table.of(LIST, 3) > 0
+    assert table.split_counts((LIST,), 3) == table.of(LIST, 3)
+    assert table.split_counts((LIST, LIST), 3) > 0
+
+
+def test_a_product_skips_a_value_above_the_cap_wherever_it_stands():
+    """A row being built is not sorted, so a value above the cap may come first."""
+    assert _product({5: 1, 0: 1}, {0: 1, 1: 1}, 2) == {0: 1, 1: 1}
+
+
+def test_the_root_weight_is_the_sum_of_its_childrens():
+    """The root reads the root row, its children the split rows; the two must agree in log space."""
+    query = generator_query(priced_space(), PRICED)
+    lazy = weighted_cost_table(query, WEIGHTED, falling, 5)
+    children = [lazy.log_weight_of(goal, cost) for goal, cost in _initial_cost_nodes(query, WEIGHTED) if cost <= 5]
+    assert len(children) >= 3
+    assert log_sum_exp(children) == pytest.approx(lazy.log_weight_of(None, 0), abs=1e-12)
+
+
+def test_the_sampler_counts_again_for_another_query_and_forgets_on_request(monkeypatch):
+    """One fill per query in a row, another for another query, another after ``forget``."""
+    module = cost_tables_module
+
+    space = priced_space()
+    whole, part = generator_query(space, PRICED), generator_query(space, PRICED_Q)
+    expected_part = set(weighted_cost_table(part, WEIGHTED, falling, 6).stream(random.Random(0)))
+    fills = []
+    original = module.cost_table
+
+    def counted(*args, **kwargs):
+        fills.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "cost_table", counted)
+    sampler = CostTableSampler(WEIGHTED, falling, 6, random.Random(5))
+    assert sampler.at_least(whole, 1)
+    first = list(sampler.sample(whole))
+    assert len(fills) == 1, "asking and then drawing counts once"
+    in_part = list(sampler.sample(part))
+    assert len(fills) == 2, "another query is counted again"
+    assert set(in_part) == expected_part
+    assert set(in_part) != set(first)
+    sampler.forget()
+    list(sampler.sample(part))
+    assert len(fills) == 3, "forgotten, the same query is counted again"
+
+
+def test_the_sampler_draws_from_its_own_source_of_randomness():
+    query = generator_query(priced_space(), PRICED)
+    drawn = list(CostTableSampler(WEIGHTED, falling, 6, random.Random(5)).sample(query))
+    assert drawn == list(weighted_cost_table(query, WEIGHTED, falling, 6).stream(random.Random(5)))
+    assert drawn != list(weighted_cost_table(query, WEIGHTED, falling, 6).stream(random.Random(6)))
+
+
+def test_a_whole_clause_of_fractional_symbols_is_refused():
+    """A terminal at 0.1 and a digit at 0.9 make a whole clause, but the fold adds the floats in another order."""
+    fractional = by_name({"stop": 1, "tag": 0.1}, literal=lambda _value: 0.9)
+    with pytest.raises(ValueError, match="takes whole-number costs"):
+        cost_table(two_symbol_clause_space(), fractional, 4)
+
+
+def test_a_long_tuple_of_holes_is_split_without_the_stack():
+    """Three thousand holes are a loop of products, not a recursion three thousand deep."""
+    table = cost_table(list_space(), WEIGHTED, 3)
+    assert table.split_counts((LIST,) * 3000, 0) == 1
+    assert table.split_counts((LIST,) * 3000, 1) == 3000

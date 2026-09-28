@@ -430,7 +430,8 @@ class WeightedTable(Generic[NT, T, G]):
     The cost function is the term size, and the reason is not laziness. The size-uniform draw is
     the default here, and a general cost function would have to be a fold in a cost algebra with a
     finite carrier before the table could carry it as a second axis. A caller who needs another
-    cost gets the tree form, which needs no such hypothesis.
+    cost gets the tree form, which needs no such hypothesis, or, for the fold of an additive cost
+    algebra with whole-number costs, the cost table of :mod:`cosy.search.cost_tables`.
 
     Attributes:
         query (ResolutionQuery[NT, T, G]): The query being sampled from.

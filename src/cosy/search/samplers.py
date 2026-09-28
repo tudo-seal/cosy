@@ -8,7 +8,7 @@ ask. Within a bound the question changes, and what the caller sees is a stream t
 clause that reacts to "the stream gave nothing" therefore reacts to a *halting request*, never to
 an emptiness test, which in Python terms means a `StopIteration` and never an `is_empty()` oracle.
 
-Two of them, and the difference is what they promise:
+Three of them, and the difference is what they promise:
 
 * :class:`DepthBoundedRandomSampler` draws independently: one draw runs a depth-first search whose
   clause order is uniformly random, and takes the first inhabitant it yields. It promises
@@ -16,10 +16,17 @@ Two of them, and the difference is what they promise:
   the distribution. This module claims no more than that.
 * :class:`SizeUniformSampler` is the size-uniform stream of random search. Under unambiguity
   within the bound its prefixes are samples without replacement, so it repeats nothing.
+* :class:`CostTableSampler` is random search under the cost of an additive cost algebra and a
+  distribution on its values that the caller prescribes, counted by the cost table
+  (:mod:`cosy.search.cost_tables`), with a cap on the cost in the place of the size bound. It
+  promises what the size-uniform sampler promises, for that distribution.
 
-Both run on *any* resolution query, generator or partial-term alike, which is what lets a mutation
-operator take the same sampler parameter as an initialization. For the size-uniform sampler that
-follows from enumerating. For the depth-bounded one it is a property of the engine, and one that
+All three run on *any* resolution query of a program they apply to, generator or partial-term alike,
+which is what lets a mutation operator take the same sampler parameter as an initialization. The two
+counting samplers apply where their counts do: the cost table's sampler, like the size table's form,
+refuses a program in which a predicate reads a hole, and it refuses one in which clauses of cost
+zero pump without paying. For the size-uniform sampler that follows from enumerating. For the
+depth-bounded one it is a property of the engine, and one that
 had to be repaired: its randomness is the clause order and nothing else, so a query whose initial
 goals the clause order does not reach is a query it answers with a constant.
 ``SolutionSpace.goal_from_tree`` takes the order for the walk that derives them, and
@@ -38,6 +45,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
+from cosy.search.cost_tables import WeightedCostTable, _whole_cap, weighted_cost_table
 from cosy.search.partial import term_size
 from cosy.search.rules import depth_first, uniform_random_clause_order
 from cosy.search.sampling import (
@@ -49,13 +57,14 @@ from cosy.search.sampling import (
 
 if TYPE_CHECKING:
     import random
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from cosy.core.solution_space import Goal
     from cosy.core.tree import Tree
+    from cosy.search.costs import AdditiveCostAlgebra
     from cosy.search.queries import ResolutionQuery
 
-__all__ = ["DepthBoundedRandomSampler", "Sampler", "SizeUniformSampler"]
+__all__ = ["CostTableSampler", "DepthBoundedRandomSampler", "Sampler", "SizeUniformSampler"]
 
 
 def _uniform(_value: Any) -> float:
@@ -356,3 +365,108 @@ class SizeUniformSampler:
         weighted = self._construction(query)
         total = weighted.total if isinstance(weighted, WeightedTable) else weighted.root.total
         return total >= count
+
+
+class CostTableSampler:
+    """Random search under an additive cost and a prescribed distribution on its values, as a sampler.
+
+    The sampler of the cost table (:mod:`cosy.search.cost_tables`): the cost is the fold of an
+    additive cost algebra with whole-number costs, the distribution ``pi`` on its values is the
+    caller's, and a term's weight is ``pi(c(t)) / N_r(c(t))`` over the terms of cost at most the
+    cap. Every realized cost value up to the cap then carries the probability ``pi`` gives it,
+    normalized over those values, and the terms of one value are equally likely. Under unambiguity within the cap the stream is a sample
+    without replacement, as the size-uniform one is.
+
+    Like :class:`SizeUniformSampler` it keeps the last construction it built, keyed by the identity
+    of the query, so that an initialization asking :meth:`at_least` and then drawing pays for the
+    table once. :meth:`forget` gives it back.
+
+    Attributes:
+        algebra (AdditiveCostAlgebra): The additive cost algebra whose fold is the cost.
+        distribution (Callable[[Any], float]): ``pi`` on the cost values; it must be positive on
+            every value the query realizes below the cap.
+        cost_cap (int): The largest cost a drawn term may have.
+        rng (random.Random): The source of randomness.
+    """
+
+    def __init__(
+        self,
+        algebra: AdditiveCostAlgebra[Any],
+        distribution: Callable[[Any], float],
+        cost_cap: int,
+        rng: random.Random,
+    ) -> None:
+        """Build the sampler.
+
+        Args:
+            algebra (AdditiveCostAlgebra[Any]): The additive cost algebra.
+            distribution (Callable[[Any], float]): ``pi`` on the cost values.
+            cost_cap (int): The largest cost a drawn term may have, a nonnegative whole number; a
+                whole float such as a fold of the algebra is read as the number it is.
+            rng (random.Random): The source of randomness.
+
+        Raises:
+            ValueError: If the cap is not a nonnegative whole number.
+        """
+        self.algebra = algebra
+        self.distribution = distribution
+        self.cost_cap = _whole_cap(cost_cap)
+        self.rng = rng
+        self._query: ResolutionQuery[Any, Any, Any] | None = None
+        self._weighted: WeightedCostTable[Any, Any, Any] | None = None
+
+    def forget(self) -> None:
+        """Drop the cached construction.
+
+        Returns:
+            None
+        """
+        self._query = None
+        self._weighted = None
+
+    def _construction(self, query: ResolutionQuery[Any, Any, Any]) -> WeightedCostTable[Any, Any, Any]:
+        """Return the weighted construction for a query, building it at most once in a row.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Returns:
+            WeightedCostTable: The construction, ready to stream from.
+        """
+        if self._weighted is None or self._query is not query:
+            self._weighted = weighted_cost_table(query, self.algebra, self.distribution, self.cost_cap)
+            self._query = query
+        return self._weighted
+
+    def sample(self, query: ResolutionQuery[Any, Any, Any]) -> Iterator[Tree[Any]]:
+        """Stream the completions of cost at most the cap, without replacement.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Yields:
+            Tree[Any]: The completions, each exactly once under unambiguity within the cap.
+
+        Raises:
+            ValueError: Where the cost table refuses the query's program -- a predicate that reads a
+                hole, clauses of cost zero that pump without paying, a cost that is not a whole
+                number -- or ``pi`` is not positive on a realized cost value up to the cap.
+        """
+        yield from self._construction(query).stream(self.rng)
+
+    def at_least(self, query: ResolutionQuery[Any, Any, Any], count: int) -> bool:
+        """Decide whether at least ``count`` completions cost at most the cap.
+
+        Exact, from the counts the draw needs anyway. Under ambiguity the counts are of
+        derivations, so they can only overstate.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+            count (int): The number of completions asked for.
+
+        Returns:
+            bool: True if at least ``count`` completions cost at most the cap.
+        """
+        if count <= 0:
+            return True
+        return self._construction(query).total >= count

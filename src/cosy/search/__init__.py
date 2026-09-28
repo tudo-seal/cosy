@@ -11,8 +11,9 @@ It carries the cost layer an informed rule reads its order off, which is to say 
 function may map into, the best-first frontier over them, and the additive cost algebras that split
 the cost of a search node into what its partial inhabitant has already cost and what its holes are
 estimated to add. It also carries random search itself, which is best-first search under a
-randomizing cost function, and the two samplers the evolutionary and Bayesian methods draw their
-populations from. Beside all of these stands the one rule that traverses no derivation tree at all:
+randomizing cost function, and the samplers the evolutionary and Bayesian methods draw their
+populations from, one of them under a prescribed distribution on an additive cost. Beside all of
+these stands the one rule that traverses no derivation tree at all:
 bottom-up search, which iterates the immediate consequence operator of a program to the least
 Herbrand model and reads the inhabitants off it.
 
@@ -23,6 +24,7 @@ program whose original form they refuse.
 """
 
 from cosy.search.bottom_up import BottomUpCounters, bottom_up, least_herbrand_model
+from cosy.search.cost_tables import CostTable, WeightedCostTable, cost_table, weighted_cost_table
 from cosy.search.costs import (
     AdditiveCostAlgebra,
     ComponentwiseTuples,
@@ -73,7 +75,7 @@ from cosy.search.rules import (
     fewest_arguments_first,
     uniform_random_clause_order,
 )
-from cosy.search.samplers import DepthBoundedRandomSampler, Sampler, SizeUniformSampler
+from cosy.search.samplers import CostTableSampler, DepthBoundedRandomSampler, Sampler, SizeUniformSampler
 from cosy.search.sampling import (
     WeightedTable,
     WeightedTree,
@@ -91,6 +93,8 @@ __all__ = [
     "CostDomain",
     "CostFunction",
     "CostOrder",
+    "CostTable",
+    "CostTableSampler",
     "CountedNode",
     "CoupledClause",
     "DepthBoundedRandomSampler",
@@ -107,6 +111,7 @@ __all__ = [
     "Sampler",
     "SizeTable",
     "SizeUniformSampler",
+    "WeightedCostTable",
     "WeightedTable",
     "WeightedTree",
     "a_star",
@@ -120,6 +125,7 @@ __all__ = [
     "breadth_first",
     "checker",
     "condition_on_maximum",
+    "cost_table",
     "coupled_clauses",
     "decomposable_or_raise",
     "deepest_first_subgoal",
@@ -150,6 +156,7 @@ __all__ = [
     "unabstracted_clauses",
     "uniform_cost",
     "uniform_random_clause_order",
+    "weighted_cost_table",
     "weighted_table",
     "weighted_tree",
 ]
