@@ -76,6 +76,7 @@ if TYPE_CHECKING:
 
     from cosy.core.solution_space import RHSRule, SolutionSpace
     from cosy.core.tree import Path, Tree
+    from cosy.search.costs import A, AdditiveCostAlgebra
     from cosy.search.queries import ResolutionQuery
 
 __all__ = [
@@ -90,6 +91,7 @@ __all__ = [
     "decomposable_or_raise",
     "initial_nodes",
     "retained_node_count",
+    "rule_cost",
     "size_table",
 ]
 
@@ -144,6 +146,45 @@ def _added_symbols(rule: RHSRule[NT, T, G]) -> int:
         int: One for the terminal, plus one per constant argument.
     """
     return 1 + sum(1 for argument in rule.arguments if isinstance(argument, ConstantArgument))
+
+
+def rule_cost(rule: RHSRule[NT, T, G], algebra: AdditiveCostAlgebra[A]) -> A:
+    """Return the cost one application of a rule adds to the partial inhabitant.
+
+    :func:`_added_symbols` under an additive cost algebra: applying the rule writes its terminal and
+    turns each constant argument into a leaf, and the algebra charges each of those symbols. Each
+    non-terminal argument becomes a hole, which carries no symbol, so it adds nothing to the cost so
+    far, whatever the algebra's variable assignment estimates for it. By the additive split, the
+    costs of the rules a search applies from the root of a generator query therefore sum to the fold
+    of the finished term, which is what lets a table over the cost values carry the cost along
+    instead of folding the term at every node. A partial-term query starts from goals whose
+    prescribed symbols are charged already, by ``cost_so_far``, and the rules applied after them add
+    the rest. Over whole-number costs the sums are exact; over floats they agree up to rounding,
+    since float addition is not associative, as :mod:`cosy.search.costs` says of its own two routes.
+    Under the algebra that charges one per symbol the value is :func:`_added_symbols`'s, as an element
+    of the domain.
+
+    Args:
+        rule (RHSRule[NT, T, G]): The clause being applied.
+        algebra (AdditiveCostAlgebra[A]): The additive cost algebra.
+
+    Returns:
+        A: The cost of the terminal plus the cost of each constant argument.
+
+    Raises:
+        ValueError: If the algebra charges one of the symbols a cost outside its domain, or if the
+            sum leaves the domain.
+    """
+    return algebra.domain.sum_of(
+        (
+            algebra.cost_of_symbol(rule.terminal),
+            *(
+                algebra.cost_of_symbol(argument.value)
+                for argument in rule.arguments
+                if isinstance(argument, ConstantArgument)
+            ),
+        )
+    )
 
 
 def initial_nodes(

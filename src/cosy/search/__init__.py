@@ -51,6 +51,7 @@ from cosy.search.counting import (
     coupled_clauses,
     decomposable_or_raise,
     retained_node_count,
+    rule_cost,
     size_table,
 )
 from cosy.search.determinize import (
@@ -141,6 +142,7 @@ __all__ = [
     "reference_score",
     "residual_query",
     "retained_node_count",
+    "rule_cost",
     "size_table",
     "size_uniform",
     "term_depth",
