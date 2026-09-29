@@ -9,6 +9,8 @@ whose costs are fractions. What the tilt refuses is pinned beside it: a language
 many terms, a cost or a ``theta`` that is not a real number, and a predicate that reads a hole.
 """
 
+import bisect
+import heapq
 import itertools
 import math
 import random
@@ -26,16 +28,19 @@ from cosy.search.counting import branch_counts
 from cosy.search.partial import holes
 from cosy.search.rules import deepest_first_subgoal
 from cosy.search.samplers import Sampler, TiltSampler
-from cosy.search.sampling import weighted_tree
+from cosy.search.sampling import log_sum_exp, weighted_tree
 from cosy.search.tilt import (
     TiltedSearch,
     _log_gaussian_interval,
     _log_min_over,
     _log_upper_tail,
     _mixture,
+    _node_moments,
     _query_spacing,
     saddle_counts,
+    saddle_grid,
     saddle_mixture,
+    saddle_search,
     theta_for_mean,
     tilt_program,
     tilt_table,
@@ -1930,7 +1935,7 @@ def test_the_least_share_is_a_share(least_share):
 def test_a_saddle_mixture_whose_target_no_term_reaches_says_so_without_a_pilot():
     """The target on a bin past every term: refused, in words about the counts, not about pilot draws."""
     query, algebra = sum_of_choices(4)
-    with pytest.raises(ValueError, match="holds a term") as refusal:
+    with pytest.raises(ValueError, match="estimated term") as refusal:
         saddle_mixture(query, algebra, (0.1,), (100.0, 200.0), (1.0,))
     assert "pilot" not in str(refusal.value)
 
@@ -1994,3 +1999,432 @@ def test_a_cost_a_partial_term_has_charged_off_the_unit_leaves_no_lattice():
     program = tilt_program(query.solution_space, algebra)
     assert _query_spacing([(0.5, ("D", "D"))], program, 0.5) == 0.0
     assert _query_spacing([(1.0, ("D", "D"))], program, 1.0) == 1.0
+
+
+# ---------------------------------------------------------------------------------------------
+# The saddle point per search node: random search on each node's estimated completions per bin
+# ---------------------------------------------------------------------------------------------
+
+# Every non-terminal has one cost, so every node's completions have one cost and the estimate is exact:
+# f(a, b) costs 3 (two terms), g(c) costs 5 (three terms), h costs 10 (one term).
+ONE_COST_RULES = [
+    ("S", "f", ("A", "B")),
+    ("S", "g", ("C",)),
+    ("S", "h", ()),
+    ("A", "a1", ()),
+    ("A", "a2", ()),
+    ("B", "b", ()),
+    ("C", "c1", ()),
+    ("C", "c2", ()),
+    ("C", "c3", ()),
+]
+ONE_COST = {"f": 0, "g": 1, "h": 10, "a1": 1, "a2": 1, "b": 2, "c1": 4, "c2": 4, "c3": 4}
+ONE_COST_EDGES = (0.0, 4.0, 8.0, 12.0)
+ONE_COST_TARGET = (0.5, 0.3, 0.2)
+
+
+def instrumented_keyed_stream(expansions, terms):
+    """``keyed_stream`` as random search runs it, recording what the saddle search's weights are at every step.
+
+    Args:
+        expansions (list): Receives, per expanded inner node, the number of its open holes (-1 at the root) and the log
+            of its children's weights summed less its own.
+        terms (list): Receives, per term, the term and its node's log weight.
+
+    Returns:
+        Callable: The instrumented stream.
+    """
+    from cosy.search.gumbel import condition_on_maximum, gumbel_key  # noqa: PLC0415
+
+    def stream(root, root_log_weight, expand, rng):
+        tie_break = 0
+        root_key = gumbel_key(root_log_weight, rng)
+        frontier = [(-root_key, tie_break, root_key, root, root_log_weight)]
+        while frontier:
+            _, _, key, node, log_weight = heapq.heappop(frontier)
+            inhabitant, children = expand(node)
+            if inhabitant is not None:
+                terms.append((inhabitant, log_weight))
+                yield key, inhabitant
+                continue
+            if not children:
+                continue
+            weights = [child_log_weight for _, child_log_weight in children]
+            expansions.append(
+                (len(node[3]) if node[0] is not None or node[2] is not None else -1, log_sum_exp(weights) - log_weight)
+            )
+            for (child, child_log_weight), child_key in zip(
+                children, condition_on_maximum(key, weights, rng), strict=True
+            ):
+                tie_break += 1
+                heapq.heappush(frontier, (-child_key, tie_break, child_key, child, child_log_weight))
+
+    return stream
+
+
+def test_where_every_non_terminal_has_one_cost_the_saddle_search_is_exact(monkeypatch):
+    """Every node's completions share one cost, so every estimate is a count: the siblings sum to their parent and
+    every term weighs its bin's share over the bin's terms.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    query, algebra = generator_query(space_of(ONE_COST_RULES), "S"), priced(ONE_COST)
+    search = saddle_search(query, algebra, ONE_COST_EDGES, ONE_COST_TARGET)
+    assert [round(math.exp(log_count), 9) for log_count in search.log_root_counts] == [2, 3, 1]
+    expansions, terms = [], []
+    monkeypatch.setattr(tilt_module, "keyed_stream", instrumented_keyed_stream(expansions, terms))
+    for seed in range(40):
+        for _ in search.keyed_stream(random.Random(seed)):
+            pass
+    assert len(terms) == 40 * 6
+    assert all(abs(deviation) <= 1e-12 for _holes, deviation in expansions), expansions
+    share = {3.0: 0.5 / 2, 5.0: 0.3 / 3, 10.0: 0.2 / 1}
+    for term, log_weight in terms:
+        assert math.isclose(log_weight, math.log(share[algebra.fold(term)]), abs_tol=1e-12)
+
+
+def test_the_initial_nodes_of_a_saddle_search_weigh_one_in_all():
+    """The root's estimate is the sum of its initial nodes', so their weights sum to one exactly, whatever the form's error."""
+    for query, algebra, edges, target in (
+        (*sum_of_choices(40), CHOICE_EDGES, CHOICE_TARGET),
+        (generator_query(space_of(ONE_COST_RULES), "S"), priced(ONE_COST), ONE_COST_EDGES, ONE_COST_TARGET),
+    ):
+        search = saddle_search(query, algebra, edges, target)
+        assert abs(log_sum_exp([log_weight for _node, log_weight in search._root_children()])) <= 1e-12  # noqa: SLF001
+
+
+def test_the_saddle_search_follows_the_target_where_many_parts_add_up():
+    """The first term of 2 000 streams, by bin, against the target: forty choices, bins four wide."""
+    query, algebra = sum_of_choices(40)
+    search = saddle_search(query, algebra, CHOICE_EDGES, CHOICE_TARGET)
+    draws = 2000
+    by_bin = [0] * len(CHOICE_TARGET)
+    for seed in range(draws):
+        cost = algebra.fold(next(search.stream(random.Random(seed), 1)))
+        by_bin[bisect.bisect_right(CHOICE_EDGES, cost) - 1] += 1
+    chi_square = sum(
+        (observed - draws * mass) ** 2 / (draws * mass) for observed, mass in zip(by_bin, CHOICE_TARGET, strict=True)
+    )
+    assert chi_square < 24.32, (by_bin, chi_square)  # the 0.999 quantile of chi-square with seven degrees of freedom
+
+
+def test_the_siblings_of_a_saddle_search_agree_at_the_root_and_nearly_where_many_holes_remain(monkeypatch):
+    """At the root the children sum to the parent exactly; with six holes or more open, within 3 %; with fewer the form
+    reads too few parts, and there they may not.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    query, algebra = sum_of_choices(40)
+    search = saddle_search(query, algebra, CHOICE_EDGES, CHOICE_TARGET)
+    expansions, terms = [], []
+    monkeypatch.setattr(tilt_module, "keyed_stream", instrumented_keyed_stream(expansions, terms))
+    for seed in range(100):
+        next(search.keyed_stream(random.Random(seed)))
+    at_root = [deviation for holes_open, deviation in expansions if holes_open == -1]
+    many = [deviation for holes_open, deviation in expansions if holes_open >= 6]
+    assert len(at_root) == 100
+    assert len(many) >= 100 * 30
+    assert max(abs(deviation) for deviation in at_root) <= 1e-12
+    assert max(abs(deviation) for deviation in many) <= 0.03
+
+
+def test_a_saddle_search_draws_each_term_once_until_its_draws_run_out():
+    """Six terms, 300 draws: each term once, and all six."""
+    query, algebra = generator_query(space_of(ONE_COST_RULES), "S"), priced(ONE_COST)
+    drawn = list(saddle_search(query, algebra, ONE_COST_EDGES, ONE_COST_TARGET).stream(random.Random(3), 300))
+    assert len(drawn) == len(set(drawn)) == 6
+
+
+def test_the_grid_holds_the_tables_values_at_each_tilt_in_order():
+    """Two tilts given out of order: each non-terminal's three numbers per tilt, ascending."""
+    query, algebra = sum_of_choices(6)
+    program = tilt_program(query.solution_space, algebra)
+    grid = saddle_grid(program, [0.3, -0.2, 0.3])
+    assert grid.thetas == (-0.2, 0.3)
+    for position, theta in enumerate(grid.thetas):
+        table = program.table(theta)
+        for nonterminal in program.order:
+            assert grid.log_excess[nonterminal][position] == table.log_excess[nonterminal]
+            assert grid.mean_excess[nonterminal][position] == table.mean_excess[nonterminal]
+            assert grid.variance[nonterminal][position] == table.variance[nonterminal]
+
+
+def moments_of_every_node(monkeypatch, search, seeds):
+    """Every child random search weighs in some streams, with the moments it was weighed by.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+        search (SaddleSearch): The search.
+        seeds (range): The streams' seeds.
+
+    Returns:
+        list: The children, each a frontier node carrying its cost, its holes and its moments.
+    """
+    from cosy.search.gumbel import condition_on_maximum, gumbel_key  # noqa: PLC0415
+
+    seen = []
+
+    def stream(root, root_log_weight, expand, rng):
+        frontier = [(-gumbel_key(root_log_weight, rng), 0, root)]
+        tie_break = 0
+        while frontier:
+            negated, _, node = heapq.heappop(frontier)
+            inhabitant, children = expand(node)
+            if inhabitant is not None:
+                yield -negated, inhabitant
+                continue
+            if children:
+                seen.extend(child for child, _ in children)
+                keys = condition_on_maximum(-negated, [log_weight for _, log_weight in children], rng)
+                for (child, _), key in zip(children, keys, strict=True):
+                    tie_break += 1
+                    heapq.heappush(frontier, (-key, tie_break, child))
+
+    monkeypatch.setattr(tilt_module, "keyed_stream", stream)
+    for seed in seeds:
+        next(search.keyed_stream(random.Random(seed)), None)
+    return seen
+
+
+def test_every_node_is_weighed_by_the_sums_over_its_own_holes(monkeypatch):
+    """A hole of variance 2.5e17 expanded before one of 1.6: the child's moments are those its own holes sum to, not
+    its parent's less the expanded hole's, which would cancel the smaller variance away; and with costs floating point
+    adds inexactly, a node's least and greatest cost are its cost plus its holes', the same on every path to it.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    rules = [
+        ("S", "f", ("A", "B")),
+        ("A", "a0", ()),
+        ("A", "a9", ()),
+        ("B", "b0", ()),
+        ("B", "b1", ()),
+        ("B", "b3", ()),
+    ]
+    query = generator_query(space_of(rules), "S")
+    algebra = priced({"f": 0, "a0": 0, "a9": 1e9, "b0": 0, "b1": 1, "b3": 3})
+    search = saddle_search(query, algebra, (0.0, 1.0, 3.0, 5.0), (1.0, 1.0, 1.0), thetas=[0.0])
+    nodes = [node for node in moments_of_every_node(monkeypatch, search, range(20)) if node[3] == ("B",)]
+    assert nodes
+    for node in nodes:
+        own = _node_moments(search.grid, node[1], node[3])
+        assert node[4][:2] == own[:2]
+        for ours, theirs in zip(node[4][2:], own[2:], strict=True):
+            assert all(math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12) for a, b in zip(ours, theirs, strict=True))
+        assert node[4][4][0] > 1.5  # B's variance, 14/9, and not the 0 the cancellation leaves
+    rules = [
+        ("S", "f", ("A", "B")),
+        ("A", "g", ("B", "B")),
+        ("A", "a", ()),
+        ("B", "b0", ()),
+        ("B", "b1", ()),
+        ("B", "b3", ()),
+    ]
+    nested = (generator_query(space_of(rules), "S"), priced({"f": 0, "g": 1, "a": 0.1, "b0": 0, "b1": 0.1, "b3": 0.3}))
+    for (query, algebra), edges in (
+        (digit_sums([0.0, 0.1, 0.3], 4), [round(0.2 * step, 10) for step in range(8)]),
+        (nested, [0.0, 0.5, 1.0, 2.5]),
+    ):
+        search = saddle_search(query, algebra, edges, [1.0] * (len(edges) - 1))
+        nodes = moments_of_every_node(monkeypatch, search, range(20))
+        assert len(nodes) >= 20
+        assert any(len(node[3]) > 1 for node in nodes)
+        check_moments(search, nodes)
+
+
+def check_moments(search, nodes):
+    """Each node's moments are the sums over its own holes: its range exactly, its arrays to rounding.
+
+    Args:
+        search (SaddleSearch): The search.
+        nodes (list): Frontier nodes it weighed.
+    """
+    for node in nodes:
+        own = _node_moments(search.grid, node[1], node[3])
+        assert node[4][:2] == own[:2]  # a node's range, whatever the path
+        for ours, theirs in zip(node[4][2:], own[2:], strict=True):
+            assert all(math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-12) for a, b in zip(ours, theirs, strict=True))
+
+
+def test_a_node_whose_completions_all_cost_the_same_is_read_whole_whatever_the_costs():
+    """Costs of 0.1, 0.2 and 0.7, which floating point adds inexactly: each complete term costs one amount, and both
+    terms are drawn, each once."""
+    rules = [("S", "f", ("A", "B")), ("A", "a", ()), ("B", "b1", ()), ("B", "b2", ())]
+    query, algebra = generator_query(space_of(rules), "S"), priced({"f": 0, "a": 0.1, "b1": 0.2, "b2": 0.7})
+    drawn = list(saddle_search(query, algebra, (0.0, 0.5, 1.0), (0.5, 0.5)).stream(random.Random(0), 200))
+    assert sorted(algebra.fold(term) for term in drawn) == [0.1 + 0.2, 0.1 + 0.7]
+
+
+def test_a_node_whose_costs_add_below_floating_points_resolution_counts_all_its_completions():
+    """A head of 1e17 and digits 0 and 1: both terms cost 1e17 in floating point, and the bin holding it holds two."""
+    query, algebra = digit_sums([0, 1], 1, head=1e17)
+    search = saddle_search(query, algebra, (0.0, 2e17), (1.0,))
+    assert round(math.exp(search.log_root_counts[0]), 9) == 2
+
+
+@pytest.mark.parametrize(
+    ("options", "match"),
+    [
+        ({"edges": (1.0, 0.0), "target": (1.0,)}, "strictly ascending"),
+        ({"edges": (0.0, 4.0, 8.0), "target": (1.0,)}, "one nonnegative mass per bin"),
+        ({"edges": (0.0, 4.0), "target": (0.0,)}, "one nonnegative mass per bin"),
+        ({"least_share": 2.0}, "between 0 and 1"),
+        ({"least_share": math.nan}, "between 0 and 1"),
+        ({"thetas": [math.nan]}, "finite real"),
+        ({"thetas": []}, "at least one tilt"),
+        ({"edges": (100.0, 200.0), "target": (1.0,), "thetas": [0.0]}, "estimated term"),
+    ],
+)
+def test_what_the_saddle_search_refuses(options, match):
+    """Bins and a target that are not of their kind, a least share, a grid, and a target no term reaches.
+
+    Args:
+        options (dict): The arguments that differ from a valid call.
+        match (str): The refusal's wording.
+    """
+    query, algebra = generator_query(space_of(ONE_COST_RULES), "S"), priced(ONE_COST)
+    arguments = {"edges": ONE_COST_EDGES, "target": ONE_COST_TARGET} | options
+    with pytest.raises(ValueError, match=match):
+        saddle_search(query, algebra, **arguments)
+
+
+def test_a_saddle_search_whose_rule_selects_an_expanded_position_is_refused_by_name():
+    """The saddle search weighs a node by its open holes, as the tilted search does."""
+    query = generator_query(priced_space(), PRICED)
+    search = saddle_search(
+        query, FRACTIONAL, (-1.0, 100.0), (1.0,), thetas=[0.0], subgoal_selection=an_expanded_position_first
+    )
+    with pytest.raises(ValueError, match="not an open hole"):
+        list(search.keyed_stream(random.Random(0)))
+
+
+def test_the_saddle_search_is_exported_where_the_tilt_is():
+    """``cosy.search`` exports the saddle search's names."""
+    import cosy.search as search_package  # noqa: PLC0415
+
+    for name in ("SaddleGrid", "SaddleSearch", "saddle_grid", "saddle_search"):
+        assert name in tilt_module.__all__
+        assert getattr(search_package, name) is getattr(tilt_module, name)
+
+
+@pytest.mark.parametrize(
+    ("parts", "holes", "edges"),
+    [
+        ((0, 1, 3), 20, [float(value) for value in range(20, 41)]),
+        ((0, 1, 3), 20, [value + 0.5 for value in range(14, 46, 4)]),
+        ((0, 1, 3), 6, [0.0, 2.0, 5.0, 9.0, 13.0, 16.0, 19.0]),
+        ((0, 2, 6), 20, [float(value) for value in range(40, 81, 2)]),
+    ],
+)
+def test_at_the_root_the_saddle_search_counts_what_the_saddle_point_counts(parts, holes, edges):
+    """One initial node, the grid the saddle point's own tilts: its estimate per bin is the saddle point's, the bins
+    holding the least or the greatest cost beside others and a lattice of 2 included.
+
+    Args:
+        parts (tuple): The digits' costs.
+        holes (int): The number of digits.
+        edges (list): The bins' boundaries.
+    """
+    query, algebra = digit_sums(parts, holes)
+    search = saddle_search(query, algebra, edges, [1.0] * (len(edges) - 1))
+    counts = saddle_counts(query, algebra, edges)
+    assert sorted({*(theta for theta in counts.thetas if not math.isnan(theta)), 0.0}) == list(search.grid.thetas)
+    assert all(math.isfinite(log_count) for log_count in counts.log_counts)
+    for ours, theirs in zip(search.log_root_counts, counts.log_counts, strict=True):
+        assert math.isclose(ours, theirs, rel_tol=1e-12), (search.log_root_counts, counts.log_counts)
+
+
+def test_the_saddle_search_sums_the_initial_nodes_that_share_a_bin_and_normalizes_the_target():
+    """Two terms of cost 10 from two initial nodes count two; a target three times too heavy is read as its shares."""
+    rules = [*ONE_COST_RULES, ("S", "k", ())]
+    query, algebra = generator_query(space_of(rules), "S"), priced(ONE_COST | {"k": 10})
+    search = saddle_search(query, algebra, ONE_COST_EDGES, [3 * mass for mass in ONE_COST_TARGET])
+    assert [round(math.exp(log_count), 9) for log_count in search.log_root_counts] == [2, 3, 2]
+    assert math.isclose(sum(search.target), 1.0)
+    assert math.isclose(math.exp(search.log_rho[2]), 0.2 / 2)
+    assert abs(log_sum_exp([log_weight for _node, log_weight in search._root_children()])) <= 1e-12  # noqa: SLF001
+
+
+def test_a_bin_the_least_share_leaves_out_is_the_saddle_searchs_missing_share():
+    """The third bin below the least share: not estimated, never drawn, and its share reported."""
+    query, algebra = generator_query(space_of(ONE_COST_RULES), "S"), priced(ONE_COST)
+    search = saddle_search(query, algebra, ONE_COST_EDGES, (0.5, 0.4999, 0.0001), least_share=0.001)
+    assert search.log_root_counts[2] == -math.inf
+    assert math.isclose(search.missing_target, 0.0001)
+    assert math.isclose(sum(search.target), 1.0)
+    assert all(algebra.fold(term) < 8 for term in search.stream(random.Random(1), 200))
+
+
+def test_the_saddle_search_counts_the_extreme_costs_exactly():
+    """On a lattice a bin holding only the least or the greatest cost counts their terms, its edge further than a
+    spacing away included; off a lattice, a bin from the greatest cost on counts its terms."""
+    query = generator_query(
+        space_of([("S", "f", ("A", "A")), ("A", "g", ("D", "D")), ("D", "x", ()), ("D", "y", ()), ("D", "z", ())]), "S"
+    )
+    search = saddle_search(
+        query, priced({"f": 0, "g": 0, "x": 0, "y": 0, "z": 3}), (-10.0, 0.5, 11.5, 20.0), (0.4, 0.2, 0.4)
+    )
+    assert round(math.exp(search.log_root_counts[0]), 9) == 16
+    assert round(math.exp(search.log_root_counts[2]), 9) == 1
+    query, algebra = digit_sums([0.5, 0.6, 0.9], 3)
+    dearest = tilt_program(query.solution_space, algebra).dearest["S"]
+    search = saddle_search(query, algebra, (0.0, dearest, dearest + 1.0), (0.5, 0.5))
+    assert round(math.exp(search.log_root_counts[1]), 9) == 1
+
+
+def test_a_tilt_under_which_a_node_has_one_cost_is_read_only_where_no_other_tilt_is():
+    """Costs off every lattice; a grid of 0 and a tilt so steep that every completion costs the least: a bin beside
+    that cost is read at 0, not at the steep tilt, whose one cost it does not hold; with the steep tilt alone, the bin
+    holding the least cost counts its one term and the other bin nothing; between two steep tilts, the nearer."""
+    query, algebra = digit_sums([0.0, 0.1, 0.3], 20)
+    edges = (-1.0, 1e-300, 1.0)
+    search = saddle_search(query, algebra, edges, (0.5, 0.5), thetas=[0.0, 1e5])
+    assert math.isfinite(search.log_root_counts[1])
+    alone = saddle_search(query, algebra, edges, (0.5, 0.5), thetas=[1e5])
+    assert math.isclose(math.exp(alone.log_root_counts[0]), 1.0)
+    assert alone.log_root_counts[1] == -math.inf
+    # two steep tilts, one collapsing the node onto its least cost and one onto its greatest: the nearer is read
+    both = saddle_search(query, algebra, edges, (0.5, 0.5), thetas=[-1e5, 1e5])
+    assert math.isclose(math.exp(both.log_root_counts[0]), 1.0)
+
+
+def test_a_saddle_search_whose_estimate_reaches_a_bin_no_term_lies_in_draws_nothing_and_ends():
+    """Digits 0, 1 and 10 and a target on the costs 4 and 5, which no term has: the estimate is positive there, the
+    search finds no term, and the stream ends instead of failing."""
+    query, algebra = digit_sums([0, 1, 10], 1)
+    search = saddle_search(query, algebra, (4.0, 6.0), (1.0,))
+    assert math.isfinite(search.log_root_counts[0])
+    assert list(search.stream(random.Random(0), 50)) == []
+
+
+@pytest.mark.parametrize("max_draws", [True, 2.5, -1, "3"])
+def test_a_saddle_streams_bound_is_a_whole_number_of_draws(max_draws):
+    """Not a truth value, a fraction, a negative number or a string.
+
+    Args:
+        max_draws: The bound passed.
+    """
+    query, algebra = generator_query(space_of(ONE_COST_RULES), "S"), priced(ONE_COST)
+    search = saddle_search(query, algebra, ONE_COST_EDGES, ONE_COST_TARGET)
+    with pytest.raises(ValueError, match="max_draws"):
+        next(search.stream(random.Random(0), max_draws))
+
+
+def test_a_grid_whose_variance_leaves_floating_point_is_refused():
+    """Costs 0 and 1e160: the variance at a tilt of 0 is infinite, and the saddle point cannot read it."""
+    program = tilt_program(space_of([("S", "a", ()), ("S", "b", ())]), priced({"a": 0.0, "b": 1e160}))
+    with pytest.raises(ValueError, match="leaves floating point"):
+        saddle_grid(program, [0.0])
+
+
+def test_the_default_grid_is_the_saddle_points_tilts_for_the_bins_and_no_tilt():
+    """Bins below the untilted mean, none of them read at ``theta = 0``: the grid is their tilts and 0 besides."""
+    query, algebra = sum_of_choices(40)
+    edges = (30.0, 34.0, 38.0, 42.0)
+    counts = saddle_counts(query, algebra, edges)
+    assert all(theta > 0 for theta in counts.thetas)
+    search = saddle_search(query, algebra, edges, (1.0, 1.0, 1.0))
+    assert search.grid.thetas == (0.0, *sorted(counts.thetas))

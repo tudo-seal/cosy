@@ -76,12 +76,16 @@ if TYPE_CHECKING:
 
 __all__ = [
     "SaddleCounts",
+    "SaddleGrid",
+    "SaddleSearch",
     "TiltProgram",
     "TiltTable",
     "TiltedMixture",
     "TiltedSearch",
     "saddle_counts",
+    "saddle_grid",
     "saddle_mixture",
+    "saddle_search",
     "theta_for_mean",
     "tilt_program",
     "tilt_table",
@@ -1870,7 +1874,7 @@ def saddle_mixture(
     Raises:
         ValueError: If the tilts, the edges, the target or the least share are not of the kinds above; where
             :func:`tilted_search` or :func:`saddle_counts` refuses the query; if the query has no term; or if no bin
-            with a target at or above the least share holds a term.
+            with a target at or above the least share has an estimated term.
     """
     thetas, edges, target = _checked_mixture(thetas, edges, target)
     if isinstance(least_share, bool) or not isinstance(least_share, (int, float)) or not 0 <= least_share <= 1:
@@ -1891,5 +1895,517 @@ def saddle_mixture(
         counts.log_counts,
         [math.nan] * len(target),
         0,
-        "no bin with a target at or above the least share holds a term of the query",
+        "no bin with a target at or above the least share has an estimated term of the query",
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# The saddle point per search node: random search weighed by each node's estimated completions per bin
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SaddleGrid(Generic[NT]):
+    """The tilted moments of every non-terminal of a program on a grid of tilts.
+
+    A search node's completions fill its holes independently, so their tilted mass, mean and variance add over the
+    holes, and the moments of every non-terminal, tabulated once on a grid of tilts, serve every node; a search for a
+    tilt per node and bin would cost a table each.
+
+    Attributes:
+        program (TiltProgram[NT]): The prepared program.
+        thetas (tuple[float, ...]): The grid, ascending.
+        log_excess (Mapping[NT, tuple[float, ...]]): Per non-terminal with a term, ``log Z_A + theta m_A`` at each tilt.
+        mean_excess (Mapping[NT, tuple[float, ...]]): Per non-terminal with a term, its tilted mean cost less ``m_A``.
+        variance (Mapping[NT, tuple[float, ...]]): Per non-terminal with a term, its tilted variance.
+    """
+
+    program: TiltProgram[NT]
+    thetas: tuple[float, ...]
+    log_excess: Mapping[NT, tuple[float, ...]]
+    mean_excess: Mapping[NT, tuple[float, ...]]
+    variance: Mapping[NT, tuple[float, ...]]
+
+
+def saddle_grid(program: TiltProgram[NT], thetas: Iterable[float]) -> SaddleGrid[NT]:
+    """Tabulate the tilted moments of every non-terminal of a prepared program at each of a grid of tilts.
+
+    Args:
+        program (TiltProgram[NT]): The prepared program.
+        thetas (Iterable[float]): The tilts, finite reals; duplicates are read once.
+
+    Returns:
+        SaddleGrid[NT]: The moments, one table's worth per tilt, the tables themselves not kept.
+
+    Raises:
+        ValueError: If there is no tilt or one is not a finite real number, where a table refuses a tilt, or if a
+            variance on the grid leaves floating point.
+    """
+    grid = tuple(sorted({_real_theta(theta) for theta in thetas}))
+    if not grid:
+        msg = "the grid needs at least one tilt"
+        raise ValueError(msg)
+    columns: dict[NT, tuple[list[float], list[float], list[float]]] = {member: ([], [], []) for member in program.order}
+    for theta in grid:
+        table = program.table(theta)
+        for member, (log_excess, mean_excess, variance) in columns.items():
+            spread = table.variance[member]
+            if not math.isfinite(spread):
+                msg = (
+                    f"the variance of the costs of {member} under the tilt {theta} leaves floating point, and the "
+                    "saddle point reads it"
+                )
+                raise ValueError(msg)
+            log_excess.append(table.log_excess[member])
+            mean_excess.append(table.mean_excess[member])
+            variance.append(spread)
+    return SaddleGrid(
+        program=program,
+        thetas=grid,
+        log_excess={member: tuple(column[0]) for member, column in columns.items()},
+        mean_excess={member: tuple(column[1]) for member, column in columns.items()},
+        variance={member: tuple(column[2]) for member, column in columns.items()},
+    )
+
+
+# A node's moments on the grid: its cheapest and dearest completion's cost, and per tilt the log of its completions'
+# tilted mass in excess of the cheapest, their mean cost less the cheapest, and their variance.
+_Moments = tuple[float, float, tuple[float, ...], tuple[float, ...], tuple[float, ...]]
+
+
+def _node_moments(grid: SaddleGrid[NT], cost: float, hole_types: Sequence[NT]) -> _Moments:
+    """Return a node's moments on the grid from its holes: the sums over them.
+
+    Args:
+        grid (SaddleGrid[NT]): The grid.
+        cost (float): The cost of the node's partial inhabitant.
+        hole_types (Sequence[NT]): The non-terminals of its open holes, each with a term.
+
+    Returns:
+        _Moments: The node's moments.
+    """
+    program = grid.program
+    least = cost + sum(program.cheapest[hole] for hole in hole_types)
+    greatest = cost + sum(program.dearest[hole] for hole in hole_types)
+    size = len(grid.thetas)
+    if not hole_types:
+        return least, greatest, (0.0,) * size, (0.0,) * size, (0.0,) * size
+    return (
+        least,
+        greatest,
+        tuple(math.fsum(column) for column in zip(*(grid.log_excess[hole] for hole in hole_types), strict=True)),
+        tuple(math.fsum(column) for column in zip(*(grid.mean_excess[hole] for hole in hole_types), strict=True)),
+        tuple(math.fsum(column) for column in zip(*(grid.variance[hole] for hole in hole_types), strict=True)),
+    )
+
+
+def _with_holes(
+    grid: SaddleGrid[NT], base: _Moments, opened: Sequence[NT], cost: float, hole_types: Sequence[NT]
+) -> _Moments:
+    """Return the moments of a node whose holes are a base's and a clause's.
+
+    Nothing is taken away: the base holds the holes besides the expanded one, summed from scratch once per expansion,
+    and every moment is a sum of numbers none of which is negative, so adding a clause's holes costs no precision. The
+    least and the greatest cost are the node's cost plus its holes', added as :func:`_node_moments` adds them, so that
+    a node's range does not depend on the path to it, and a node whose holes each have one cost gets one cost.
+
+    Args:
+        grid (SaddleGrid[NT]): The grid.
+        base (_Moments): The moments of the holes besides the expanded one.
+        opened (Sequence[NT]): The non-terminals of the clause's holes.
+        cost (float): The cost of the node's partial inhabitant.
+        hole_types (Sequence[NT]): The non-terminals of all the node's holes.
+
+    Returns:
+        _Moments: The node's moments.
+    """
+    program = grid.program
+    least = cost + sum(program.cheapest[hole] for hole in hole_types)
+    greatest = cost + sum(program.dearest[hole] for hole in hole_types)
+    if not opened:
+        return least, greatest, base[2], base[3], base[4]
+    return (
+        least,
+        greatest,
+        tuple(math.fsum(column) for column in zip(base[2], *(grid.log_excess[hole] for hole in opened), strict=True)),
+        tuple(math.fsum(column) for column in zip(base[3], *(grid.mean_excess[hole] for hole in opened), strict=True)),
+        tuple(math.fsum(column) for column in zip(base[4], *(grid.variance[hole] for hole in opened), strict=True)),
+    )
+
+
+def _nearest_tilt(mean_excess: Sequence[float], variance: Sequence[float], target: float) -> int:
+    """Return the grid index whose tilted mean lies nearest a target: of the two whose means bracket it, the one nearer
+    in standard deviations, or the end the target lies beyond.
+
+    The mean falls as the tilt rises, so the grid, ascending, holds it descending. A tilt under which the variance is 0
+    (the node collapsed onto one cost, or its variance underflowed) says nothing about the bin's other costs, so it is
+    read only where its neighbour has no variance either, and then the nearer mean wins.
+
+    Args:
+        mean_excess (Sequence[float]): The node's tilted mean less its cheapest cost, per grid tilt.
+        variance (Sequence[float]): The node's tilted variance per grid tilt.
+        target (float): The middle of the bin's reach, less the node's cheapest cost.
+
+    Returns:
+        int: The index.
+    """
+    last = len(mean_excess) - 1
+    if mean_excess[0] <= target:
+        return 0
+    if mean_excess[last] >= target:
+        return last
+    low, high = 0, last
+    while high - low > 1:
+        middle = (low + high) // 2
+        if mean_excess[middle] >= target:
+            low = middle
+        else:
+            high = middle
+
+    def distance(index: int) -> float:
+        return abs(mean_excess[index] - target) / math.sqrt(variance[index]) if variance[index] > 0 else math.inf
+
+    if distance(low) == distance(high) == math.inf:
+        return low if abs(mean_excess[low] - target) <= abs(mean_excess[high] - target) else high
+    return low if distance(low) <= distance(high) else high
+
+
+def _node_log_counts(
+    grid: SaddleGrid[NT],
+    moments: _Moments,
+    hole_types: Sequence[NT],
+    edges: Sequence[float],
+    bins: Sequence[int],
+) -> list[tuple[int, float]]:
+    """Estimate the number of a node's completions in each of some bins by the saddle point on the grid.
+
+    Exact where the local form has nothing to say: nothing in a bin the node's costs do not reach, every completion in
+    the bin holding its one cost, on a lattice the completions of its least or greatest cost in a bin holding only
+    that, and off a lattice those of its greatest cost in a bin that begins there. Otherwise the bin is read at the grid
+    tilt whose mean for this node lies nearest the middle of the bin's reach within the node's costs, and the local
+    form integrated as :func:`saddle_counts` integrates it: over the whole cells of the bin's lattice points, or off a
+    lattice over the bin's reach.
+
+    Args:
+        grid (SaddleGrid[NT]): The grid.
+        moments (_Moments): The node's moments on it.
+        hole_types (Sequence[NT]): The non-terminals of the node's open holes.
+        edges (Sequence[float]): The bins' boundaries.
+        bins (Sequence[int]): The bins asked for, by index.
+
+    Returns:
+        list[tuple[int, float]]: The bins the node's costs reach, each with the log of its estimated count.
+    """
+    program = grid.program
+    least, greatest, log_excess, mean_excess, variance = moments
+    spacing = (
+        math.gcd(*(round(program.spacing[hole] / program.unit) for hole in hole_types)) * program.unit
+        if program.unit and hole_types
+        else 0.0
+    )
+    counts: list[tuple[int, float]] = []
+    for index in bins:
+        if edges[index] > greatest or edges[index + 1] <= least:
+            continue
+        if least == greatest:
+            counts.append((index, math.log(math.prod(program.counts[hole] for hole in hole_types))))
+            continue
+        if spacing:
+            first = least + spacing * max(0, math.ceil((edges[index] - least) / spacing))
+            last = least + spacing * min(
+                (greatest - least) // spacing, math.ceil((edges[index + 1] - least) / spacing) - 1
+            )
+            if first > last:
+                continue
+            low, high = first - spacing / 2, last + spacing / 2
+            only = first if first == last and first in (least, greatest) else None
+        else:
+            low, high = max(edges[index], least), min(edges[index + 1], greatest)
+            only = low if low == high else None
+        if only is not None:
+            extreme = program.cheapest_counts if only == least else program.dearest_counts
+            counts.append((index, math.log(math.prod(extreme[hole] for hole in hole_types))))
+            continue
+        # The local form in excess of the node's cheapest cost, where the products of the tilt and the costs are small.
+        tilt = _nearest_tilt(mean_excess, variance, (max(low, least) + min(high, greatest)) / 2 - least)
+        low, high = low - least, high - least
+        theta, mass, mean, spread = grid.thetas[tilt], log_excess[tilt], mean_excess[tilt], variance[tilt]
+        if spread > 0:
+            deviation = math.sqrt(spread)
+            shift = mean + theta * spread
+            log_count = (
+                mass
+                + theta * mean
+                + theta * theta * spread / 2
+                + _log_gaussian_interval((low - shift) / deviation, (high - shift) / deviation)
+            )
+        else:
+            log_count = mass + theta * mean if low <= mean <= high else -math.inf
+        if log_count > -math.inf:
+            counts.append((index, log_count))
+    return counts
+
+
+# A node of the saddle search's lazy frontier: the tilted search's three, and the non-terminals of its open holes with
+# its moments on the grid, which its children's are computed from.
+_SaddleNode = tuple[Any, float, Any, tuple[Any, ...], Any]
+
+
+@dataclass(frozen=True)
+class SaddleSearch(Generic[NT, T, G]):
+    """Random search to a target on cost bins, each node weighed by the saddle point's estimate of its completions.
+
+    The target spreads each bin's share evenly over the bin's terms, ``P(t) = target(b) / N(b)``, so a node's share is
+    ``w(n) = sum_b rho(b) N_n(b)``, ``rho(b) = target(b) / N(b)``, ``N_n(b)`` the number of its completions in the bin.
+    With exact counts random search on ``w`` draws exactly that, without rejection. Here each ``N_n(b)`` is the saddle
+    point's, read on a grid of tilts from the node's moments, which add over its holes, and ``N(b)`` the sum of the
+    initial nodes' estimates, so that the initial nodes' weights sum to one. Siblings' estimates need not sum to their
+    parent's: random search chooses among siblings in proportion to theirs, and the draws then follow the target only
+    as far as the estimates are right. Every draw is the first term of a fresh stream.
+
+    Attributes:
+        query (ResolutionQuery[NT, T, G]): The query being sampled from.
+        grid (SaddleGrid[NT]): The tilted moments of every non-terminal on the grid.
+        edges (tuple[float, ...]): The bins' boundaries; bin ``i`` holds the costs in ``[edges[i], edges[i + 1])``.
+        target (tuple[float, ...]): The target's mass per bin, normalized over the bins the estimate reaches; a bin
+            the estimate reaches but no term lies in keeps its share, which no draw then carries.
+        log_root_counts (tuple[float, ...]): The log of the estimated number of the query's terms per bin, ``-inf``
+            for a bin left out or not reached.
+        log_rho (tuple[float, ...]): Per bin, ``log(target / N)``: the log weight of one of its terms; ``-inf``
+            where the bin has no target or no term.
+        missing_target (float): The share of the target on bins without an estimate, which no draw reaches; the
+            share of a bin with an estimate but no term is not in it.
+        subgoal_selection (Callable | None): The computation rule, which must select an open hole; None selects
+            the engine's deepest-first rule.
+    """
+
+    query: ResolutionQuery[NT, T, G]
+    grid: SaddleGrid[NT]
+    edges: tuple[float, ...]
+    target: tuple[float, ...]
+    log_root_counts: tuple[float, ...]
+    log_rho: tuple[float, ...]
+    missing_target: float
+    subgoal_selection: Callable[[Goal[NT, T, G]], tuple[Path, NonTerminalArgument[NT]]] | None = None
+
+    def log_weight(self, moments: _Moments, hole_types: Sequence[NT]) -> float:
+        """Return the log of a node's share of the target: ``log sum_b rho(b) N_n(b)`` over the estimated ``N_n``.
+
+        Args:
+            moments (_Moments): The node's moments on the grid.
+            hole_types (Sequence[NT]): The non-terminals of its open holes.
+
+        Returns:
+            float: The log weight, ``-inf`` for a node with no completion in a bin with a target.
+        """
+        bins = [index for index, log_rho in enumerate(self.log_rho) if log_rho > -math.inf]
+        counts = _node_log_counts(self.grid, moments, hole_types, self.edges, bins)
+        if not counts:
+            return -math.inf
+        return log_sum_exp([self.log_rho[index] + log_count for index, log_count in counts])
+
+    def _root_children(self) -> list[tuple[_SaddleNode, float]]:
+        """Return the query's initial nodes with their log weights, computed once for every stream of this search.
+
+        Returns:
+            list: The initial nodes that have a completion in a bin with a target, with their log weights.
+        """
+        known = self.__dict__.get("_root_children_cache")
+        if known is None:
+            known = []
+            program = self.grid.program
+            for child, child_cost in _initial_tilt_nodes(self.query, program.algebra):
+                hole_types = tuple(holes(child).values())
+                if not all(hole in program.cheapest for hole in hole_types):
+                    continue
+                moments = _node_moments(self.grid, child_cost, hole_types)
+                log_weight = self.log_weight(moments, hole_types)
+                if log_weight > -math.inf:
+                    known.append(((child, child_cost, None, hole_types, moments), log_weight))
+            object.__setattr__(self, "_root_children_cache", known)
+        return known
+
+    def keyed_stream(self, rng: random.Random) -> Iterator[tuple[float, Tree[T]]]:
+        """Run random search on the estimated weights, keeping each term's key.
+
+        Its first term is a draw in proportion to the weights along its path; a node whose estimate is positive while
+        no term lies below it in a bin with a target is passed over, and the search goes on with the next key. The
+        later terms are an enumeration of the rest, in the order of keys conditioned on estimates that need not agree
+        with each other.
+
+        Args:
+            rng (random.Random): The source of randomness.
+
+        Yields:
+            tuple[float, Tree[T]]: The key and the term, in decreasing key order.
+
+        Raises:
+            ValueError: If the computation rule selects a position that is not an open hole.
+        """
+        select = deepest_first_subgoal if self.subgoal_selection is None else self.subgoal_selection
+        space = self.query.solution_space
+        program = self.grid.program
+        rule_costs: dict[int, float] = {}
+
+        def expand(node: _SaddleNode) -> tuple[Tree[T] | None, Sequence[tuple[_SaddleNode, float]]]:
+            """Expand one node, and weigh its children by their moments without building them.
+
+            Args:
+                node (_SaddleNode): The goal (None at the root or while unbuilt), the cost of its partial
+                    inhabitant, while unbuilt the parent, position and clause that build it, and its holes' non-terminals
+                    with its moments.
+
+            Returns:
+                tuple: The term (None on an inner node) and the retained children with their log weights.
+
+            Raises:
+                ValueError: If the computation rule selects a position that is not an open hole.
+            """
+            goal, cost, pending, _hole_types, _moments = node
+            if pending is not None:
+                goal = _built(pending)
+            if goal is not None and goal.success:
+                return goal.grounded[()][1], ()
+            if goal is None:
+                return None, self._root_children()
+            position, argument = select(goal)
+            open_holes = holes(goal)
+            if position not in open_holes:
+                msg = (
+                    f"the computation rule selected position {position}, which is not an open hole: the saddle "
+                    "search weighs a node by its open holes, so the rule must select one, as deepest_first_subgoal does"
+                )
+                raise ValueError(msg)
+            others = [hole_type for hole_position, hole_type in open_holes.items() if hole_position != position]
+            base = _node_moments(self.grid, cost, others)
+            kept: list[tuple[_SaddleNode, float]] = []
+            for rule in space.get(argument.origin) or ():
+                if not _admitted(rule):
+                    continue
+                opened = [arg.origin for arg in rule.arguments if isinstance(arg, NonTerminalArgument)]
+                if not all(hole in program.cheapest for hole in opened):
+                    continue
+                clause_cost = rule_costs.get(id(rule))
+                if clause_cost is None:
+                    clause_cost = _real_rule_cost(rule, program.algebra)
+                    rule_costs[id(rule)] = clause_cost
+                child_holes = (*others, *opened)
+                child_moments = _with_holes(self.grid, base, opened, cost + clause_cost, child_holes)
+                log_weight = self.log_weight(child_moments, child_holes)
+                if log_weight > -math.inf:
+                    kept.append(
+                        ((None, cost + clause_cost, (goal, position, rule), child_holes, child_moments), log_weight)
+                    )
+            return None, kept
+
+        yield from keyed_stream((None, 0.0, None, (), None), 0.0, expand, rng)
+
+    def stream(self, rng: random.Random, max_draws: int) -> Iterator[Tree[T]]:
+        """Draw terms: the first term of a fresh stream each, a term drawn before skipped, until the draws run out.
+
+        The stream ends early where a fresh stream finds no term: then no term lies in a bin with a target and an
+        estimate, and none ever will.
+
+        Args:
+            rng (random.Random): The source of randomness.
+            max_draws (int): How many draws to make, repeats included, a whole number not below 0; a language whose
+                target bins are exhausted draws only repeats, so the bound is not optional.
+
+        Yields:
+            Tree[T]: The terms, each once.
+
+        Raises:
+            ValueError: If ``max_draws`` is not a whole number not below 0.
+        """
+        if isinstance(max_draws, bool) or not isinstance(max_draws, int) or max_draws < 0:
+            msg = f"max_draws must be a whole number not below 0, not {max_draws!r}"
+            raise ValueError(msg)
+        streamed: set[Tree[T]] = set()
+        for _ in range(max_draws):
+            drawn = next(self.keyed_stream(rng), None)
+            if drawn is None:
+                return
+            term = drawn[1]
+            if term in streamed:
+                continue
+            streamed.add(term)
+            yield term
+
+
+def saddle_search(
+    query: ResolutionQuery[NT, T, G],
+    algebra: AdditiveCostAlgebra[Any],
+    edges: Sequence[float],
+    target: Sequence[float],
+    *,
+    program: TiltProgram[NT] | None = None,
+    thetas: Iterable[float] | None = None,
+    least_share: float = 0.0,
+    subgoal_selection: Callable[[Goal[NT, T, G]], tuple[Path, NonTerminalArgument[NT]]] | None = None,
+) -> SaddleSearch[NT, T, G]:
+    """Build random search to a target on cost bins, each node weighed by the saddle point's estimate.
+
+    Args:
+        query (ResolutionQuery[NT, T, G]): The query to sample from, generator or partial-term.
+        algebra (AdditiveCostAlgebra[Any]): The additive cost algebra, with finite real costs.
+        edges (Sequence[float]): The bins' boundaries, strictly ascending finite reals, at least two.
+        target (Sequence[float]): The target's mass per bin, one fewer than the edges, nonnegative, not all zero.
+        program (TiltProgram[NT] | None): The query's program already prepared under this algebra. (Default value = None)
+        thetas (Iterable[float] | None): The grid of tilts; None reads the tilts :func:`saddle_counts` finds for the
+            query's bins with a target, and 0. (Default value = None)
+        least_share (float): Bins whose share of the target is below this, a real number from 0 to 1, are left out,
+            their share reported as out of reach. (Default value = 0.0)
+        subgoal_selection (Callable | None): The computation rule, which must select an open hole. (Default value = None)
+
+    Returns:
+        SaddleSearch[NT, T, G]: The construction, ready to stream from.
+
+    Raises:
+        ValueError: If the edges, the target, the least share or a tilt are not of the kinds above; where
+            :func:`saddle_counts` or :func:`saddle_grid` refuses; or if no bin with a target at or above the least
+            share has an estimated term of the query.
+    """
+    edges = _checked_edges(edges)
+    checked = [_real_cost(mass, "a target mass") for mass in target]
+    if len(checked) != len(edges) - 1 or any(mass < 0 for mass in checked) or sum(checked) <= 0:
+        msg = "the target needs one nonnegative mass per bin, one fewer than the edges, and not all of them zero"
+        raise ValueError(msg)
+    if isinstance(least_share, bool) or not isinstance(least_share, (int, float)) or not 0 <= least_share <= 1:
+        msg = f"the least share must be a real number between 0 and 1, not {least_share!r}"
+        raise ValueError(msg)
+    prepared = _prepared(query, algebra, program)
+    total = sum(checked)
+    wanted = [index for index, mass in enumerate(checked) if mass > 0 and mass / total >= least_share]
+    if thetas is None:
+        root = saddle_counts(query, algebra, edges, program=prepared, only=wanted)
+        thetas = [theta for theta in root.thetas if not math.isnan(theta)] + [0.0]
+    grid = saddle_grid(prepared, thetas)
+    per_bin: list[list[float]] = [[] for _ in checked]
+    for child, child_cost in _initial_tilt_nodes(query, algebra):
+        hole_types = tuple(holes(child).values())
+        if all(hole in prepared.cheapest for hole in hole_types):
+            moments = _node_moments(grid, child_cost, hole_types)
+            for index, log_count in _node_log_counts(grid, moments, hole_types, edges, wanted):
+                per_bin[index].append(log_count)
+    log_root_counts = tuple(log_sum_exp(values) if values else -math.inf for values in per_bin)
+    reached = [mass if log_root_counts[index] > -math.inf else 0.0 for index, mass in enumerate(checked)]
+    if sum(reached) <= 0:
+        msg = "no bin with a target at or above the least share has an estimated term of the query"
+        raise ValueError(msg)
+    normalized = tuple(mass / sum(reached) for mass in reached)
+    return SaddleSearch(
+        query=query,
+        grid=grid,
+        edges=tuple(edges),
+        target=normalized,
+        log_root_counts=log_root_counts,
+        log_rho=tuple(
+            math.log(mass) - log_count if mass > 0 else -math.inf
+            for mass, log_count in zip(normalized, log_root_counts, strict=True)
+        ),
+        missing_target=math.fsum(
+            mass for mass, log_count in zip(checked, log_root_counts, strict=True) if log_count == -math.inf
+        )
+        / math.fsum(checked),
+        subgoal_selection=subgoal_selection,
     )
