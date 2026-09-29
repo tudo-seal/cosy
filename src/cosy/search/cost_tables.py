@@ -82,10 +82,10 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic
 
 from cosy.core.solution_space import NT, ConstantArgument, G, Goal, NonTerminalArgument, T
-from cosy.search.counting import decomposable_or_raise
+from cosy.search.counting import _admitted, decomposable_or_raise
 from cosy.search.partial import Hole, holes, partial_inhabitant
 from cosy.search.rules import deepest_first_subgoal
-from cosy.search.sampling import _spread, keyed_stream, log_sum_exp
+from cosy.search.sampling import _built, _Node, _spread, keyed_stream, log_sum_exp
 
 if TYPE_CHECKING:
     import random
@@ -482,29 +482,6 @@ class CostTable(Generic[NT]):
 # A clause as the fill reads it: its cost, the non-terminals of its holes, and the clause itself,
 # which only an error message ever looks at.
 _Clause = tuple[int, tuple[Any, ...], Any]
-
-
-def _admitted(rule: RHSRule[Any, Any, Any]) -> bool:
-    """Decide a clause whose predicates read the literals alone, as the size table does.
-
-    Such a predicate decides the clause once and for all, exactly as the engine decides it when the
-    clause is applied, and counting the clause anyway would put terms in the table that no search
-    can produce. A predicate that reads a hole is not called here: the table has refused it before.
-
-    Args:
-        rule (RHSRule): The clause.
-
-    Returns:
-        bool: Whether the clause can be applied at all.
-    """
-    reads_a_hole = any(
-        isinstance(argument, NonTerminalArgument) and argument.name is not None for argument in rule.arguments
-    )
-    return (
-        not rule.predicates
-        or reads_a_hole
-        or all(predicate(rule.literal_substitution) for predicate in rule.predicates)
-    )
 
 
 def _components(nonterminals: Sequence[NT], successors: Mapping[NT, Sequence[NT]]) -> list[list[NT]]:
@@ -959,7 +936,9 @@ class WeightedCostTable(Generic[NT, T, G]):
         unit_weights (Mapping[int, float]): ``pi(a) / N_r(a)`` per realized cost value.
         log_unit_weights (Mapping[int, float]): The same in log space, and what the search uses.
         subgoal_selection (Callable | None): The computation rule; None selects the engine's
-            deepest-first rule.
+            deepest-first rule. It must select an open hole, as the engine's rule does: a node is
+            weighed by its open holes, and an expanded position that ``Goal.subgoals`` still lists
+            is not one.
     """
 
     query: ResolutionQuery[NT, T, G]
@@ -1037,9 +1016,24 @@ class WeightedCostTable(Generic[NT, T, G]):
         """
         if goal is None:
             return dict(self.root_counts)
-        if goal.success:
+        return self._branch_counts_of_holes(() if goal.success else self.holes_of(goal), cost)
+
+    def _branch_counts_of_holes(self, hole_types: tuple[NT, ...], cost: int) -> dict[int, int]:
+        """Return ``B_n`` of a node given by the multiset of its holes and its cost so far.
+
+        All the table needs of a node, which is why a child can be weighed before it is built. No
+        holes is a success node: one branch, of its own cost.
+
+        Args:
+            hole_types (tuple[NT, ...]): The node's holes, in the canonical order of :meth:`holes_of`.
+            cost (int): The cost of its partial inhabitant.
+
+        Returns:
+            dict[int, int]: The branch counts, one entry per realized cost value up to the cap.
+        """
+        if not hole_types:
             return {cost: 1} if cost <= self.cost_cap else {}
-        row = self.table.split_row(self.holes_of(goal))
+        row = self.table.split_row(hole_types)
         return {cost + value: count for value, count in row.items() if cost + value <= self.cost_cap}
 
     def log_weight_of(self, goal: Goal[NT, T, G] | None, cost: int) -> float:
@@ -1057,19 +1051,44 @@ class WeightedCostTable(Generic[NT, T, G]):
                 within the cap.
         """
         if goal is None:
-            key: tuple[Any, int] = (None, -1)
-        elif goal.success:
-            key = (True, cost)
-        else:
-            key = (self.holes_of(goal), cost)
+            return self._weight(None, -1, dict(self.root_counts))
+        return self._log_weight_of_holes(() if goal.success else self.holes_of(goal), cost)
+
+    def _log_weight_of_holes(self, hole_types: tuple[NT, ...], cost: int) -> float:
+        """Return a node's ``log w`` from the multiset of its holes and its cost so far.
+
+        Args:
+            hole_types (tuple[NT, ...]): The node's holes, in canonical order; empty on a success node.
+            cost (int): The cost of its partial inhabitant.
+
+        Returns:
+            float: ``log sum_a B_n(a) pi(a) / N_r(a)``, ``-inf`` without a completion within the cap.
+        """
+        known = self._cache("_weight_cache").get((hole_types, cost))
+        if known is not None:
+            return known
+        return self._weight(hole_types, cost, self._branch_counts_of_holes(hole_types, cost))
+
+    def _weight(self, hole_types: tuple[NT, ...] | None, cost: int, counts: Mapping[int, int]) -> float:
+        """Return the log-sum-exp of branch counts under the unit weights, and keep it.
+
+        Args:
+            hole_types (tuple[NT, ...] | None): The key's holes; None for the root.
+            cost (int): The key's cost; -1 for the root.
+            counts (Mapping[int, int]): The node's branch counts.
+
+        Returns:
+            float: ``log sum_a B_n(a) pi(a) / N_r(a)``.
+        """
         weights = self._cache("_weight_cache")
+        key = (hole_types, cost)
         known = weights.get(key)
         if known is not None:
             return known
         value = log_sum_exp(
             [
                 math.log(count) + self.log_unit_weights[total]
-                for total, count in self.branch_counts_of(goal, cost).items()
+                for total, count in counts.items()
                 if total in self.log_unit_weights
             ]
         )
@@ -1101,40 +1120,70 @@ class WeightedCostTable(Generic[NT, T, G]):
             return
         select = deepest_first_subgoal if self.subgoal_selection is None else self.subgoal_selection
 
-        def expand(
-            node: tuple[Goal[NT, T, G] | None, int],
-        ) -> tuple[Tree[T] | None, Sequence[tuple[tuple[Goal[NT, T, G] | None, int], float]]]:
-            """Expand one node on demand, and weigh its children from the table.
+        rank = self._cache("_rank_cache")
+        if not rank:
+            rank.update({nonterminal: index for index, nonterminal in enumerate(self.table.counts)})
+        space = self.query.solution_space
+
+        def canonical(hole_types: list[NT]) -> tuple[NT, ...]:
+            return tuple(sorted(hole_types, key=lambda nt: (rank.get(nt, -1), id(nt))))
+
+        def expand(node: _Node) -> tuple[Tree[T] | None, Sequence[tuple[_Node, float]]]:
+            """Expand one node on demand, and weigh its children from the table without building them.
+
+            A child is pushed as its parent, the position and the clause, and weighed from the
+            multiset of its holes and its cost so far, which the parent and the clause give without
+            applying the clause; its goal is built when it is popped
+            (:class:`~cosy.search.sampling.WeightedTable` does the same).
 
             Args:
-                node (tuple): The goal (None at the root) and the cost of its partial inhabitant.
+                node (_Node): The goal (None at the root or while unbuilt), the cost of its partial
+                    inhabitant, and, while unbuilt, the parent, position and clause that build it.
 
             Returns:
                 tuple: The inhabitant (None on an inner node) and the retained children with their
                     ``log w``, in clause order.
+
+            Raises:
+                ValueError: If the engine refuses a clause the frontier had weighed, or if the
+                    computation rule selects a position that is not an open hole.
             """
-            goal, cost = node
+            goal, cost, pending = node
+            if pending is not None:
+                goal = _built(pending)
             if goal is not None and goal.success:
                 return goal.grounded[()][1], ()
+            kept: list[tuple[_Node, float]] = []
             if goal is None:
-                raw = _initial_cost_nodes(self.query, self.algebra)
-            else:
-                position, argument = select(goal)
-                raw = []
-                for rule in self.query.solution_space.get(argument.origin) or ():
-                    child = goal.update(rule, position)
-                    if child is not None:
-                        raw.append((child, cost + self.rule_cost_of(rule)))
-            kept: list[tuple[tuple[Goal[NT, T, G] | None, int], float]] = []
-            for child, child_cost in raw:
+                for child, child_cost in _initial_cost_nodes(self.query, self.algebra):
+                    if child_cost > self.cost_cap:
+                        continue
+                    log_weight = self.log_weight_of(child, child_cost)
+                    if log_weight > -math.inf:
+                        kept.append(((child, child_cost, None), log_weight))
+                return None, kept
+            position, argument = select(goal)
+            open_holes = holes(goal)
+            if position not in open_holes:
+                msg = (
+                    f"the computation rule selected position {position}, which is not an open hole: a table "
+                    "weighs a node by its open holes, so the rule must select one, as deepest_first_subgoal does"
+                )
+                raise ValueError(msg)
+            others = [hole_type for hole_position, hole_type in open_holes.items() if hole_position != position]
+            for rule in space.get(argument.origin) or ():
+                if not _admitted(rule):
+                    continue
+                child_cost = cost + self.rule_cost_of(rule)
                 if child_cost > self.cost_cap:
                     continue
-                log_weight = self.log_weight_of(child, child_cost)
+                opened = [arg.origin for arg in rule.arguments if isinstance(arg, NonTerminalArgument)]
+                log_weight = self._log_weight_of_holes(canonical(others + opened), child_cost)
                 if log_weight > -math.inf:
-                    kept.append(((child, child_cost), log_weight))
+                    kept.append(((None, child_cost, (goal, position, rule)), log_weight))
             return None, kept
 
-        yield from keyed_stream((None, 0), self.log_weight_of(None, 0), expand, rng)
+        yield from keyed_stream((None, 0, None), self.log_weight_of(None, 0), expand, rng)
 
 
 def weighted_cost_table(
@@ -1155,7 +1204,8 @@ def weighted_cost_table(
             realizes up to the cap. It need not be normalized, but it must be positive on every one
             of them; above the cap it is never read.
         cost_cap (int): The largest cost a streamed term may have, a nonnegative whole number.
-        subgoal_selection (Callable | None): The computation rule. (Default value = None)
+        subgoal_selection (Callable | None): The computation rule, which must select an open hole.
+            (Default value = None)
         table (CostTable[NT] | None): A table already filled for this program under this algebra,
             to at least this cap. Passing one is how several queries share the cost of filling it;
             a table filled to a higher cap is read up to this one. (Default value = None)

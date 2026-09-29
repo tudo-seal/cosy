@@ -187,6 +187,31 @@ def rule_cost(rule: RHSRule[NT, T, G], algebra: AdditiveCostAlgebra[A]) -> A:
     )
 
 
+def _admitted(rule: RHSRule[Any, Any, Any]) -> bool:
+    """Decide a clause whose predicates read the literals alone, as the engine decides it when applied.
+
+    Such a predicate decides the clause once and for all: :meth:`Goal.update` refuses the clause on
+    exactly these grounds and on no others in a program :func:`decomposable_or_raise` accepts. So a
+    table counts a clause exactly when it passes this, and a lazy frontier may push a child for it
+    without building the child. A predicate that reads a hole is not called here: the tables refuse
+    it before.
+
+    Args:
+        rule (RHSRule): The clause.
+
+    Returns:
+        bool: Whether the clause can be applied at all.
+    """
+    reads_a_hole = any(
+        isinstance(argument, NonTerminalArgument) and argument.name is not None for argument in rule.arguments
+    )
+    return (
+        not rule.predicates
+        or reads_a_hole
+        or all(predicate(rule.literal_substitution) for predicate in rule.predicates)
+    )
+
+
 def initial_nodes(
     query: ResolutionQuery[NT, T, G],
 ) -> list[tuple[Goal[NT, T, G], int]]:
@@ -834,20 +859,14 @@ def size_table(space: SolutionSpace[NT, T, G], bound: int, *, check: bool = True
             # A predicate over a clause without named non-terminal arguments reads the literals
             # and nothing else, so it decides the clause once and for all, exactly as the engine
             # decides it in `Goal.from_rhs_rule` and `Goal.update`. Counting such a clause anyway
-            # would put terms in the table that no search can produce.
+            # would put terms in the table that no search can produce. `_admitted` decides it, for
+            # every table and for the lazy frontiers, which push a child on its word alone.
             #
-            # The `name is not None` guard is what keeps this from calling a *hole-reading*
-            # predicate with a substitution that has no entry for the hole: under `check` those
-            # clauses have already raised, but with the check off they would reach this line and
-            # fail inside user code with a KeyError, an error about the wrong thing entirely.
-            if (
-                rule.predicates
-                and not any(
-                    isinstance(argument, NonTerminalArgument) and argument.name is not None
-                    for argument in rule.arguments
-                )
-                and not all(predicate(rule.literal_substitution) for predicate in rule.predicates)
-            ):
+            # It calls no *hole-reading* predicate, which would find no entry for the hole in the
+            # substitution: under `check` those clauses have already raised, but with the check off
+            # they would reach this line and fail inside user code with a KeyError, an error about
+            # the wrong thing entirely.
+            if not _admitted(rule):
                 continue
             holes = tuple(argument.origin for argument in rule.arguments if isinstance(argument, NonTerminalArgument))
             clauses.append((_added_symbols(rule), holes))

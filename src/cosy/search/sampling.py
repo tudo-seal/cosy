@@ -82,11 +82,12 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic
 
-from cosy.core.solution_space import NT, G, Goal, T
+from cosy.core.solution_space import NT, G, Goal, NonTerminalArgument, T
 from cosy.search.counting import (
     CountedNode,
+    _added_symbols,
+    _admitted,
     branch_counts,
-    child_nodes,
     decomposable_or_raise,
     initial_nodes,
     size_table,
@@ -99,7 +100,6 @@ if TYPE_CHECKING:
     import random
     from collections.abc import Callable, Iterator, Mapping, Sequence
 
-    from cosy.core.solution_space import NonTerminalArgument
     from cosy.core.tree import Path, Tree
     from cosy.search.counting import SizeTable
     from cosy.search.queries import ResolutionQuery
@@ -413,6 +413,35 @@ def _spread(
     return unit_weights, log_unit_weights
 
 
+# A node of a lazy frontier: its goal (None at the root, and while it is unbuilt), the measure of its
+# partial inhabitant (a size or a cost), and, while unbuilt, the parent, position and clause that build it.
+_Node = tuple[Any, int, Any]
+
+
+def _built(pending: tuple[Any, Any, Any]) -> Any:
+    """Build a child the lazy frontier pushed unbuilt: apply its clause to its parent at its position.
+
+    Args:
+        pending (tuple): The parent goal, the position of the expanded hole, and the clause.
+
+    Returns:
+        Goal: The child.
+
+    Raises:
+        ValueError: If the engine refuses the clause. The frontier weighed the child on the grounds
+            that it would not, and a refusal means the two have come apart.
+    """
+    parent, position, rule = pending
+    child = parent.update(rule, position)
+    if child is None:
+        msg = (
+            f"the engine refused a clause the lazy frontier had weighed ({getattr(rule.terminal, '__name__', rule.terminal)} "
+            f"at {position}); the table and the engine disagree about which clauses apply"
+        )
+        raise ValueError(msg)
+    return child
+
+
 @dataclass(frozen=True)
 class WeightedTable(Generic[NT, T, G]):
     """Random search weighted from the size table instead of from a materialized tree.
@@ -443,7 +472,9 @@ class WeightedTable(Generic[NT, T, G]):
         unit_weights (Mapping[int, float]): ``pi(s) / N_r(s)`` per realized size.
         log_unit_weights (Mapping[int, float]): The same in log space, and what the search uses.
         subgoal_selection (Callable | None): The computation rule; None selects the engine's
-            deepest-first rule, which is what the tree form uses too.
+            deepest-first rule, which is what the tree form uses too. It must select an open hole,
+            as the engine's rule does: a node is weighed by its open holes, and an expanded position
+            that ``Goal.subgoals`` still lists is not one.
     """
 
     query: ResolutionQuery[NT, T, G]
@@ -511,7 +542,21 @@ class WeightedTable(Generic[NT, T, G]):
             return dict(self.root_counts)
         if goal.success:
             return {size: 1} if size <= self.size_bound else {}
-        hole_types = self.holes_of(goal)
+        return self._branch_counts_of_holes(self.holes_of(goal), size)
+
+    def _branch_counts_of_holes(self, hole_types: tuple[NT, ...], size: int) -> dict[int, int]:
+        """Return ``B_n`` of a node given by the multiset of its holes and its size.
+
+        All the table needs of a node, which is why a child can be weighed before it is built. No
+        holes is a success node: one branch, of its own size.
+
+        Args:
+            hole_types (tuple[NT, ...]): The node's holes, in the canonical order of :meth:`holes_of`.
+            size (int): The size of its partial inhabitant.
+
+        Returns:
+            dict[int, int]: The branch counts, one entry per realized size.
+        """
         # The whole row at once: the loop below asks one hole tuple for every size the bound
         # admits, which is what `split_row` computes in a single walk.
         row = self.table.split_row(hole_types)
@@ -539,24 +584,56 @@ class WeightedTable(Generic[NT, T, G]):
                 within the bound. Such a node carries no key and is dropped by the caller.
         """
         if goal is None:
-            key: tuple[Any, int] = (None, -1)
-        elif goal.success:
-            key = (True, size)
+            return self._weight(None, -1, dict(self.root_counts))
+        return self._log_weight_of_holes(() if goal.success else self.holes_of(goal), size)
+
+    def _log_weight_of_holes(self, hole_types: tuple[NT, ...], size: int) -> float:
+        """Return a node's ``log w`` from the multiset of its holes and its size, memoised on both.
+
+        Args:
+            hole_types (tuple[NT, ...]): The node's holes, in canonical order; empty on a success node.
+            size (int): The size of its partial inhabitant.
+
+        Returns:
+            float: ``log sum_a B_n(a) pi(a) / N_r(a)``, ``-inf`` without a completion within the bound.
+        """
+        cache = self.__dict__.get("_weight_cache")
+        if cache is not None:
+            cached = cache.get((hole_types, size))
+            if cached is not None:
+                return cached
+        if hole_types:
+            counts = self._branch_counts_of_holes(hole_types, size)
         else:
-            key = (self.holes_of(goal), size)
+            counts = {size: 1} if size <= self.size_bound else {}
+        return self._weight(hole_types, size, counts)
+
+    def _weight(self, hole_types: tuple[NT, ...] | None, size: int, counts: Mapping[int, int]) -> float:
+        """Return the log-sum-exp of branch counts under the unit weights, and keep it.
+
+        Args:
+            hole_types (tuple[NT, ...] | None): The key's holes; None for the root.
+            size (int): The key's size; -1 for the root.
+            counts (Mapping[int, int]): The node's branch counts.
+
+        Returns:
+            float: ``log sum_a B_n(a) pi(a) / N_r(a)``.
+        """
         cache = self.__dict__.get("_weight_cache")
         if cache is None:
             cache = {}
             object.__setattr__(self, "_weight_cache", cache)
+        key = (hole_types, size)
         cached = cache.get(key)
         if cached is not None:
             return cached
-        terms = [
-            math.log(count) + self.log_unit_weights[value]
-            for value, count in self.branch_counts_of(goal, size).items()
-            if value in self.log_unit_weights
-        ]
-        value = log_sum_exp(terms)
+        value = log_sum_exp(
+            [
+                math.log(count) + self.log_unit_weights[total]
+                for total, count in counts.items()
+                if total in self.log_unit_weights
+            ]
+        )
         cache[key] = value
         return value
 
@@ -585,10 +662,14 @@ class WeightedTable(Generic[NT, T, G]):
             return
         select = deepest_first_subgoal if self.subgoal_selection is None else self.subgoal_selection
 
-        def expand(
-            node: tuple[Goal[NT, T, G] | None, int],
-        ) -> tuple[Tree[T] | None, Sequence[tuple[tuple[Goal[NT, T, G] | None, int], float]]]:
-            """Expand one node on demand, and weigh its children from the table.
+        rank = self._rank()
+        space = self.query.solution_space
+
+        def canonical(hole_types: list[NT]) -> tuple[NT, ...]:
+            return tuple(sorted(hole_types, key=lambda nt: (rank.get(nt, -1), id(nt))))
+
+        def expand(node: _Node) -> tuple[Tree[T] | None, Sequence[tuple[_Node, float]]]:
+            """Expand one node on demand, and weigh its children from the table without building them.
 
             The retention rule is the tree form's, position for position: a success node within
             the bound is a leaf, anything past the bound is dropped, and a child whose weight
@@ -596,27 +677,61 @@ class WeightedTable(Generic[NT, T, G]):
             of these after expanding the child. Here the table decides it before, which is the
             same decision taken earlier.
 
+            A child is pushed as its parent, the position and the clause, and weighed from the
+            multiset of its holes, which the parent's holes and the clause's give without applying
+            the clause: the parent's, less the expanded hole, plus the clause's non-terminal
+            arguments. Its goal is built when it is popped. Most children are never popped, and a
+            frontier of built goals is what a long stream's memory was spent on.
+
             Args:
-                node (tuple): The goal (None at the root) and the size of its partial inhabitant.
+                node (_Node): The goal (None at the root or while unbuilt), the size of its partial
+                    inhabitant, and, while unbuilt, the parent, position and clause that build it.
 
             Returns:
                 tuple: The inhabitant (None on an inner node) and the retained children with
                     their ``log w``, in clause order.
+
+            Raises:
+                ValueError: If the engine refuses a clause the frontier had weighed. In a program
+                    the table applies to it never does; a refusal means the two have come apart.
+                    Also if the computation rule selects a position that is not an open hole.
             """
-            goal, size = node
+            goal, size, pending = node
+            if pending is not None:
+                goal = _built(pending)
             if goal is not None and goal.success:
                 return goal.grounded[()][1], ()
-            raw = initial_nodes(self.query) if goal is None else child_nodes(self.query, goal, size, select)
-            kept: list[tuple[tuple[Goal[NT, T, G] | None, int], float]] = []
-            for child, child_size in raw:
+            kept: list[tuple[_Node, float]] = []
+            if goal is None:
+                for child, child_size in initial_nodes(self.query):
+                    if child_size > self.size_bound:
+                        continue
+                    log_weight = self.log_weight_of(child, child_size)
+                    if log_weight > -math.inf:
+                        kept.append(((child, child_size, None), log_weight))
+                return None, kept
+            position, argument = select(goal)
+            open_holes = holes(goal)
+            if position not in open_holes:
+                msg = (
+                    f"the computation rule selected position {position}, which is not an open hole: a table "
+                    "weighs a node by its open holes, so the rule must select one, as deepest_first_subgoal does"
+                )
+                raise ValueError(msg)
+            others = [hole_type for hole_position, hole_type in open_holes.items() if hole_position != position]
+            for rule in space.get(argument.origin) or ():
+                if not _admitted(rule):
+                    continue
+                child_size = size + _added_symbols(rule)
                 if child_size > self.size_bound:
                     continue
-                log_weight = self.log_weight_of(child, child_size)
+                opened = [arg.origin for arg in rule.arguments if isinstance(arg, NonTerminalArgument)]
+                log_weight = self._log_weight_of_holes(canonical(others + opened), child_size)
                 if log_weight > -math.inf:
-                    kept.append(((child, child_size), log_weight))
+                    kept.append(((None, child_size, (goal, position, rule)), log_weight))
             return None, kept
 
-        yield from keyed_stream((None, 0), self.log_weight_of(None, 0), expand, rng)
+        yield from keyed_stream((None, 0, None), self.log_weight_of(None, 0), expand, rng)
 
 
 def weighted_table(
@@ -634,7 +749,8 @@ def weighted_table(
         size_bound (int): The bound ``D`` on the term size.
         distribution (Callable[[Any], float]): ``pi``, evaluated on each realized size. It need
             not be normalized, but it must be positive on every realized size.
-        subgoal_selection (Callable | None): The computation rule. (Default value = None)
+        subgoal_selection (Callable | None): The computation rule, which must select an open hole.
+            (Default value = None)
         table (SizeTable[NT] | None): A table already filled for this program and bound. Passing
             one is how several queries against one space share the cost of filling it, since the
             table depends on the program and the bound alone and not on the query. (Default value

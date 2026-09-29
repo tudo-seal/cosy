@@ -48,7 +48,7 @@ from cosy.search.cost_tables import (
 )
 from cosy.search.costs import AdditiveCostAlgebra, ComponentwiseTuples, NonNegativeReals
 from cosy.search.counting import _added_symbols, branch_counts, rule_cost, size_table
-from cosy.search.partial import partial_inhabitant, term_size
+from cosy.search.partial import holes, partial_inhabitant, term_size
 from cosy.search.rules import deepest_first_subgoal
 from cosy.search.samplers import CostTableSampler, Sampler
 from cosy.search.sampling import log_sum_exp, weighted_table, weighted_tree
@@ -64,6 +64,7 @@ from tests.search_fixtures import (
     ROUND,
     TAGGED,
     TUPLE_SORT,
+    USED,
     ambiguous_space,
     chain_space,
     cut_space,
@@ -1183,3 +1184,204 @@ def test_the_table_is_the_same_whichever_product_fills_it(monkeypatch):
         monkeypatch.undo()
     assert compared > 100
     assert callers == {"_acyclic_row", "tuple_row", "split_row"}
+
+
+# ---------------------------------------------------------------------------------------------
+# The lazy frontier: a child is built when it is popped, not when its parent is expanded
+# ---------------------------------------------------------------------------------------------
+
+WIDE = Constructor("Wide")
+WIDE_LEAF = Constructor("WideLeaf")
+WIDTH = 30
+
+
+def _wide_wrap(index):
+    """Build the ``index``-th clause ``Wide -> wrap_index(WideLeaf)``.
+
+    Args:
+        index (int): Which of the thirty clauses.
+
+    Returns:
+        Callable: The combinator, named after its index.
+    """
+
+    def wrap(inner: str) -> str:
+        return f"w{index}({inner})"
+
+    wrap.__name__ = f"wrap_{index}"
+    return wrap
+
+
+def _wide_leaf(index):
+    """Build the ``index``-th leaf of ``WideLeaf``.
+
+    Args:
+        index (int): Which of the thirty leaves.
+
+    Returns:
+        Callable: The combinator, named after its index.
+    """
+
+    def leaf() -> str:
+        return f"v{index}"
+
+    leaf.__name__ = f"leaf_{index}"
+    return leaf
+
+
+def wide_space():
+    """Build a space of thirty clauses over thirty leaves: every expansion has thirty children.
+
+    Returns:
+        SolutionSpace: The space, started at ``Wide``.
+    """
+    specs = {_wide_wrap(i): SpecificationBuilder().argument("inner", WIDE_LEAF).suffix(WIDE) for i in range(WIDTH)}
+    specs |= {_wide_leaf(i): SpecificationBuilder().suffix(WIDE_LEAF) for i in range(WIDTH)}
+    return Synthesizer(specs).construct_solution_space(WIDE)
+
+
+def counted_updates(monkeypatch):
+    """Count the goals the engine builds from here on.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+
+    Returns:
+        list: One entry per call of ``Goal.update``.
+    """
+    calls = []
+    update = Goal.update
+
+    def counting(self, rule, position):
+        calls.append(rule.terminal)
+        return update(self, rule, position)
+
+    monkeypatch.setattr(Goal, "update", counting)
+    return calls
+
+
+@pytest.mark.parametrize("form", ["size table", "cost table"])
+def test_a_child_is_built_when_it_is_popped_and_not_before(monkeypatch, form):
+    """Thirty children per expansion, and the first draw builds one goal with ``Goal.update``, not thirty.
+
+    The first draw pops the root, one of its thirty children, and one of that child's thirty. The root's
+    children are built from the start symbol's clauses without ``Goal.update``; a frontier that built
+    every child it pushed would then have called it thirty times, once per grandchild, where the lazy
+    one builds only the grandchild it pops.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+        form (str): Which table form draws.
+    """
+    query = generator_query(wide_space(), WIDE)
+    lazy = weighted_table(query, 3, uniform) if form == "size table" else weighted_cost_table(query, UNIT, uniform, 3)
+    calls = counted_updates(monkeypatch)
+    first = next(lazy.stream(random.Random(0)))
+    assert first is not None
+    assert len(calls) <= 2, (form, len(calls))
+
+
+@pytest.mark.parametrize("form", ["size table", "cost table"])
+def test_a_child_the_engine_refuses_when_it_is_built_is_an_error_not_a_skip(monkeypatch, form):
+    """The weight a lazy child was pushed with assumed the engine applies its clause; if it does not, say so.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+        form (str): Which table form draws.
+    """
+    query = generator_query(wide_space(), WIDE)
+    lazy = weighted_table(query, 3, uniform) if form == "size table" else weighted_cost_table(query, UNIT, uniform, 3)
+    monkeypatch.setattr(Goal, "update", lambda self, rule, position: None)
+    with pytest.raises(ValueError, match="refused a clause the lazy frontier had weighed"):
+        next(lazy.stream(random.Random(0)))
+
+
+def shallowest_last_hole(goal):
+    """A computation rule other than the engine's: the shallowest open hole, the last of them among equals.
+
+    Args:
+        goal (Goal): The search node, not a success node.
+
+    Returns:
+        tuple: The position and the argument there.
+    """
+    position = max(holes(goal), key=lambda path: (-len(path), path))
+    return position, goal.subgoals[position]
+
+
+def an_expanded_position_first(goal):
+    """A rule the table forms cannot follow: an expanded position, while one is still a subgoal.
+
+    ``Goal.subgoals`` keeps an expanded position until its subtree grounds, so a rule reading it
+    directly can select one. The engine's rule never does.
+
+    Args:
+        goal (Goal): The search node, not a success node.
+
+    Returns:
+        tuple: The position and the argument there.
+    """
+    expanded = [position for position in goal.subgoals if position in goal.constructors]
+    position = expanded[0] if expanded else deepest_first_subgoal(goal)[0]
+    return position, goal.subgoals[position]
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_both_table_forms_follow_a_computation_rule_other_than_the_engines(seed):
+    """The rule decides which hole a node expands, and so the frontier's children and the stream's order.
+
+    Both table forms under the rule against the tree form under the rule, key for key; and, so that the
+    comparison says something, the rule changes the order of the stream on this space.
+
+    Args:
+        seed (int): The seed under test.
+    """
+    query = generator_query(priced_space(), PRICED)
+    by_cost = weighted_tree(query, SIZE_OF_EVERYTHING, WEIGHTED.fold, falling, subgoal_selection=shallowest_last_hole)
+    by_size = weighted_tree(query, SIZE_OF_EVERYTHING, term_size, falling, subgoal_selection=shallowest_last_hole)
+    dearest = int(max(by_cost.root.counts))
+    cost_form = weighted_cost_table(query, WEIGHTED, falling, dearest, subgoal_selection=shallowest_last_hole)
+    size_form = weighted_table(query, SIZE_OF_EVERYTHING, falling, subgoal_selection=shallowest_last_hole)
+    under_the_rule = list(cost_form.keyed_stream(random.Random(seed)))
+    assert_streams_agree(list(by_cost.keyed_stream(random.Random(seed))), under_the_rule)
+    assert_streams_agree(
+        list(by_size.keyed_stream(random.Random(seed))), list(size_form.keyed_stream(random.Random(seed)))
+    )
+    engines = list(weighted_cost_table(query, WEIGHTED, falling, dearest).keyed_stream(random.Random(seed)))
+    assert sorted(map(str, (term for _, term in engines))) == sorted(map(str, (term for _, term in under_the_rule)))
+    assert [term for _, term in engines] != [term for _, term in under_the_rule]
+
+
+@pytest.mark.parametrize("form", ["size table", "cost table"])
+def test_a_rule_that_selects_an_expanded_position_is_refused_by_name(form):
+    """A table weighs a node by its open holes, so it needs a rule that expands one.
+
+    Args:
+        form (str): Which table form draws.
+    """
+    query = generator_query(priced_space(), PRICED)
+    lazy = (
+        weighted_table(query, SIZE_OF_EVERYTHING, uniform, subgoal_selection=an_expanded_position_first)
+        if form == "size table"
+        else weighted_cost_table(query, WEIGHTED, uniform, 20, subgoal_selection=an_expanded_position_first)
+    )
+    with pytest.raises(ValueError, match="not an open hole"):
+        list(lazy.stream(random.Random(0)))
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_the_cost_form_never_pushes_a_clause_a_literal_predicate_refuses_below_the_root(seed):
+    """``grade(0)`` is refused below ``use``, and under the unit algebra it costs what the two admitted grades cost.
+
+    So a frontier that pushed it would weigh it like them and pop it: the cost form must skip it before
+    weighing, as the size form does, and stream what the tree form streams.
+
+    Args:
+        seed (int): The seed under test.
+    """
+    query = generator_query(literal_predicate_space(), USED)
+    lazy = weighted_cost_table(query, UNIT, uniform, 5)
+    eager = weighted_tree(query, 5, UNIT.fold, uniform)
+    streamed = list(lazy.keyed_stream(random.Random(seed)))
+    assert_streams_agree(list(eager.keyed_stream(random.Random(seed))), streamed)
+    assert len(streamed) == 2
