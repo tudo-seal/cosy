@@ -75,7 +75,7 @@ from cosy.search.rules import (
     fewest_arguments_first,
     uniform_random_clause_order,
 )
-from cosy.search.samplers import CostTableSampler, DepthBoundedRandomSampler, Sampler, SizeUniformSampler
+from cosy.search.samplers import CostTableSampler, DepthBoundedRandomSampler, Sampler, SizeUniformSampler, TiltSampler
 from cosy.search.sampling import (
     WeightedTable,
     WeightedTree,
@@ -84,6 +84,17 @@ from cosy.search.sampling import (
     size_uniform,
     weighted_table,
     weighted_tree,
+)
+from cosy.search.tilt import (
+    TiltedMixture,
+    TiltedSearch,
+    TiltProgram,
+    TiltTable,
+    theta_for_mean,
+    tilt_program,
+    tilt_table,
+    tilted_mixture,
+    tilted_search,
 )
 
 __all__ = [
@@ -111,6 +122,11 @@ __all__ = [
     "Sampler",
     "SizeTable",
     "SizeUniformSampler",
+    "TiltProgram",
+    "TiltSampler",
+    "TiltTable",
+    "TiltedMixture",
+    "TiltedSearch",
     "WeightedCostTable",
     "WeightedTable",
     "WeightedTree",
@@ -153,6 +169,11 @@ __all__ = [
     "size_uniform",
     "term_depth",
     "term_size",
+    "theta_for_mean",
+    "tilt_program",
+    "tilt_table",
+    "tilted_mixture",
+    "tilted_search",
     "unabstracted_clauses",
     "uniform_cost",
     "uniform_random_clause_order",

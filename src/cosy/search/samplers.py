@@ -8,7 +8,7 @@ ask. Within a bound the question changes, and what the caller sees is a stream t
 clause that reacts to "the stream gave nothing" therefore reacts to a *halting request*, never to
 an emptiness test, which in Python terms means a `StopIteration` and never an `is_empty()` oracle.
 
-Three of them, and the difference is what they promise:
+Four of them, and the difference is what they promise:
 
 * :class:`DepthBoundedRandomSampler` draws independently: one draw runs a depth-first search whose
   clause order is uniformly random, and takes the first inhabitant it yields. It promises
@@ -20,12 +20,18 @@ Three of them, and the difference is what they promise:
   distribution on its values that the caller prescribes, counted by the cost table
   (:mod:`cosy.search.cost_tables`), with a cap on the cost in the place of the size bound. It
   promises what the size-uniform sampler promises, for that distribution.
+* :class:`TiltSampler` is random search in proportion to ``e^(-theta c(t))`` for the cost of an
+  additive cost algebra (:mod:`cosy.search.tilt`): the terms of one cost value alike, the cost values
+  in proportion to their counts, tilted, with one real number per non-terminal and no table of
+  counts, over a program whose language is finite. Under unambiguity its prefixes are samples without
+  replacement as well.
 
-All three run on *any* resolution query of a program they apply to, generator or partial-term alike,
-which is what lets a mutation operator take the same sampler parameter as an initialization. The two
+All four run on *any* resolution query of a program they apply to, generator or partial-term alike,
+which is what lets a mutation operator take the same sampler parameter as an initialization. The
 counting samplers apply where their counts do: the cost table's sampler, like the size table's form,
 refuses a program in which a predicate reads a hole, and it refuses one in which clauses of cost
-zero pump without paying. For the size-uniform sampler that follows from enumerating. For the
+zero pump without paying; the tilt's refuses a predicate that reads a hole too, and a program whose
+language is infinite. For the size-uniform sampler that follows from enumerating. For the
 depth-bounded one it is a property of the engine, and one that
 had to be repaired: its randomness is the clause order and nothing else, so a query whose initial
 goals the clause order does not reach is a query it answers with a constant.
@@ -54,6 +60,7 @@ from cosy.search.sampling import (
     weighted_table,
     weighted_tree,
 )
+from cosy.search.tilt import TiltedSearch, _real_theta, tilted_search
 
 if TYPE_CHECKING:
     import random
@@ -64,7 +71,7 @@ if TYPE_CHECKING:
     from cosy.search.costs import AdditiveCostAlgebra
     from cosy.search.queries import ResolutionQuery
 
-__all__ = ["CostTableSampler", "DepthBoundedRandomSampler", "Sampler", "SizeUniformSampler"]
+__all__ = ["CostTableSampler", "DepthBoundedRandomSampler", "Sampler", "SizeUniformSampler", "TiltSampler"]
 
 
 def _uniform(_value: Any) -> float:
@@ -466,6 +473,96 @@ class CostTableSampler:
 
         Returns:
             bool: True if at least ``count`` completions cost at most the cap.
+        """
+        if count <= 0:
+            return True
+        return self._construction(query).total >= count
+
+
+class TiltSampler:
+    """Random search in proportion to ``e^(-theta c(t))`` for an additive cost, as a sampler.
+
+    The sampler of the exponential tilt (:mod:`cosy.search.tilt`): a term weighs ``e^(-theta c(t))``,
+    so the terms of one cost value are equally likely and the cost values are drawn in proportion to
+    their counts, tilted. It needs one real number per non-terminal and no table of counts, and it
+    covers finite languages. Under unambiguity the stream is a sample without replacement.
+
+    Like :class:`CostTableSampler` it keeps the last construction it built, keyed by the identity of
+    the query, and :meth:`forget` gives it back.
+
+    Attributes:
+        algebra (AdditiveCostAlgebra): The additive cost algebra whose fold is the cost.
+        theta (float): The tilt.
+        rng (random.Random): The source of randomness.
+    """
+
+    def __init__(self, algebra: AdditiveCostAlgebra[Any], theta: float, rng: random.Random) -> None:
+        """Build the sampler.
+
+        Args:
+            algebra (AdditiveCostAlgebra[Any]): The additive cost algebra, with finite real costs.
+            theta (float): The tilt, any finite real number.
+            rng (random.Random): The source of randomness.
+
+        Raises:
+            ValueError: If ``theta`` is not a finite real number.
+        """
+        self.algebra = algebra
+        self.theta = _real_theta(theta)
+        self.rng = rng
+        self._query: ResolutionQuery[Any, Any, Any] | None = None
+        self._search: TiltedSearch[Any, Any, Any] | None = None
+
+    def forget(self) -> None:
+        """Drop the cached construction.
+
+        Returns:
+            None
+        """
+        self._query = None
+        self._search = None
+
+    def _construction(self, query: ResolutionQuery[Any, Any, Any]) -> TiltedSearch[Any, Any, Any]:
+        """Return the tilted search for a query, building it at most once in a row.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Returns:
+            TiltedSearch: The construction, ready to stream from.
+        """
+        if self._search is None or self._query is not query:
+            self._search = tilted_search(query, self.algebra, self.theta)
+            self._query = query
+        return self._search
+
+    def sample(self, query: ResolutionQuery[Any, Any, Any]) -> Iterator[Tree[Any]]:
+        """Stream the completions in proportion to their tilted weights, without replacement.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Yields:
+            Tree[Any]: The completions, each exactly once under unambiguity.
+
+        Raises:
+            ValueError: Where the tilt refuses the query's program -- an infinite language, a predicate
+                that reads a hole, a cost that is not a finite real number.
+        """
+        yield from self._construction(query).stream(self.rng)
+
+    def at_least(self, query: ResolutionQuery[Any, Any, Any], count: int) -> bool:
+        """Decide whether the query has at least ``count`` completions.
+
+        Exact, from the number of terms the tilt table keeps in whole numbers. Under ambiguity the
+        numbers are of derivations, so they can only overstate.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+            count (int): The number of completions asked for.
+
+        Returns:
+            bool: True if the query has at least ``count`` completions.
         """
         if count <= 0:
             return True

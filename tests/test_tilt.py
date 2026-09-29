@@ -1,0 +1,1243 @@
+"""The exponential tilt: random search in proportion to ``e^(-theta c(t))``, and what it needs of a program.
+
+A term's tilted weight is ``e^(-theta c(t))`` for an additive cost ``c``. Below a search node the
+tilted mass factors over the holes, so one real number per non-terminal carries it: ``Z_A(theta)``,
+the sum of the tilted weights of the terms rooted at ``A``. These tests hold ``log Z`` and the tilted
+mean cost to the tree form, which counts the terms of every cost value one by one and shares none of
+the recursion, on finite spaces, at a positive, a zero and a negative ``theta``, under an algebra
+whose costs are fractions. What the tilt refuses is pinned beside it: a language with infinitely
+many terms, a cost or a ``theta`` that is not a real number, and a predicate that reads a hole.
+"""
+
+import itertools
+import math
+import random
+
+import pytest
+
+import cosy.search.samplers as samplers_module
+import cosy.search.tilt as tilt_module
+from cosy.core import Constructor, SpecificationBuilder, Synthesizer
+from cosy.core.solution_space import Goal, NonTerminalArgument, SolutionSpace
+from cosy.search import generator_query, residual_query
+from cosy.search.costs import AdditiveCostAlgebra, ComponentwiseTuples, NonNegativeReals
+from cosy.search.counting import branch_counts
+from cosy.search.partial import holes
+from cosy.search.rules import deepest_first_subgoal
+from cosy.search.samplers import Sampler, TiltSampler
+from cosy.search.sampling import weighted_tree
+from cosy.search.tilt import (
+    _log_min_over,
+    _mixture,
+    theta_for_mean,
+    tilt_program,
+    tilt_table,
+    tilted_mixture,
+    tilted_search,
+)
+from tests.search_fixtures import (
+    BOX,
+    HOLLOW,
+    NOWHERE,
+    PRICED,
+    TUPLE_SORT,
+    USED,
+    cut_space,
+    hole_tuple_space,
+    hollow_space,
+    list_space,
+    literal_predicate_space,
+    priced_space,
+)
+
+# Every term of the finite spaces below is smaller than this, so the tree form counts all of them.
+SIZE_OF_EVERYTHING = 30
+
+
+def fractional_symbol_cost(symbol):
+    """Charge a combinator a quarter per letter of its name beyond four, and a literal a half more than itself.
+
+    Some combinators cost nothing and the rest fractions, so a table indexed by whole cost values
+    could not hold these costs at all.
+
+    Args:
+        symbol: A ``Tree`` root: a combinator, or the value of a constant argument.
+
+    Returns:
+        float: The cost of the symbol.
+    """
+    name = getattr(symbol, "__name__", None)
+    if name is not None:
+        return 0.25 * max(0, len(name) - 4)
+    return 0.5 + symbol
+
+
+FRACTIONAL = AdditiveCostAlgebra(NonNegativeReals(), fractional_symbol_cost)
+UNIT = AdditiveCostAlgebra(NonNegativeReals(), lambda _symbol: 1)
+
+FINITE_SPACES = [
+    ("priced", priced_space, PRICED),
+    ("hole tuples", hole_tuple_space, TUPLE_SORT),
+    ("literal predicate", literal_predicate_space, USED),
+    ("hollow", hollow_space, HOLLOW),
+]
+THETAS_OF_THE_TABLE = [0.0, 0.4, 1.3, -0.25]
+
+
+def counts_by_cost(space, start, algebra):
+    """Count the terms rooted at a non-terminal per cost value, by the tree form, one branch at a time.
+
+    Args:
+        space: The program.
+        start: The non-terminal.
+        algebra (AdditiveCostAlgebra): The algebra whose fold is the cost.
+
+    Returns:
+        dict: The number of terms per cost value.
+    """
+    counts = branch_counts(generator_query(space, start), SIZE_OF_EVERYTHING, algebra.fold).counts
+    wider = branch_counts(generator_query(space, start), SIZE_OF_EVERYTHING + 10, algebra.fold).counts
+    assert counts == wider, (start, "the size bound must hold every term")
+    return dict(counts)
+
+
+def inhabited(space, algebra):
+    """Every non-terminal of a program with its terms per cost value, the empty ones left out.
+
+    Args:
+        space: The program.
+        algebra (AdditiveCostAlgebra): The algebra.
+
+    Returns:
+        dict: The non-empty count rows.
+    """
+    rows = {nonterminal: counts_by_cost(space, nonterminal, algebra) for nonterminal in space.nonterminals()}
+    return {nonterminal: row for nonterminal, row in rows.items() if row}
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+@pytest.mark.parametrize("theta", THETAS_OF_THE_TABLE)
+def test_log_z_is_the_tilted_sum_over_every_term(name, build, start, theta):
+    """``Z_A(theta) = sum_a N_A(a) e^(-theta a)`` for every non-terminal with a term, the counts the tree form's.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The space's start symbol, which must be among the non-terminals compared.
+        theta (float): The tilt.
+    """
+    space = build()
+    table = tilt_table(space, FRACTIONAL, theta)
+    rows = inhabited(space, FRACTIONAL)
+    assert start in rows, name
+    for nonterminal, row in rows.items():
+        expected = math.log(sum(count * math.exp(-theta * cost) for cost, count in row.items()))
+        assert math.isclose(table.of(nonterminal), expected, rel_tol=1e-12, abs_tol=1e-12), (name, nonterminal)
+
+
+def test_the_finite_spaces_say_something():
+    """The comparison above needs several non-terminals and several cost values, and each space has them."""
+    for name, build, _start in FINITE_SPACES[:2]:
+        rows = inhabited(build(), FRACTIONAL)
+        assert len(rows) >= 3, name
+        assert len({cost for row in rows.values() for cost in row}) >= 4, name
+        assert sum(min(row) < max(row) for row in rows.values()) >= 2, (
+            name,
+            "too few non-terminals whose costs differ",
+        )
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+def test_at_theta_zero_z_is_the_number_of_terms(name, build, start):
+    """No tilt: every term weighs one, so ``Z_A(0)`` counts the terms rooted at ``A``.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The space's start symbol.
+    """
+    space = build()
+    table = tilt_table(space, UNIT, 0)
+    for nonterminal, row in inhabited(space, UNIT).items():
+        assert math.isclose(table.of(nonterminal), math.log(sum(row.values())), rel_tol=1e-12), (name, nonterminal)
+    assert round(math.exp(table.of(start))) == sum(counts_by_cost(space, start, UNIT).values())
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+@pytest.mark.parametrize("theta", THETAS_OF_THE_TABLE)
+def test_the_tilted_mean_is_the_mean_cost_under_the_tilt(name, build, start, theta):
+    """``mean_A(theta) = sum_a a N_A(a) e^(-theta a) / Z_A(theta)``, which is ``-d log Z_A / d theta``.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The space's start symbol.
+        theta (float): The tilt.
+    """
+    space = build()
+    table = tilt_table(space, FRACTIONAL, theta)
+    step = 1e-5
+    above, below = tilt_table(space, FRACTIONAL, theta + step), tilt_table(space, FRACTIONAL, theta - step)
+    for nonterminal, row in inhabited(space, FRACTIONAL).items():
+        weights = {cost: count * math.exp(-theta * cost) for cost, count in row.items()}
+        expected = sum(cost * weight for cost, weight in weights.items()) / sum(weights.values())
+        assert math.isclose(table.mean_cost[nonterminal], expected, rel_tol=1e-12, abs_tol=1e-12), (name, nonterminal)
+        derivative = -(above.of(nonterminal) - below.of(nonterminal)) / (2 * step)
+        assert math.isclose(table.mean_cost[nonterminal], derivative, rel_tol=1e-6, abs_tol=1e-6), (name, nonterminal)
+    assert start in table.mean_cost
+
+
+def test_a_sort_without_a_term_has_no_mass():
+    """A hole of a non-terminal the program never mentions weighs nothing: its clause contributes nothing, the rest is unaffected."""
+    space = hollow_space()
+    table = tilt_table(space, UNIT, 0.5)
+    assert table.of(NOWHERE) == -math.inf
+    assert table.of(Constructor("NeverMentioned")) == -math.inf
+    assert NOWHERE not in table.mean_cost
+    assert math.isclose(table.of(HOLLOW), -0.5)
+    assert table.mean_cost[HOLLOW] == 1
+
+
+def test_an_infinite_language_is_refused_and_named():
+    """A cycle among non-terminals that have terms pumps without end, and the tilt covers finite languages."""
+    with pytest.raises(ValueError, match=r"infinitely many terms.*List"):
+        tilt_table(list_space(), UNIT, 2.0)
+
+
+PUMP = Constructor("Pump")
+DEAD = Constructor("Dead")
+NEVER = Constructor("Never")
+
+
+def pump_leaf() -> str:
+    """End the pump: the one term of ``Pump``.
+
+    Returns:
+        str: Its rendering.
+    """
+    return "o"
+
+
+def pump_step(inner: str) -> str:
+    """Wrap a ``Dead``, which never has a term.
+
+    Args:
+        inner (str): The filler of the hole.
+
+    Returns:
+        str: Its rendering.
+    """
+    return f"s({inner})"
+
+
+def dead_back(pump: str, never: str) -> str:
+    """Close the loop back to ``Pump``, but only beside a ``Never``, which has no clause.
+
+    Args:
+        pump (str): The filler of the ``Pump`` hole.
+        never (str): The filler of the ``Never`` hole.
+
+    Returns:
+        str: Its rendering.
+    """
+    return f"d({pump}, {never})"
+
+
+def dead_loop_space():
+    """Build ``Pump -> pump_leaf | pump_step(Dead)``, ``Dead -> dead_back(Pump, Never)``, and nothing for ``Never``.
+
+    The loop through ``Dead`` never closes, since ``Never`` has no term, so the language is the one leaf.
+
+    Returns:
+        SolutionSpace: The space, started at ``Pump``.
+    """
+    specs = {
+        pump_leaf: SpecificationBuilder().suffix(PUMP),
+        pump_step: SpecificationBuilder().argument("inner", DEAD).suffix(PUMP),
+        dead_back: SpecificationBuilder().argument("pump", PUMP).argument("never", NEVER).suffix(DEAD),
+    }
+    return Synthesizer(specs).construct_solution_space(PUMP)
+
+
+def test_a_loop_through_a_sort_without_terms_is_no_loop():
+    """What cannot be completed is pruned first, and what remains of the loop is a single leaf."""
+    table = tilt_table(dead_loop_space(), UNIT, 0.0)
+    assert math.isclose(table.of(PUMP), 0.0, abs_tol=1e-15)
+    assert table.of(DEAD) == -math.inf
+
+
+@pytest.mark.parametrize(
+    "algebra",
+    [
+        AdditiveCostAlgebra(ComponentwiseTuples(2), lambda _symbol: (1.0, 0.0)),
+        AdditiveCostAlgebra(NonNegativeReals(), lambda _symbol: True),
+    ],
+)
+def test_a_cost_that_is_not_a_real_number_is_refused(algebra):
+    """The tilt weighs a term by ``e^(-theta c)``, which needs ``c`` to be one real number, not a tuple or a truth value.
+
+    An infinite or undefined cost the domain of the reals refuses itself, before the tilt sees it.
+
+    Args:
+        algebra (AdditiveCostAlgebra): An algebra with a cost the tilt cannot use.
+    """
+    with pytest.raises(ValueError, match="takes finite real costs"):
+        tilt_table(priced_space(), algebra, 1.0)
+
+
+@pytest.mark.parametrize("theta", [math.nan, math.inf, -math.inf, "1", True, None])
+def test_theta_must_be_a_finite_real_number(theta):
+    """A tilt of infinity would weigh every term but the cheapest nothing, and a string is no tilt at all.
+
+    Args:
+        theta: A value that is not a tilt.
+    """
+    with pytest.raises(ValueError, match="theta must be a finite real number"):
+        tilt_table(priced_space(), UNIT, theta)
+
+
+def test_a_program_whose_predicate_reads_a_hole_is_refused():
+    """The holes of a clause must be filled independently, or the product over the holes overcounts."""
+    with pytest.raises(ValueError, match="reading a hole in a predicate"):
+        tilt_table(cut_space(), UNIT, 1.0)
+
+
+# ---------------------------------------------------------------------------------------------
+# The tilted search: random search in proportion to e^(-theta c(t)), weighed from the tilt table
+# ---------------------------------------------------------------------------------------------
+
+
+def assert_streams_agree(expected, actual):
+    """Assert that two keyed streams coincide term for term and key for key.
+
+    Args:
+        expected (list): The keyed stream of the oracle.
+        actual (list): The keyed stream of the tilted search.
+    """
+    assert len(expected) == len(actual)
+    assert [term for _, term in expected] == [term for _, term in actual]
+    for (expected_key, _), (actual_key, _) in zip(expected, actual, strict=True):
+        assert math.isclose(expected_key, actual_key, rel_tol=1e-12, abs_tol=1e-12)
+
+
+def tilted_tree(query, algebra, theta, **options):
+    """The tree form under ``pi(a) = N(a) e^(-theta a)``, which weighs every term ``e^(-theta c(t)) / Z``.
+
+    Args:
+        query: The query.
+        algebra (AdditiveCostAlgebra): The algebra whose fold is the cost.
+        theta (float): The tilt.
+        **options: Passed on to ``weighted_tree``, the computation rule among them.
+
+    Returns:
+        WeightedTree: The tree form, ready to stream from.
+    """
+    counts = branch_counts(query, SIZE_OF_EVERYTHING, algebra.fold, **options).counts
+    return weighted_tree(
+        query, SIZE_OF_EVERYTHING, algebra.fold, lambda cost: counts[cost] * math.exp(-theta * cost), **options
+    )
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+@pytest.mark.parametrize("theta", [0.0, 0.4, -0.25])
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_the_tilted_search_streams_what_the_tree_form_streams_under_the_tilted_counts(name, build, start, theta, seed):
+    """Every term weighs ``e^(-theta c(t))`` in both, so the streams are the same, term for term and key for key.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+        theta (float): The tilt.
+        seed (int): The seed under test.
+    """
+    query = generator_query(build(), start)
+    expected = list(tilted_tree(query, FRACTIONAL, theta).keyed_stream(random.Random(seed)))
+    actual = list(tilted_search(query, FRACTIONAL, theta).keyed_stream(random.Random(seed)))
+    assert len(actual) >= 1, name
+    assert_streams_agree(expected, actual)
+
+
+def test_a_partial_term_is_completed_as_the_tree_form_completes_it_at_every_position():
+    """The prescribed symbols are charged: at the root, the leaves, the literals and everything between."""
+    space = priced_space()
+    everything = tilted_tree(generator_query(space, PRICED), FRACTIONAL, 0.0)
+    parent = max(everything.stream(random.Random(5)), key=lambda term: (term.depth, str(term)))
+    positions = sorted(parent.positions())
+    assert len(positions) >= 4, "a shallow parent would leave the deep positions untested"
+    assert any(not callable(parent.subtree_at(position).root) for position in positions), "no literal leaf"
+    for position in positions:
+        query = residual_query(space, PRICED, parent, position)
+        assert_streams_agree(
+            list(tilted_tree(query, FRACTIONAL, 0.7).keyed_stream(random.Random(11))),
+            list(tilted_search(query, FRACTIONAL, 0.7).keyed_stream(random.Random(11))),
+        )
+
+
+def shallowest_last_hole(goal):
+    """A computation rule other than the engine's: the shallowest open hole, the last of them among equals.
+
+    Args:
+        goal (Goal): The search node, not a success node.
+
+    Returns:
+        tuple: The position and the argument there.
+    """
+    position = max(holes(goal), key=lambda path: (-len(path), path))
+    return position, goal.subgoals[position]
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_the_tilted_search_follows_a_computation_rule_other_than_the_engines(seed):
+    """The rule decides the frontier's children and so the order of the stream, in both constructions alike.
+
+    Args:
+        seed (int): The seed under test.
+    """
+    query = generator_query(priced_space(), PRICED)
+    under_the_rule = list(
+        tilted_search(query, FRACTIONAL, 0.4, subgoal_selection=shallowest_last_hole).keyed_stream(random.Random(seed))
+    )
+    expected = list(
+        tilted_tree(query, FRACTIONAL, 0.4, subgoal_selection=shallowest_last_hole).keyed_stream(random.Random(seed))
+    )
+    assert_streams_agree(expected, under_the_rule)
+    engines = list(tilted_search(query, FRACTIONAL, 0.4).keyed_stream(random.Random(seed)))
+    assert sorted(map(str, (term for _, term in engines))) == sorted(map(str, (term for _, term in under_the_rule)))
+    assert [term for _, term in engines] != [term for _, term in under_the_rule]
+
+
+def an_expanded_position_first(goal):
+    """A rule the tilted search cannot follow: an expanded position, while one is still a subgoal.
+
+    Args:
+        goal (Goal): The search node, not a success node.
+
+    Returns:
+        tuple: The position and the argument there.
+    """
+    expanded = [position for position in goal.subgoals if position in goal.constructors]
+    position = expanded[0] if expanded else deepest_first_subgoal(goal)[0]
+    return position, goal.subgoals[position]
+
+
+def test_a_rule_that_selects_an_expanded_position_is_refused_by_name():
+    """A node is weighed by its open holes, so the rule must expand one."""
+    search = tilted_search(
+        generator_query(priced_space(), PRICED), FRACTIONAL, 0.4, subgoal_selection=an_expanded_position_first
+    )
+    with pytest.raises(ValueError, match="not an open hole"):
+        list(search.stream(random.Random(0)))
+
+
+WIDE = Constructor("Wide")
+WIDE_LEAF = Constructor("WideLeaf")
+WIDTH = 30
+
+
+def _wide_wrap(index):
+    """Build the ``index``-th clause ``Wide -> wrap_index(WideLeaf)``.
+
+    Args:
+        index (int): Which of the thirty clauses.
+
+    Returns:
+        Callable: The combinator, named after its index.
+    """
+
+    def wrap(inner: str) -> str:
+        return f"w{index}({inner})"
+
+    wrap.__name__ = f"wrap_{index}"
+    return wrap
+
+
+def _wide_leaf(index):
+    """Build the ``index``-th leaf of ``WideLeaf``.
+
+    Args:
+        index (int): Which of the thirty leaves.
+
+    Returns:
+        Callable: The combinator, named after its index.
+    """
+
+    def leaf() -> str:
+        return f"v{index}"
+
+    leaf.__name__ = f"leaf_{index}"
+    return leaf
+
+
+def wide_space():
+    """Build a space of thirty clauses over thirty leaves: every expansion has thirty children.
+
+    Returns:
+        SolutionSpace: The space, started at ``Wide``.
+    """
+    specs = {_wide_wrap(i): SpecificationBuilder().argument("inner", WIDE_LEAF).suffix(WIDE) for i in range(WIDTH)}
+    specs |= {_wide_leaf(i): SpecificationBuilder().suffix(WIDE_LEAF) for i in range(WIDTH)}
+    return Synthesizer(specs).construct_solution_space(WIDE)
+
+
+def test_a_child_is_built_when_it_is_popped_and_not_before(monkeypatch):
+    """Thirty children per expansion, and the first draw calls ``Goal.update`` once, for the grandchild it pops.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    search = tilted_search(generator_query(wide_space(), WIDE), UNIT, 0.0)
+    calls = []
+    update = Goal.update
+
+    def counting(self, rule, position):
+        calls.append(rule.terminal)
+        return update(self, rule, position)
+
+    monkeypatch.setattr(Goal, "update", counting)
+    assert next(search.stream(random.Random(0))) is not None
+    assert len(calls) <= 2, len(calls)
+
+
+def test_a_child_the_engine_refuses_when_it_is_built_is_an_error_not_a_skip(monkeypatch):
+    """The weight a child was pushed with assumed the engine applies its clause; if it does not, say so.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    search = tilted_search(generator_query(wide_space(), WIDE), UNIT, 0.0)
+    monkeypatch.setattr(Goal, "update", lambda self, rule, position: None)
+    with pytest.raises(ValueError, match="refused a clause the lazy frontier had weighed"):
+        next(search.stream(random.Random(0)))
+
+
+def test_a_table_handed_in_must_be_for_the_same_program_algebra_and_theta():
+    """The table's numbers weigh the search's nodes, so they must have been computed for exactly this search."""
+    space = priced_space()
+    query = generator_query(space, PRICED)
+    table = tilt_table(space, FRACTIONAL, 0.4)
+    assert tilted_search(query, FRACTIONAL, 0.4, table=table).table is table
+    with pytest.raises(ValueError, match="another program"):
+        tilted_search(generator_query(priced_space(), PRICED), FRACTIONAL, 0.4, table=table)
+    with pytest.raises(ValueError, match="another algebra"):
+        tilted_search(query, UNIT, 0.4, table=table)
+    with pytest.raises(ValueError, match="another theta"):
+        tilted_search(query, FRACTIONAL, 0.5, table=table)
+
+
+def test_a_query_without_a_term_streams_nothing():
+    """A start symbol without a term has no tilted mass, and random search has nothing to draw."""
+    search = tilted_search(generator_query(hollow_space(), NOWHERE), UNIT, 0.3)
+    assert list(search.stream(random.Random(0))) == []
+    assert search.total == 0
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+def test_the_sampler_streams_the_tilted_search_and_counts_the_terms_exactly(name, build, start):
+    """Behind the sampler protocol: the same stream, and ``at_least`` from the exact number of terms.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+    """
+    query = generator_query(build(), start)
+    sampler = TiltSampler(FRACTIONAL, 0.4, random.Random(3))
+    assert isinstance(sampler, Sampler)
+    streamed = list(sampler.sample(query))
+    assert streamed == list(tilted_search(query, FRACTIONAL, 0.4).stream(random.Random(3))), name
+    number = sum(counts_by_cost(query.solution_space, start, FRACTIONAL).values())
+    assert len(streamed) == number, name
+    assert sampler.at_least(query, number)
+    assert not sampler.at_least(query, number + 1)
+    assert sampler.at_least(query, 0)
+
+
+# ---------------------------------------------------------------------------------------------
+# A theta for a target mean: the tilted mean of the query's terms falls as theta grows
+# ---------------------------------------------------------------------------------------------
+
+
+def exact_tilted_mean(query, algebra, theta):
+    """The tilted mean cost of a query's terms, from the tree form's counts per cost value.
+
+    Args:
+        query: The query.
+        algebra (AdditiveCostAlgebra): The algebra whose fold is the cost.
+        theta (float): The tilt.
+
+    Returns:
+        float: ``sum_a a N(a) e^(-theta a) / sum_a N(a) e^(-theta a)``.
+    """
+    counts = branch_counts(query, SIZE_OF_EVERYTHING, algebra.fold).counts
+    weights = {cost: count * math.exp(-theta * cost) for cost, count in counts.items()}
+    return sum(cost * weight for cost, weight in weights.items()) / sum(weights.values())
+
+
+@pytest.mark.parametrize("theta", [0.0, 0.4, -0.25])
+def test_the_query_mean_is_the_tilted_mean_of_its_terms(theta):
+    """For the whole language and at every position of a partial term, the prescribed symbols included.
+
+    Args:
+        theta (float): The tilt.
+    """
+    space = priced_space()
+    query = generator_query(space, PRICED)
+    assert math.isclose(
+        tilted_search(query, FRACTIONAL, theta).mean_cost, exact_tilted_mean(query, FRACTIONAL, theta), rel_tol=1e-12
+    )
+    parent = next(tilted_search(query, FRACTIONAL, 0.0).stream(random.Random(2)))
+    for position in sorted(parent.positions()):
+        residual = residual_query(space, PRICED, parent, position)
+        assert math.isclose(
+            tilted_search(residual, FRACTIONAL, theta).mean_cost,
+            exact_tilted_mean(residual, FRACTIONAL, theta),
+            rel_tol=1e-12,
+        ), position
+
+
+def test_theta_for_a_target_mean_hits_it_and_falls_as_the_target_rises():
+    """Targets across the realized costs, each hit to the tolerance, and a dearer target asks for a smaller theta."""
+    query = generator_query(priced_space(), PRICED)
+    costs = sorted(branch_counts(query, SIZE_OF_EVERYTHING, FRACTIONAL.fold).counts)
+    assert len(costs) >= 4
+    targets = [costs[0] + (costs[-1] - costs[0]) * share for share in (0.1, 0.35, 0.6, 0.9)]
+    thetas = [theta_for_mean(query, FRACTIONAL, target) for target in targets]
+    for target, theta in zip(targets, thetas, strict=True):
+        # the tolerance is a share of the span of the costs
+        assert abs(exact_tilted_mean(query, FRACTIONAL, theta) - target) <= 1e-9 * (costs[-1] - costs[0]), target
+    assert thetas == sorted(thetas, reverse=True)
+    assert len(set(thetas)) == len(thetas)
+
+
+def test_the_uniform_mean_asks_for_no_tilt():
+    """The mean of all terms alike is the mean at theta zero."""
+    query = generator_query(priced_space(), PRICED)
+    uniform_mean = exact_tilted_mean(query, FRACTIONAL, 0.0)
+    assert math.isclose(theta_for_mean(query, FRACTIONAL, uniform_mean), 0.0, abs_tol=1e-9)
+
+
+@pytest.mark.parametrize("side", ["below", "above"])
+def test_a_target_outside_the_realized_costs_is_refused(side):
+    """No tilt moves the mean past the cheapest or the dearest term.
+
+    Args:
+        side (str): Which side of the realized costs the target lies on.
+    """
+    query = generator_query(priced_space(), PRICED)
+    costs = sorted(branch_counts(query, SIZE_OF_EVERYTHING, FRACTIONAL.fold).counts)
+    target = costs[0] - 0.5 if side == "below" else costs[-1] + 0.5
+    with pytest.raises(ValueError, match="outside the costs"):
+        theta_for_mean(query, FRACTIONAL, target)
+
+
+# ---------------------------------------------------------------------------------------------
+# A target on cost bins: the counts per bin estimated from a mixture of tilts, and rejection to the target
+# ---------------------------------------------------------------------------------------------
+
+
+def indexed_symbol_cost(symbol):
+    """Charge ``wrap_i`` and ``leaf_i`` a tenth of their index, so that the wide space's 900 terms spread over 59 costs.
+
+    Args:
+        symbol: A combinator of the wide space.
+
+    Returns:
+        float: A tenth of its index.
+    """
+    return int(symbol.__name__.rsplit("_", 1)[1]) / 10
+
+
+INDEXED = AdditiveCostAlgebra(NonNegativeReals(), indexed_symbol_cost)
+# The wide space's costs run from 0 to 5.8 in tenths, their counts a triangle; four bins over them, a target
+# that is not the counts' own shape, and tilts that lean to either side.
+EDGES = (0.0, 1.45, 2.95, 4.45, 5.95)
+TARGET = (0.4, 0.1, 0.2, 0.3)
+THETAS = (-1.0, 0.0, 1.0)
+
+
+def exact_bin_counts(query, algebra, edges):
+    """The number of a query's terms per bin, from the tree form.
+
+    Args:
+        query: The query.
+        algebra (AdditiveCostAlgebra): The algebra whose fold is the cost.
+        edges (Sequence[float]): The bins' boundaries.
+
+    Returns:
+        list: The counts per bin.
+    """
+    counts = [0] * (len(edges) - 1)
+    for cost, count in branch_counts(query, SIZE_OF_EVERYTHING, algebra.fold).counts.items():
+        for index in range(len(edges) - 1):
+            if edges[index] <= cost < edges[index + 1]:
+                counts[index] += count
+    return counts
+
+
+def all_terms(query, algebra):
+    """Every term of a finite query, from a full stream of the tilted search at no tilt.
+
+    Args:
+        query: The query.
+        algebra (AdditiveCostAlgebra): The algebra.
+
+    Returns:
+        list: The terms.
+    """
+    return list(tilted_search(query, algebra, 0.0).stream(random.Random(0)))
+
+
+def test_the_bins_say_something():
+    """Every bin holds dozens of terms, so that the estimate, the bound and the uniformity within a bin all say something."""
+    counts = exact_bin_counts(generator_query(wide_space(), WIDE), INDEXED, EDGES)
+    assert sum(counts) == WIDTH * WIDTH
+    assert all(count >= 50 for count in counts), counts
+
+
+def test_the_estimate_is_unbiased_and_its_error_is_its_spread():
+    """Over many pilots the mean estimate per bin is the exact count, and the reported error is the estimates' spread."""
+    query = generator_query(wide_space(), WIDE)
+    exact = exact_bin_counts(query, INDEXED, EDGES)
+    repeats = 200
+    estimates = [[] for _ in exact]
+    reported = [[] for _ in exact]
+    for seed in range(repeats):
+        mixture = tilted_mixture(query, INDEXED, THETAS, EDGES, TARGET, 12, random.Random(seed))
+        for index in range(len(exact)):
+            estimates[index].append(math.exp(mixture.log_estimate[index]))
+            reported[index].append(mixture.relative_error[index])
+    ratios = []
+    for index, count in enumerate(exact):
+        mean = sum(estimates[index]) / repeats
+        spread = math.sqrt(sum((value - mean) ** 2 for value in estimates[index]) / (repeats - 1))
+        assert abs(mean - count) <= 4 * spread / math.sqrt(repeats), (index, mean, count)
+        typical = sorted(reported[index])[repeats // 2]
+        ratios.append(typical * count / spread)
+    # The reported error over the estimates' actual spread: about one per bin, and one on average across the
+    # bins, where an error that forgot the draws missing a bin would read about 0.85.
+    assert all(0.75 <= ratio <= 1.35 for ratio in ratios), ratios
+    assert 0.93 <= sum(ratios) / len(ratios) <= 1.15, ratios
+
+
+def test_a_cost_on_an_edge_belongs_to_the_bin_the_edge_opens():
+    """Bin ``i`` holds ``[edges[i], edges[i + 1])``: an edge opens its bin, and the last edge closes the last one."""
+    query = generator_query(wide_space(), WIDE)
+    mixture = tilted_mixture(query, INDEXED, THETAS, (0.0, 1.5, 3.0, 5.9), (0.3, 0.3, 0.4), 6, random.Random(8))
+    assert [mixture.bin_of(cost) for cost in (0.0, 1.4, 1.5, 2.9, 3.0, 5.8)] == [0, 0, 1, 1, 2, 2]
+    assert mixture.bin_of(-0.1) is None
+    assert mixture.bin_of(5.9) is None
+
+
+def exact_mixture(query, algebra, thetas, edges, target):
+    """The mixture with the exact counts per bin in place of an estimate, so that the rejection is tested alone.
+
+    Args:
+        query: The query.
+        algebra (AdditiveCostAlgebra): The algebra.
+        thetas (Sequence[float]): The tilts.
+        edges (Sequence[float]): The bins' boundaries.
+        target (Sequence[float]): The target's mass per bin.
+
+    Returns:
+        TiltedMixture: The construction.
+    """
+    counts = exact_bin_counts(query, algebra, edges)
+    searches = [tilted_search(query, algebra, theta) for theta in thetas]
+    log_counts = [math.log(count) if count else -math.inf for count in counts]
+    return _mixture(searches, edges, target, log_counts, [0.0] * len(counts), 2)
+
+
+def test_every_term_in_a_bin_with_a_target_is_under_the_bound():
+    """Rejection is exact only if the ratio of the target to the mixture never exceeds the bound, on any term."""
+    query = generator_query(wide_space(), WIDE)
+    terms = all_terms(query, INDEXED)
+    for mixture in (
+        exact_mixture(query, INDEXED, THETAS, EDGES, TARGET),
+        tilted_mixture(query, INDEXED, THETAS, EDGES, TARGET, 12, random.Random(1)),
+        exact_mixture(query, INDEXED, (1.0,), EDGES, TARGET),
+        exact_mixture(query, INDEXED, (-1.0,), EDGES, TARGET),
+    ):
+        ratios = [mixture.log_acceptance(INDEXED.fold(term)) for term in terms]
+        assert max(ratios) <= 1e-12
+        assert max(ratios) > math.log(0.5), "a bound far above every ratio would accept far less than it could"
+
+
+def test_with_exact_counts_the_bins_follow_the_target_and_a_bins_terms_are_alike():
+    """The first term of 6 000 streams: the bins in proportion to the target, and the terms of a bin equally often."""
+    query = generator_query(wide_space(), WIDE)
+    mixture = exact_mixture(query, INDEXED, THETAS, EDGES, TARGET)
+    draws = 6000
+    by_bin = [0] * len(TARGET)
+    by_term = {}
+    for seed in range(draws):
+        term = next(mixture.stream(random.Random(seed)))
+        by_bin[mixture.bin_of(INDEXED.fold(term))] += 1
+        by_term[term] = by_term.get(term, 0) + 1
+    chi_square = sum(
+        (observed - draws * mass) ** 2 / (draws * mass) for observed, mass in zip(by_bin, TARGET, strict=True)
+    )
+    assert chi_square < 16.27, (by_bin, chi_square)  # the 0.999 quantile of chi-square with three degrees of freedom
+    terms = all_terms(query, INDEXED)
+    for index in range(len(TARGET)):
+        members = [term for term in terms if mixture.bin_of(INDEXED.fold(term)) == index]
+        expected = by_bin[index] / len(members)
+        within = sum((by_term.get(term, 0) - expected) ** 2 / expected for term in members)
+        freedom = len(members) - 1
+        # above the 0.999 quantile of chi-square with this many degrees of freedom, by its normal approximation
+        assert within < freedom + 3.1 * math.sqrt(2 * freedom), (index, within, freedom)
+
+
+def test_the_stream_streams_each_term_of_the_target_bins_once_and_then_ends():
+    """A small language is exhausted: every term in a bin with a target, once, and nothing outside the bins."""
+    query = generator_query(hole_tuple_space(), TUPLE_SORT)
+    mixture = tilted_mixture(query, FRACTIONAL, (-0.5, 0.5), (2.2, 2.6, 3.1), (0.5, 0.5), 12, random.Random(4))
+    streamed = list(mixture.stream(random.Random(5)))
+    inside = [term for term in all_terms(query, FRACTIONAL) if 2.2 <= FRACTIONAL.fold(term) < 3.1]
+    assert len(streamed) == len(set(streamed)) == len(inside) >= 3
+    assert set(streamed) == set(inside)
+
+
+def test_a_bin_no_pilot_draw_reaches_drops_its_target_and_says_so():
+    """A bin beyond the dearest term has no estimate: its share of the target is reported, and nothing is drawn there."""
+    query = generator_query(wide_space(), WIDE)
+    mixture = tilted_mixture(query, INDEXED, THETAS, (0.0, 5.95, 9.0), (0.75, 0.25), 12, random.Random(6))
+    assert mixture.log_estimate[1] == -math.inf
+    assert mixture.relative_error[1] == math.inf
+    assert math.isclose(mixture.missing_target, 0.25)
+    assert mixture.target == (1.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("thetas", "edges", "target", "pilot", "match"),
+    [
+        ((), EDGES, TARGET, 12, "at least one tilt"),
+        ((0.1, 0.1), EDGES, TARGET, 12, "distinct"),
+        (THETAS, (3.0,), (), 12, "strictly ascending"),
+        (THETAS, (3.0, 3.0, 5.0), (0.5, 0.5), 12, "strictly ascending"),
+        (THETAS, EDGES, TARGET[:3], 12, "one nonnegative mass per bin"),
+        (THETAS, EDGES, (0.5, -0.1, 0.3, 0.3), 12, "one nonnegative mass per bin"),
+        (THETAS, EDGES, (0.0, 0.0, 0.0, 0.0), 12, "one nonnegative mass per bin"),
+        (THETAS, EDGES, TARGET, 1, "at least two"),
+        (THETAS, EDGES, TARGET, 2.5, "at least two"),
+        (THETAS, (100.0, 200.0), (1.0,), 12, "no pilot draw fell in a bin with a target"),
+    ],
+)
+def test_what_the_mixture_refuses(thetas, edges, target, pilot, match):
+    """Tilts that do not mix, bins that do not order, a target that is no target, a pilot too small, a target out of reach.
+
+    Args:
+        thetas (tuple): The tilts.
+        edges (tuple): The bins' boundaries.
+        target (tuple): The target per bin.
+        pilot: The pilot size.
+        match (str): The refusal's wording.
+    """
+    with pytest.raises(ValueError, match=match):
+        tilted_mixture(generator_query(wide_space(), WIDE), INDEXED, thetas, edges, target, pilot, random.Random(0))
+
+
+# ---------------------------------------------------------------------------------------------
+# A prepared program: what does not depend on theta, computed once and shared by every theta
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+def test_a_prepared_program_gives_the_same_tables(name, build, start):
+    """One preparation, a table per theta: each the table computed from scratch.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The space's start symbol.
+    """
+    space = build()
+    program = tilt_program(space, FRACTIONAL)
+    for theta in THETAS_OF_THE_TABLE:
+        prepared, fresh = program.table(theta), tilt_table(space, FRACTIONAL, theta)
+        assert dict(prepared.log_z) == dict(fresh.log_z), (name, theta)
+        assert dict(prepared.mean_cost) == dict(fresh.mean_cost), (name, theta)
+        assert dict(prepared.counts) == dict(fresh.counts), (name, theta)
+    assert program.counts[start] > 0
+
+
+def test_a_prepared_program_is_used_and_not_prepared_again(monkeypatch):
+    """The search for a theta and the mixture read the program handed in, and never prepare one of their own."""
+    query = generator_query(wide_space(), WIDE)
+    program = tilt_program(query.solution_space, INDEXED)
+    monkeypatch.setattr(tilt_module, "tilt_program", lambda *_args, **_kwargs: pytest.fail("prepared again"))
+    theta = theta_for_mean(query, INDEXED, 2.0, program=program)
+    # the tolerance is a share of the span of the costs, 0 to 5.8 here
+    assert abs(tilted_search(query, INDEXED, theta, table=program.table(theta)).mean_cost - 2.0) <= 1e-9 * 5.8
+    mixture = tilted_mixture(query, INDEXED, THETAS, EDGES, TARGET, 4, random.Random(0), program=program)
+    assert all(search.table.counts is program.counts for search in mixture.searches)
+
+
+def test_a_program_prepared_for_another_program_or_algebra_is_refused():
+    """The prepared costs and holes are the program's and the algebra's, and read against another they weigh something else."""
+    query = generator_query(wide_space(), WIDE)
+    other_space = tilt_program(wide_space(), INDEXED)
+    other_algebra = tilt_program(query.solution_space, UNIT)
+    with pytest.raises(ValueError, match="another program"):
+        theta_for_mean(query, INDEXED, 2.0, program=other_space)
+    with pytest.raises(ValueError, match="another algebra"):
+        tilted_mixture(query, INDEXED, THETAS, EDGES, TARGET, 4, random.Random(0), program=other_algebra)
+
+
+# ---------------------------------------------------------------------------------------------
+# What the first review of the tilt found: a cycle of two, a repeated hole, a query without a term, the sampler's
+# cache, a target the mean approaches slowly, the tolerance on small costs, and a theta too large for the costs
+# ---------------------------------------------------------------------------------------------
+
+
+def space_of(rules):
+    """Build a program directly from its clauses, with strings for non-terminals and terminals.
+
+    Args:
+        rules (list): ``(head, terminal, holes)`` triples.
+
+    Returns:
+        SolutionSpace: The program.
+    """
+    space = SolutionSpace()
+    for head, terminal, hole_types in rules:
+        space.add_rule(head, terminal, tuple(NonTerminalArgument(None, hole) for hole in hole_types), ())
+    return space
+
+
+def priced(costs):
+    """An algebra charging each terminal its entry.
+
+    Args:
+        costs (dict): The cost per terminal.
+
+    Returns:
+        AdditiveCostAlgebra: The algebra.
+    """
+    return AdditiveCostAlgebra(NonNegativeReals(), costs.__getitem__)
+
+
+def test_a_cycle_of_two_non_terminals_is_refused_and_named():
+    """``A -> a | f(B)``, ``B -> g(A)``: both have terms and each reads the other, so the language is infinite."""
+    space = space_of([("A", "a", ()), ("A", "f", ("B",)), ("B", "g", ("A",))])
+    with pytest.raises(ValueError, match="infinitely many terms: A, B lie on a cycle"):
+        tilt_table(space, priced({"a": 1, "f": 1, "g": 1}), 0.5)
+
+
+def test_a_clause_whose_holes_repeat_a_non_terminal_counts_every_pair():
+    """``P -> pair(B, B)`` is ``P``'s only clause: it completes once ``B`` has a term, and counts every pair of them."""
+    space = space_of([("P", "pair", ("B", "B")), ("B", "b1", ()), ("B", "b2", ())])
+    algebra = priced({"pair": 1.0, "b1": 0.5, "b2": 2.0})
+    table = tilt_table(space, algebra, 0.3)
+    assert table.counts["P"] == 4
+    expected = -0.3 * 1.0 + 2 * math.log(math.exp(-0.3 * 0.5) + math.exp(-0.3 * 2.0))
+    assert math.isclose(table.of("P"), expected, rel_tol=1e-12)
+
+
+def test_a_query_without_a_term_has_no_mean_and_a_dead_clause_changes_no_mean():
+    """No term, no mean; and a clause whose hole has no term leaves the query's mean to its other clauses."""
+    assert math.isnan(tilted_search(generator_query(hollow_space(), NOWHERE), UNIT, 0.3).mean_cost)
+    assert tilted_search(generator_query(hollow_space(), HOLLOW), UNIT, 0.3).mean_cost == 1.0
+
+
+def test_the_sampler_builds_anew_for_another_query_and_after_forget(monkeypatch):
+    """The construction is kept for one query at a time, and ``forget`` drops it.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    built = []
+    original = samplers_module.tilted_search
+    monkeypatch.setattr(
+        samplers_module, "tilted_search", lambda *args, **kwargs: built.append(args[0]) or original(*args, **kwargs)
+    )
+    sampler = TiltSampler(UNIT, 0.0, random.Random(0))
+    first, second = generator_query(hole_tuple_space(), TUPLE_SORT), generator_query(priced_space(), PRICED)
+    assert len(list(sampler.sample(first))) == 6
+    assert sampler.at_least(first, 6)
+    assert len(built) == 1
+    assert len(list(sampler.sample(second))) == sum(counts_by_cost(second.solution_space, PRICED, UNIT).values())
+    assert built == [first, second]
+    sampler.forget()
+    assert sampler.at_least(second, 1)
+    assert built == [first, second, second]
+
+
+def test_what_the_tilted_search_and_its_sampler_refuse():
+    """A predicate that reads a hole, and a theta that is no number."""
+    with pytest.raises(ValueError, match="reading a hole in a predicate"):
+        tilted_search(generator_query(cut_space(), BOX), UNIT, 0.5)
+    with pytest.raises(ValueError, match="theta must be a finite real number"):
+        TiltSampler(UNIT, math.nan, random.Random(0))
+
+
+@pytest.mark.parametrize(
+    ("rules", "costs", "target", "span"),
+    [
+        # two terms a cost apart, far from zero: the mean moves by little per step
+        ([("S", "s", ("B",)), ("B", "x", ()), ("B", "y", ())], {"s": 100_000, "x": 0, "y": 1}, 100_000.25, 1.0),
+        # one term of cost 0 beside 100^6 of cost 10: the mean stays near 10 until theta is large
+        (
+            [("S", "z", ()), ("S", "big", tuple("B" for _ in range(6)))] + [("B", f"b{i}", ()) for i in range(100)],
+            {"z": 0, "big": 10} | {f"b{i}": 0 for i in range(100)},
+            5.0,
+            10.0,
+        ),
+        # costs of a ten-thousandth: the tolerance is a share of their span, not of one
+        ([("S", "p", ()), ("S", "q", ())], {"p": 0.0, "q": 1e-4}, 2.5e-5, 1e-4),
+    ],
+)
+def test_theta_for_mean_meets_targets_the_mean_approaches_slowly(rules, costs, target, span):
+    """A target strictly between the cheapest and the dearest cost is met, however slowly the mean moves towards it.
+
+    Args:
+        rules (list): The program's clauses.
+        costs (dict): The terminals' costs.
+        target (float): The mean wanted.
+        span (float): The dearest term's cost less the cheapest's, read off the costs by hand: the second
+            space has a trillion terms, more than the tree form can count one by one.
+    """
+    query = generator_query(space_of(rules), "S")
+    algebra = priced(costs)
+    theta = theta_for_mean(query, algebra, target)
+    assert abs(tilted_search(query, algebra, theta).mean_cost - target) <= 1e-9 * span
+
+
+def test_a_language_of_one_cost_has_that_mean_at_every_theta_and_no_other():
+    """Every term costs the same: its cost is the mean at no tilt, and any other target is out of reach."""
+    query = generator_query(space_of([("S", "p", ()), ("S", "q", ())]), "S")
+    algebra = priced({"p": 3.0, "q": 3.0})
+    assert theta_for_mean(query, algebra, 3.0) == 0.0
+    with pytest.raises(ValueError, match="outside the costs"):
+        theta_for_mean(query, algebra, 3.5)
+
+
+def test_theta_for_mean_stops_at_its_step_bound():
+    """A search that needs more tables than it may compute says so."""
+    query = generator_query(priced_space(), PRICED)
+    costs = sorted(branch_counts(query, SIZE_OF_EVERYTHING, FRACTIONAL.fold).counts)
+    with pytest.raises(ValueError, match="within 2 steps"):
+        theta_for_mean(query, FRACTIONAL, costs[0] + 0.01 * (costs[-1] - costs[0]), max_steps=2)
+
+
+@pytest.mark.parametrize("theta", [1.7e308, -1.7e308])
+def test_a_theta_too_large_for_the_costs_is_refused_by_name(theta):
+    """``-theta c`` beyond the range of floating point for every term would weigh them all nothing, or nothing sensible.
+
+    Where some term's product stays in range, the others weigh zero, which is their weight rounded, and that is no error.
+
+    Args:
+        theta (float): A tilt whose products with every cost overflow.
+    """
+    space = space_of([("S", "s", ("B",)), ("B", "x", ()), ("B", "y", ())])
+    algebra = priced({"s": 5.0, "x": 0.0, "y": 5.0})
+    with pytest.raises(ValueError, match="too large in magnitude for the costs"):
+        tilt_table(space, algebra, theta)
+    rounded = tilt_table(space_of([("S", "p", ()), ("S", "q", ())]), priced({"p": 0.0, "q": 5.0}), abs(theta))
+    assert rounded.of("S") == 0.0
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+def test_the_cheapest_and_the_dearest_cost_are_the_tree_forms(name, build, start):
+    """What the range refusal and the first step of the search for a theta rest on, per non-terminal.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The space's start symbol.
+    """
+    space = build()
+    program = tilt_program(space, FRACTIONAL)
+    rows = inhabited(space, FRACTIONAL)
+    assert start in rows
+    assert set(program.cheapest) == set(rows) == set(program.dearest), name
+    for nonterminal, row in rows.items():
+        assert program.cheapest[nonterminal] == min(row), (name, nonterminal)
+        assert program.dearest[nonterminal] == max(row), (name, nonterminal)
+
+
+# ---------------------------------------------------------------------------------------------
+# What the second review found: the bound read over costs no term has, its minimum on wide bins, a stream that
+# never ends, the mean under a large shared cost, an empty query, and the tests that let mutants through
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "where"),
+    [
+        (-3.0, 3.0, "interior"),
+        (1.0, 3.0, "low end"),
+        (-3.0, -1.0, "high end"),
+        (0.2, 0.2, "one point"),
+        (-1e40, 1e40, "vast"),
+    ],
+)
+def test_the_least_log_density_on_an_interval_is_found_wherever_it_lies(low, high, where):
+    """``log(a e^c + b e^(-c))`` is least at ``c* = log(b / a) / 2``, where it is ``log(2 sqrt(ab))``.
+
+    Args:
+        low (float): The interval's lower end.
+        high (float): The interval's upper end.
+        where (str): Where the least value lies, for the test id.
+    """
+    a, b = 0.3, 3.0
+    least_at = math.log(b / a) / 2
+
+    def log_density(cost):
+        return max(cost, -cost) + math.log(
+            a * math.exp(cost - max(cost, -cost)) + b * math.exp(-cost - max(cost, -cost))
+        )
+
+    def slope(cost):
+        return math.tanh(cost - least_at)
+
+    expected = log_density(min(max(least_at, low), high))
+    assert math.isclose(_log_min_over(log_density, slope, low, high), expected, rel_tol=1e-12, abs_tol=1e-12), where
+
+
+def test_every_term_is_under_the_bound_and_the_bound_is_not_loose_in_random_mixtures():
+    """Tilts of either sign, bins cut anywhere, some far past the costs any term has: no ratio above the bound,
+    and in every configuration some term within 0.3 nats of it."""
+    query = generator_query(wide_space(), WIDE)
+    terms = all_terms(query, INDEXED)
+    costs = [INDEXED.fold(term) for term in terms]
+    rng = random.Random(42)
+    checked = 0
+    for _ in range(60):
+        thetas = tuple(sorted(rng.sample([-2.0, -1.0, -0.5, 0.5, 1.0, 2.0], rng.randint(1, 3))))
+        edges = sorted(rng.sample([tenth / 10 for tenth in range(-30, 100)], rng.randint(3, 6)))
+        target = [rng.random() + 0.05 for _ in range(len(edges) - 1)]
+        counts = exact_bin_counts(query, INDEXED, edges)
+        if not any(counts):
+            continue
+        searches = [tilted_search(query, INDEXED, theta) for theta in thetas]
+        log_counts = [math.log(count) if count else -math.inf for count in counts]
+        mixture = _mixture(searches, edges, target, log_counts, [0.0] * len(counts), 2)
+        ratios = [mixture.log_acceptance(cost) for cost in costs]
+        assert max(ratios) <= 1e-12, (thetas, edges)
+        assert max(ratios) >= -0.3, (thetas, edges, max(ratios))
+        checked += 1
+    assert checked >= 40
+
+
+def test_a_bin_reaching_far_past_the_dearest_term_leaves_the_stream_drawing():
+    """The last bin open to a hundred, the dearest term at 5.8: the bound reads the costs terms have, and accepts."""
+    query = generator_query(wide_space(), WIDE)
+    mixture = tilted_mixture(query, INDEXED, (0.5, 1.0), (0.0, 2.0, 100.0), (0.5, 0.5), 30, random.Random(0))
+    near = tilted_mixture(query, INDEXED, (0.5, 1.0), (0.0, 2.0, 5.95), (0.5, 0.5), 30, random.Random(0))
+    assert mixture.log_bound == near.log_bound
+    assert len(list(mixture.stream(random.Random(1), max_draws=3000))) >= 50
+
+
+def test_the_error_is_its_spread_with_three_draws_a_tilt():
+    """The variance of a tilt's draws divides by one less than their number, which three draws tell from dividing by it."""
+    query = generator_query(wide_space(), WIDE)
+    exact = exact_bin_counts(query, INDEXED, EDGES)
+    repeats = 200
+    estimates = [[] for _ in exact]
+    reported = [[] for _ in exact]
+    for seed in range(repeats):
+        mixture = tilted_mixture(query, INDEXED, THETAS, EDGES, TARGET, 3, random.Random(seed))
+        for index in range(len(exact)):
+            estimates[index].append(
+                math.exp(mixture.log_estimate[index]) if mixture.log_estimate[index] > -math.inf else 0.0
+            )
+            reported[index].append(mixture.relative_error[index])
+    ratios = []
+    for index, count in enumerate(exact):
+        mean = sum(estimates[index]) / repeats
+        spread = math.sqrt(sum((value - mean) ** 2 for value in estimates[index]) / (repeats - 1))
+        finite = sorted(value for value in reported[index] if math.isfinite(value))
+        ratios.append(finite[len(finite) // 2] * count / spread)
+    # measured 0.98 on average; dividing by the number of draws would read about 0.80
+    assert 0.9 <= sum(ratios) / len(ratios) <= 1.2, ratios
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_every_stream_of_a_small_language_ends_with_every_term_of_the_target_bins(seed):
+    """The tilts lean to the cheap bin, whose terms are drawn often and accepted rarely: every term is drawn long
+    before every term of a bin with a target is accepted, and the stream must not end in between.
+
+    Args:
+        seed (int): The seed of the pilot and the stream.
+    """
+    query = generator_query(hole_tuple_space(), TUPLE_SORT)
+    mixture = tilted_mixture(query, FRACTIONAL, (1.0, 2.0), (2.0, 2.6, 3.3), (0.5, 0.5), 12, random.Random(seed))
+    # a safety net far above what exhausting six terms takes, so that a broken end fails instead of hanging
+    streamed = list(mixture.stream(random.Random(seed), max_draws=200_000))
+    inside = set()
+    for term in all_terms(query, FRACTIONAL):
+        index = mixture.bin_of(FRACTIONAL.fold(term))
+        if index is not None and mixture.target[index] > 0:
+            inside.add(term)
+    assert len(inside) >= 4
+    assert len(streamed) == len(set(streamed))
+    assert set(streamed) == inside
+
+
+def test_the_missing_share_is_a_share_of_the_whole_target():
+    """A target that is not normalized: the bin out of reach carries a quarter of it, whatever its sum."""
+    query = generator_query(wide_space(), WIDE)
+    mixture = tilted_mixture(query, INDEXED, THETAS, (0.0, 5.95, 9.0), (3.0, 1.0), 12, random.Random(6))
+    assert math.isclose(mixture.missing_target, 0.25)
+
+
+def test_a_bin_without_a_target_is_never_drawn_from():
+    """Its terms are reached and estimated, and the stream passes over them without a word."""
+    query = generator_query(wide_space(), WIDE)
+    mixture = tilted_mixture(query, INDEXED, THETAS, (0.0, 2.95, 5.95), (1.0, 0.0), 12, random.Random(7))
+    assert mixture.log_estimate[1] > -math.inf
+    drawn = list(itertools.islice(mixture.stream(random.Random(8)), 200))
+    assert len(drawn) == 200
+    assert all(INDEXED.fold(term) < 2.95 for term in drawn)
+
+
+def test_a_stream_ends_after_its_draws_and_a_small_language_when_it_is_exhausted():
+    """``max_draws`` ends a stream accepted or not; two terms whose hashes agree end it once both are streamed."""
+    query = generator_query(wide_space(), WIDE)
+    mixture = tilted_mixture(query, INDEXED, THETAS, EDGES, TARGET, 4, random.Random(0))
+    assert len(list(mixture.stream(random.Random(1), max_draws=40))) <= 40
+    colliding = generator_query(space_of([("S", -1, ()), ("S", -2, ())]), "S")
+    assert hash(-1) == hash(-2)
+    pair = tilted_mixture(colliding, UNIT, (0.0, 1.0), (0.0, 2.0), (1.0,), 4, random.Random(0))
+    calls = []
+
+    class Counting(random.Random):
+        def random(self):
+            calls.append(1)
+            return super().random()
+
+    # a budget far above what two terms take, so that a stream that misses its end fails instead of hanging
+    assert len(list(pair.stream(Counting(2), max_draws=100_000))) == 2
+    assert len(calls) < 1000, len(calls)
+
+
+def test_a_query_without_a_term_is_refused_before_any_draw():
+    """There is nothing to estimate: said by name, not by a stray ``StopIteration``."""
+    with pytest.raises(ValueError, match="the query has no term"):
+        tilted_mixture(generator_query(hollow_space(), NOWHERE), UNIT, THETAS, EDGES, TARGET, 3, random.Random(0))
+
+
+def test_a_large_cost_every_term_shares_costs_the_mean_no_precision():
+    """Two terms at 100 000 and 100 001: the mean at theta 0.847 exactly, and the search for theta to its tolerance."""
+    query = generator_query(space_of([("S", "a", ()), ("S", "b", ())]), "S")
+    algebra = priced({"a": 1e5, "b": 1e5 + 1})
+
+    def exact(theta):
+        return (1e5 + (1e5 + 1) * math.exp(-theta)) / (1 + math.exp(-theta))
+
+    assert abs(tilted_search(query, algebra, 0.847).mean_cost - exact(0.847)) <= 1e-9
+    for target in (100_000.3, 1e5 + 1e-6):
+        assert abs(exact(theta_for_mean(query, algebra, target)) - target) <= 1e-9
+
+
+def test_the_search_for_theta_computes_a_table_per_step_and_no_search(monkeypatch):
+    """Each step is one pass over the prepared program; a search per step would rebuild the query's goals.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    query = generator_query(wide_space(), WIDE)
+    program = tilt_program(query.solution_space, INDEXED)
+    monkeypatch.setattr(tilt_module, "tilted_search", lambda *_args, **_kwargs: pytest.fail("a search was built"))
+    assert math.isfinite(theta_for_mean(query, INDEXED, 2.0, program=program))
