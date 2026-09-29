@@ -25,6 +25,8 @@ that clauses of cost zero close, a cost that is not a whole number, a negative c
 reads a hole, and a table filled under another algebra or to a lower cap.
 """
 
+import inspect
+import itertools
 import math
 import random
 
@@ -35,7 +37,15 @@ from cosy.core import Constructor, SpecificationBuilder, Synthesizer
 from cosy.core.solution_space import ConstantArgument, Goal, NonTerminalArgument
 from cosy.core.types import DataGroup
 from cosy.search import generator_query, residual_query
-from cosy.search.cost_tables import CostTable, _initial_cost_nodes, _product, cost_table, weighted_cost_table
+from cosy.search.cost_tables import (
+    CostTable,
+    _dict_product,
+    _initial_cost_nodes,
+    _packed_product,
+    _product,
+    cost_table,
+    weighted_cost_table,
+)
 from cosy.search.costs import AdditiveCostAlgebra, ComponentwiseTuples, NonNegativeReals
 from cosy.search.counting import _added_symbols, branch_counts, rule_cost, size_table
 from cosy.search.partial import partial_inhabitant, term_size
@@ -979,3 +989,197 @@ def test_a_long_tuple_of_holes_is_split_without_the_stack():
     table = cost_table(list_space(), WEIGHTED, 3)
     assert table.split_counts((LIST,) * 3000, 0) == 1
     assert table.split_counts((LIST,) * 3000, 1) == 3000
+
+
+# ---------------------------------------------------------------------------------------------
+# The product of two rows: pair by pair, or packed into two integers and multiplied once
+# ---------------------------------------------------------------------------------------------
+
+
+def product_by_definition(left, right, cap):
+    """Multiply two rows by the definition: every pair, no ordering, no early exit.
+
+    Args:
+        left (dict): One row.
+        right (dict): The other row.
+        cap (int): The largest cost value kept.
+
+    Returns:
+        dict: The nonzero coefficients up to the cap.
+    """
+    out = {}
+    for first, first_count in left.items():
+        for second, second_count in right.items():
+            if first + second <= cap:
+                out[first + second] = out.get(first + second, 0) + first_count * second_count
+    return {value: count for value, count in out.items() if count}
+
+
+def random_row(rng, entries, span, digits):
+    """Draw a row: ``entries`` distinct cost values up to ``span``, counts below ``10 ** digits``.
+
+    Args:
+        rng (random.Random): The source of randomness.
+        entries (int): How many values the row realizes.
+        span (int): The largest value it may realize.
+        digits (int): The number of decimal digits its counts may have.
+
+    Returns:
+        dict: The row.
+    """
+    values = rng.sample(range(span + 1), min(entries, span + 1))
+    return {value: rng.randrange(1, 10**digits) for value in values}
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_both_products_are_the_product_on_any_two_rows(seed):
+    """Sparse and dense, small counts and counts of two hundred digits, caps inside and beyond the spans."""
+    rng = random.Random(seed)
+    for _ in range(8):
+        span = rng.choice([0, 1, 7, 60, 400])
+        cap = rng.choice([0, span // 2, span, 2 * span, 3 * span + 1])
+        left = random_row(rng, rng.randint(1, span + 1), span, rng.choice([1, 20, 60, 200]))
+        right = random_row(rng, rng.randint(1, span + 1), rng.choice([span, span // 3 + 1]), rng.choice([1, 20, 60]))
+        expected = product_by_definition(left, right, cap)
+        assert _packed_product(left, right, cap) == expected, (seed, span, cap)
+        assert _dict_product(left, right, cap) == expected, (seed, span, cap)
+        assert _product(left, right, cap) == expected, (seed, span, cap)
+
+
+def test_the_packed_product_of_nothing_is_nothing():
+    """An empty row, a row entirely above the cap, and a single value zero."""
+    assert _packed_product({}, {0: 1}, 5) == {}
+    assert _packed_product({7: 3}, {1: 1}, 5) == {}
+    assert _packed_product({0: 1}, {0: 1}, 0) == {0: 1}
+    assert _packed_product({0: 2, 3: 5}, {0: 7}, 2) == {0: 14}
+
+
+def test_the_product_packs_dense_wide_rows_and_walks_sparse_ones(monkeypatch):
+    """The packed product wins where the rows are dense and wide, and loses badly where they are sparse and far apart."""
+    paths = []
+    monkeypatch.setattr(cost_tables_module, "_packed_product", lambda *a: paths.append("packed") or _packed_product(*a))
+    monkeypatch.setattr(cost_tables_module, "_dict_product", lambda *a: paths.append("walked") or _dict_product(*a))
+    dense = {value: value + 1 for value in range(2000)}
+    sparse = {value * 10_000: 1 for value in range(30)}
+    assert _product(dense, dense, 4000) == product_by_definition(dense, dense, 4000)
+    assert _product(sparse, sparse, 1_000_000) == product_by_definition(sparse, sparse, 1_000_000)
+    assert paths == ["packed", "walked"]
+
+
+@pytest.mark.parametrize(
+    ("left_bits", "right_bits", "length_bits", "cap"),
+    [
+        # 4 + 4 + 8 bits: two bytes a slot, and the cap keeps the slot the largest coefficient fills to its top bit
+        (4, 4, 8, 254),
+        # 4 + 4 + 9 bits: one bit past two bytes, so a slot one bit narrower overflows
+        (4, 4, 9, 1020),
+        # the same total from unequal counts, so neither count's bits can be spared
+        (5, 3, 9, 1020),
+        (3, 5, 9, 1020),
+    ],
+)
+def test_the_packed_product_is_exact_where_a_coefficient_fills_its_slot(left_bits, right_bits, length_bits, cap):
+    """Every count at the most its bits hold and every row as long as its length's bits allow: the largest
+    coefficient, ``(2**length_bits - 1) * (2**left_bits - 1) * (2**right_bits - 1)``, needs every bit of the bound.
+
+    Args:
+        left_bits (int): The bit length of the left row's counts.
+        right_bits (int): The bit length of the right row's counts.
+        length_bits (int): The bit length of the rows' length.
+        cap (int): The largest cost value kept.
+    """
+    length = 2**length_bits - 1
+    left = dict.fromkeys(range(length), 2**left_bits - 1)
+    right = dict.fromkeys(range(length), 2**right_bits - 1)
+    largest = max(product_by_definition(left, right, cap).values())
+    assert largest.bit_length() == left_bits + right_bits + length_bits
+    assert _packed_product(left, right, cap) == product_by_definition(left, right, cap)
+
+
+def product_chosen(monkeypatch, left, right, cap):
+    """Which product ``_product`` takes for two rows, neither of them computed.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Replaces both products by recorders.
+        left (dict): One row.
+        right (dict): The other row.
+        cap (int): The largest cost value kept.
+
+    Returns:
+        str: ``"packed"``, ``"walked"`` or ``"neither"``.
+    """
+    chosen = []
+    monkeypatch.setattr(cost_tables_module, "_packed_product", lambda *_: chosen.append("packed") or {})
+    monkeypatch.setattr(cost_tables_module, "_dict_product", lambda *_: chosen.append("walked") or {})
+    _product(left, right, cap)
+    monkeypatch.undo()
+    assert len(chosen) <= 1
+    return chosen[0] if chosen else "neither"
+
+
+def test_the_product_weighs_the_pairs_the_walk_multiplies_and_the_counts_it_multiplies(monkeypatch):
+    """The walk stops where a sum passes the cap, and a pair of long counts costs more than a pair of short ones."""
+    rng = random.Random(3)
+    ending_at_the_cap = {value: rng.getrandbits(110) | 1 for value in range(88_001, 100_001)}
+    nearly_past_it = {value: rng.getrandbits(60) | 1 for value in range(4_950, 10_001)}
+    sparse = {value * 15_625: 1 for value in range(64)}
+    mostly_above = {1: 5, 2: 7} | dict.fromkeys(range(10**7 + 1, 10**7 + 100_001), 3)
+    long_counts = {value: rng.getrandbits(1500) | 1 for value in range(500)}
+    dense = {value: value + 1 for value in range(3000)}
+    a_long_count_above = dense | {3001: 10**3000}
+    a_far_value_above = dense | {10**7: 1}
+    # every sum past the cap: nothing to walk, whatever the rows' lengths
+    assert product_chosen(monkeypatch, ending_at_the_cap, ending_at_the_cap, 100_000) == "walked"
+    # the sums reach the cap only from the rows' first hundred values
+    assert product_chosen(monkeypatch, nearly_past_it, nearly_past_it, 10_000) == "walked"
+    # past the least number of pairs worth weighing, and spread over a million slots
+    assert product_chosen(monkeypatch, sparse, sparse, 10**6) == "walked"
+    # the values above the cap are neither walked nor packed
+    assert product_chosen(monkeypatch, mostly_above, mostly_above, 10**7) == "walked"
+    # counts of 1 500 bits: a quarter of a million pairs cost more walked than packed
+    assert product_chosen(monkeypatch, long_counts, long_counts, 1000) == "packed"
+    # a count above the cap widens no slot, and a value above it lengthens no integer
+    assert product_chosen(monkeypatch, a_long_count_above, dict.fromkeys(range(3000), 1), 3000) == "packed"
+    assert product_chosen(monkeypatch, a_far_value_above, a_far_value_above, 3000) == "packed"
+
+
+def test_a_negative_cap_multiplies_to_nothing_on_either_path():
+    """Below the least number of pairs worth weighing and past it, as the pair-by-pair product has it."""
+    wide = dict.fromkeys(range(100), 1)
+    assert _product({0: 1}, {0: 1}, -1) == _dict_product({0: 1}, {0: 1}, -1) == {}
+    assert _product(wide, wide, -5) == _dict_product(wide, wide, -5) == {}
+
+
+def test_the_table_is_the_same_whichever_product_fills_it(monkeypatch):
+    """Every row and every split of two or three holes, filled and split by the packed product alone and by the
+    pair-by-pair product alone, on every space of EVERY_ROW; the packed product reaches all three places that
+    multiply rows."""
+    callers = set()
+
+    def packed_only(left, right, cap):
+        frame = inspect.currentframe()
+        callers.add(frame.f_back.f_code.co_name if frame is not None and frame.f_back is not None else "")
+        return _packed_product(left, right, cap)
+
+    compared = 0
+    for name, build, algebra, cap, _at_least in EVERY_ROW:
+        space = build()
+        monkeypatch.setattr(cost_tables_module, "_product", _dict_product)
+        walked = cost_table(space, algebra, cap)
+        monkeypatch.setattr(cost_tables_module, "_product", packed_only)
+        packed = cost_table(space, algebra, cap)
+        assert {nt: dict(row) for nt, row in packed.counts.items()} == {
+            nt: dict(row) for nt, row in walked.counts.items()
+        }, name
+        nonterminals = list(space.nonterminals())
+        for hole_types in itertools.chain(
+            itertools.product(nonterminals, repeat=2), itertools.product(nonterminals, repeat=3)
+        ):
+            monkeypatch.setattr(cost_tables_module, "_product", _dict_product)
+            expected = dict(walked.split_row(hole_types))
+            monkeypatch.setattr(cost_tables_module, "_product", packed_only)
+            assert dict(packed.split_row(hole_types)) == expected, (name, hole_types)
+            compared += 1
+        monkeypatch.undo()
+    assert compared > 100
+    assert callers == {"_acyclic_row", "tuple_row", "split_row"}

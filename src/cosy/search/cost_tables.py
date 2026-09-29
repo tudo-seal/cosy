@@ -76,6 +76,7 @@ the cap every inhabitant of cost at most ``C`` is streamed exactly once, in decr
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic
@@ -236,15 +237,16 @@ def _add_shifted(target: dict[int, int], row: Mapping[int, int], shift: int, cap
             target[total] = target.get(total, 0) + count * times
 
 
-def _product(left: Mapping[int, int], right: Mapping[int, int], cap: int) -> dict[int, int]:
-    """Multiply two rows as polynomials in the cost, keeping the values up to the cap.
+def _dict_product(left: Mapping[int, int], right: Mapping[int, int], cap: int) -> dict[int, int]:
+    """Multiply two rows as polynomials in the cost, keeping the values up to the cap, pair by pair.
 
     Every cost is nonnegative, so a product cut at the cap and then multiplied again gives what the
     uncut product would give below the cap: nothing above the cap can come back down.
 
     Args:
-        left (Mapping[int, int]): One row.
-        right (Mapping[int, int]): The other row.
+        left (Mapping[int, int]): One row, nonnegative whole-number costs to positive counts, as
+            every row of a table is.
+        right (Mapping[int, int]): The other row, of the same kind.
         cap (int): The largest cost value kept.
 
     Returns:
@@ -267,6 +269,125 @@ def _product(left: Mapping[int, int], right: Mapping[int, int], cap: int) -> dic
             total = first + second
             out[total] = out.get(total, 0) + first_count * second_count
     return out
+
+
+def _packed_product(left: Mapping[int, int], right: Mapping[int, int], cap: int) -> dict[int, int]:
+    """Multiply two rows as polynomials in the cost by one multiplication of two integers.
+
+    Kronecker substitution: each row becomes one integer whose base-``2**(8 w)`` digits are its
+    counts, slot ``a`` holding the count at cost ``a``, and the product of the two integers holds the
+    product of the rows in the same slots, provided a slot is wide enough that no coefficient of the
+    product spills into the next. It is: a coefficient is a sum of at most ``min(len)`` products of
+    two counts, so ``w`` bytes with ``8 w`` at least the sum of the two largest counts' bit lengths and
+    of that length's bit length hold it. The multiplication runs in the interpreter's C code, where
+    the pair-by-pair product runs one Python step per pair, so on dense wide rows it is many times
+    faster; on sparse rows spread far apart it multiplies mostly zeros and loses. :func:`_product`
+    decides between the two.
+
+    Args:
+        left (Mapping[int, int]): One row, nonnegative whole-number costs to positive counts. A
+            negative cost has no slot, and a zero count is dropped where the pair-by-pair product
+            keeps it; no row of a table holds either.
+        right (Mapping[int, int]): The other row, of the same kind.
+        cap (int): The largest cost value kept.
+
+    Returns:
+        dict[int, int]: The same coefficients as :func:`_dict_product`, exactly.
+    """
+    left_values = [value for value in left if value <= cap]
+    right_values = [value for value in right if value <= cap]
+    if not left_values or not right_values:
+        return {}
+    left_span, right_span = max(left_values), max(right_values)
+    largest_left = max(left[value] for value in left_values)
+    largest_right = max(right[value] for value in right_values)
+    bits = (
+        largest_left.bit_length() + largest_right.bit_length() + min(len(left_values), len(right_values)).bit_length()
+    )
+    width = (bits + 7) // 8
+
+    def packed(row: Mapping[int, int], values: Sequence[int], span: int) -> int:
+        buffer = bytearray((span + 1) * width)
+        for value in values:
+            buffer[value * width : (value + 1) * width] = row[value].to_bytes(width, "little")
+        return int.from_bytes(buffer, "little")
+
+    top = min(cap, left_span + right_span)
+    length = (top + 1) * width
+    product = (packed(left, left_values, left_span) * packed(right, right_values, right_span)) & (
+        (1 << (8 * length)) - 1
+    )
+    data = product.to_bytes(length, "little")
+    out: dict[int, int] = {}
+    for value in range(top + 1):
+        count = int.from_bytes(data[value * width : (value + 1) * width], "little")
+        if count:
+            out[value] = count
+    return out
+
+
+# The costs the choice between the two products weighs: rough per-operation costs, measured on one
+# machine. A pair of the pair-by-pair product costs a Python step, plus the multiplication of its two
+# counts, which grows with the product of their bit lengths; the multiplication of two integers of
+# B_long and B_short bytes about the unit times B_long * B_short ** 0.585, the shape of Karatsuba
+# multiplication taken chunk by chunk along the longer integer; packing and unpacking about the slot
+# cost per slot and per entry. The choice was checked on the 400 pairs the first draw from one
+# determinized search space's cost table multiplied, rows of 1 to 4 000 entries and slots of 6 to 22
+# bytes: walked about 15 s, packed 1.4 s, as chosen 1.5 s. On another machine the crossover moves, and
+# near it either product costs about the same.
+_SECONDS_PER_PAIR = 1.25e-7
+_SECONDS_PER_PAIR_BIT_PRODUCT = 1e-12
+_SECONDS_PER_PACKED_UNIT = 7.5e-10
+_SECONDS_PER_PACKED_SLOT = 3e-7
+# Below this many pairs the pair-by-pair product is too cheap to be worth weighing at all.
+_PACK_FROM_PAIRS = 4096
+
+
+def _product(left: Mapping[int, int], right: Mapping[int, int], cap: int) -> dict[int, int]:
+    """Multiply two rows as polynomials in the cost, by the product an estimate of their costs prefers.
+
+    Both are exact and give the same coefficients on rows of nonnegative whole-number costs and
+    positive counts, which is what every row of a table is. The pair-by-pair product costs a Python
+    step and a multiplication of two counts per pair of values whose sum stays within the cap; the
+    packed one a multiplication of two integers as long as the rows' spans below the cap times the
+    slot width, which the interpreter does in C, at a cost that grows much more slowly than the
+    number of pairs. Dense wide rows are therefore packed; sparse ones, small ones, far-apart ones and
+    ones whose sums mostly pass the cap are walked. The estimate is rough: near the crossover it may
+    take the slower product, where the two cost about the same.
+
+    Args:
+        left (Mapping[int, int]): One row.
+        right (Mapping[int, int]): The other row.
+        cap (int): The largest cost value kept.
+
+    Returns:
+        dict[int, int]: ``(left * right)(a) = sum over a_1 + a_2 = a of left(a_1) right(a_2)`` for
+            ``a <= cap``, with its zero entries left out.
+    """
+    if not left or not right:
+        return {}
+    if len(left) * len(right) < _PACK_FROM_PAIRS:
+        return _dict_product(left, right, cap)
+    left_values = [value for value in left if value <= cap]
+    right_values = sorted(value for value in right if value <= cap)
+    if not left_values or not right_values:
+        return {}
+    # The pairs the pair-by-pair product walks: those whose sum stays within the cap.
+    pairs = sum(bisect_right(right_values, cap - value) for value in left_values)
+    if pairs < _PACK_FROM_PAIRS:
+        return _dict_product(left, right, cap)
+    left_bits = max(left[value] for value in left_values).bit_length()
+    right_bits = max(right[value] for value in right_values).bit_length()
+    left_span, right_span = max(left_values), right_values[-1]
+    width = (left_bits + right_bits + min(len(left_values), len(right_values)).bit_length() + 7) // 8
+    longer, shorter = sorted(((left_span + 1) * width, (right_span + 1) * width), reverse=True)
+    walked_seconds = pairs * (_SECONDS_PER_PAIR + _SECONDS_PER_PAIR_BIT_PRODUCT * left_bits * right_bits)
+    packed_seconds = _SECONDS_PER_PACKED_UNIT * longer * shorter**0.585 + _SECONDS_PER_PACKED_SLOT * (
+        left_span + right_span + len(left_values) + len(right_values)
+    )
+    if packed_seconds < walked_seconds:
+        return _packed_product(left, right, cap)
+    return _dict_product(left, right, cap)
 
 
 @dataclass(frozen=True)
