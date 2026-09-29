@@ -20,6 +20,7 @@ import cosy.search.tilt as tilt_module
 from cosy.core import Constructor, SpecificationBuilder, Synthesizer
 from cosy.core.solution_space import Goal, NonTerminalArgument, SolutionSpace
 from cosy.search import generator_query, residual_query
+from cosy.search.cost_tables import cost_table
 from cosy.search.costs import AdditiveCostAlgebra, ComponentwiseTuples, NonNegativeReals
 from cosy.search.counting import branch_counts
 from cosy.search.partial import holes
@@ -27,8 +28,14 @@ from cosy.search.rules import deepest_first_subgoal
 from cosy.search.samplers import Sampler, TiltSampler
 from cosy.search.sampling import weighted_tree
 from cosy.search.tilt import (
+    TiltedSearch,
+    _log_gaussian_interval,
     _log_min_over,
+    _log_upper_tail,
     _mixture,
+    _query_spacing,
+    saddle_counts,
+    saddle_mixture,
     theta_for_mean,
     tilt_program,
     tilt_table,
@@ -745,7 +752,7 @@ def exact_mixture(query, algebra, thetas, edges, target):
     counts = exact_bin_counts(query, algebra, edges)
     searches = [tilted_search(query, algebra, theta) for theta in thetas]
     log_counts = [math.log(count) if count else -math.inf for count in counts]
-    return _mixture(searches, edges, target, log_counts, [0.0] * len(counts), 2)
+    return _mixture(searches, edges, target, log_counts, [0.0] * len(counts), 2, "no bin with a target has a term")
 
 
 def test_every_term_in_a_bin_with_a_target_is_under_the_bound():
@@ -1112,7 +1119,9 @@ def test_every_term_is_under_the_bound_and_the_bound_is_not_loose_in_random_mixt
             continue
         searches = [tilted_search(query, INDEXED, theta) for theta in thetas]
         log_counts = [math.log(count) if count else -math.inf for count in counts]
-        mixture = _mixture(searches, edges, target, log_counts, [0.0] * len(counts), 2)
+        mixture = _mixture(
+            searches, edges, target, log_counts, [0.0] * len(counts), 2, "no bin with a target has a term"
+        )
         ratios = [mixture.log_acceptance(cost) for cost in costs]
         assert max(ratios) <= 1e-12, (thetas, edges)
         assert max(ratios) >= -0.3, (thetas, edges, max(ratios))
@@ -1241,3 +1250,747 @@ def test_the_search_for_theta_computes_a_table_per_step_and_no_search(monkeypatc
     program = tilt_program(query.solution_space, INDEXED)
     monkeypatch.setattr(tilt_module, "tilted_search", lambda *_args, **_kwargs: pytest.fail("a search was built"))
     assert math.isfinite(theta_for_mean(query, INDEXED, 2.0, program=program))
+
+
+# ---------------------------------------------------------------------------------------------
+# The tilted variance: the second derivative of log Z, per non-terminal and for a query
+# ---------------------------------------------------------------------------------------------
+
+
+def exact_tilted_variance(counts, theta):
+    """The variance of the cost under the tilt, from the counts per cost value.
+
+    Args:
+        counts (dict): The number of terms per cost value.
+        theta (float): The tilt.
+
+    Returns:
+        float: ``sum_a (a - mean)^2 N(a) e^(-theta a) / Z``.
+    """
+    weights = {cost: count * math.exp(-theta * cost) for cost, count in counts.items()}
+    total = sum(weights.values())
+    mean = sum(cost * weight for cost, weight in weights.items()) / total
+    return sum((cost - mean) ** 2 * weight for cost, weight in weights.items()) / total
+
+
+@pytest.mark.parametrize(("name", "build", "start"), FINITE_SPACES)
+@pytest.mark.parametrize("theta", THETAS_OF_THE_TABLE)
+def test_the_tilted_variance_is_the_variance_of_the_cost_under_the_tilt(name, build, start, theta):
+    """Every non-terminal with a term, against the tree form's counts and against the second difference of ``log Z``.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The space's start symbol.
+        theta (float): The tilt.
+    """
+    space = build()
+    program = tilt_program(space, FRACTIONAL)
+    table = program.table(theta)
+    step = 1e-4
+    above, below = program.table(theta + step), program.table(theta - step)
+    rows = inhabited(space, FRACTIONAL)
+    assert start in rows
+    if any(min(row) < max(row) for row in rows.values()):
+        assert any(table.variance[nonterminal] > 0 for nonterminal in rows), name
+    for nonterminal, row in rows.items():
+        expected = exact_tilted_variance(row, theta)
+        assert math.isclose(table.variance[nonterminal], expected, rel_tol=1e-9, abs_tol=1e-12), (name, nonterminal)
+        second = (above.of(nonterminal) - 2 * table.of(nonterminal) + below.of(nonterminal)) / step**2
+        assert math.isclose(table.variance[nonterminal], second, rel_tol=1e-4, abs_tol=1e-6), (name, nonterminal)
+
+
+@pytest.mark.parametrize("theta", [0.0, 0.4, -0.25])
+def test_the_query_variance_is_the_variance_of_its_terms(theta):
+    """For the whole language and at every position of a partial term, the prescribed symbols included.
+
+    Args:
+        theta (float): The tilt.
+    """
+    space = priced_space()
+    query = generator_query(space, PRICED)
+    counts = branch_counts(query, SIZE_OF_EVERYTHING, FRACTIONAL.fold).counts
+    assert math.isclose(
+        tilted_search(query, FRACTIONAL, theta).variance_cost, exact_tilted_variance(counts, theta), rel_tol=1e-9
+    )
+    parent = next(tilted_search(query, FRACTIONAL, 0.0).stream(random.Random(2)))
+    for position in sorted(parent.positions()):
+        residual = residual_query(space, PRICED, parent, position)
+        counts = branch_counts(residual, SIZE_OF_EVERYTHING, FRACTIONAL.fold).counts
+        assert math.isclose(
+            tilted_search(residual, FRACTIONAL, theta).variance_cost,
+            exact_tilted_variance(counts, theta),
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ), position
+
+
+def test_a_language_of_one_cost_has_no_variance_and_a_query_without_a_term_none_at_all():
+    """Every term at one large cost, where subtracting squares would cancel, leaves nothing to vary; no term, no variance."""
+    query = generator_query(space_of([("S", "p", ()), ("S", "q", ())]), "S")
+    assert tilted_search(query, priced({"p": 1e7 + 0.1, "q": 1e7 + 0.1}), 0.7).variance_cost == 0.0
+    assert math.isnan(tilted_search(generator_query(hollow_space(), NOWHERE), UNIT, 0.3).variance_cost)
+
+
+# ---------------------------------------------------------------------------------------------
+# The saddle point: the number of terms per cost bin from the tilt's mass, mean and variance
+# ---------------------------------------------------------------------------------------------
+
+
+def sum_of_choices(holes):
+    """A term is ``f`` over ``holes`` independent choices of a digit costing 0, 1 or 3: its cost a sum of them.
+
+    Where many independent parts add up, the cost is near a Gaussian, which is where the saddle point must hold.
+
+    Args:
+        holes (int): The number of choices.
+
+    Returns:
+        tuple: The query and its algebra.
+    """
+    space = space_of([("S", "f", tuple("D" for _ in range(holes))), ("D", "d0", ()), ("D", "d1", ()), ("D", "d3", ())])
+    return generator_query(space, "S"), priced({"f": 0, "d0": 0, "d1": 1, "d3": 3})
+
+
+def exact_counts_per_bin(query, algebra, edges, cap):
+    """The exact number of terms per bin, from the cost table, which counts what the tree form could not enumerate.
+
+    Args:
+        query: The query.
+        algebra (AdditiveCostAlgebra): The algebra, whole-number costs.
+        edges (Sequence[float]): The bins' boundaries.
+        cap (int): A cost cap above every term.
+
+    Returns:
+        list: The counts per bin.
+    """
+    row = cost_table(query.solution_space, algebra, cap).counts[query.start]
+    return [sum(count for cost, count in row.items() if edges[i] <= cost < edges[i + 1]) for i in range(len(edges) - 1)]
+
+
+def central_relative_errors(holes, width):
+    """The saddle point's relative error on the bins within two standard deviations of the mean, and how many there are.
+
+    Args:
+        holes (int): The number of choices.
+        width (int): The bins' width.
+
+    Returns:
+        list: One relative error per central bin.
+    """
+    query, algebra = sum_of_choices(holes)
+    mean, deviation = holes * 4 / 3, math.sqrt(holes * 14 / 9)
+    edges = [float(value) for value in range(0, 3 * holes + width + 1, width)]
+    exact = exact_counts_per_bin(query, algebra, edges, 3 * holes + width)
+    estimate = saddle_counts(query, algebra, edges)
+    errors = []
+    for index, count in enumerate(exact):
+        if count and abs((edges[index] + edges[index + 1]) / 2 - mean) <= 2 * deviation:
+            errors.append(abs(math.exp(estimate.log_counts[index] - math.log(count)) - 1))
+    return errors
+
+
+def test_the_saddle_point_counts_a_sum_of_many_choices_closely_and_closer_the_more_there_are():
+    """The saddle point's error falls as the number of parts grows: measured 3.2, 1.9, 1.0 % for 10, 20, 40 choices."""
+    ten, twenty, forty = central_relative_errors(10, 2), central_relative_errors(20, 3), central_relative_errors(40, 4)
+    assert min(len(ten), len(twenty), len(forty)) >= 5
+    assert max(forty) < 0.015, forty
+    assert max(forty) < 0.7 * max(twenty) < 0.7 * 0.7 * max(ten), (ten, twenty, forty)
+
+
+def test_a_bin_the_query_does_not_reach_counts_nothing():
+    """Below the cheapest term and above the dearest there is nothing to approximate."""
+    query, algebra = sum_of_choices(8)
+    estimate = saddle_counts(query, algebra, (-10.0, -1.0, 0.0, 30.0, 40.0))
+    assert estimate.log_counts[0] == -math.inf
+    assert estimate.log_counts[1] == -math.inf
+    assert estimate.log_counts[2] > 0
+    assert estimate.log_counts[3] == -math.inf
+
+
+@pytest.mark.parametrize(("holes", "edges"), [(20, range(6, 50, 4)), (100, range(200, 301, 2))])
+def test_each_bin_is_read_at_a_theta_whose_mean_falls_within_the_cells_of_its_points(holes, edges):
+    """The local form holds near the tilted mean, so each bin's tilt puts its mean within its points' cells.
+
+    On the unit lattice a bin ``[a, b)`` holds the points ``a .. b - 1``, and their cells reach half a unit beyond
+    them: a bin two units wide may be read at a mean just below its lower edge.
+
+    Args:
+        holes (int): The number of choices.
+        edges (range): The bins' boundaries, whole numbers.
+    """
+    query, algebra = sum_of_choices(holes)
+    edges = [float(value) for value in edges]
+    estimate = saddle_counts(query, algebra, edges)
+    assert all(not math.isnan(theta) for theta in estimate.thetas)
+    for index, theta in enumerate(estimate.thetas):
+        mean = tilted_search(query, algebra, theta).mean_cost
+        assert edges[index] - 0.5 <= mean <= edges[index + 1] - 0.5, (index, mean)
+
+
+def test_a_single_term_is_counted_once_in_its_bin():
+    """No spread at all: the whole tilted mass sits at one cost, and the bin that holds it holds one term."""
+    query = generator_query(space_of([("S", "p", ())]), "S")
+    estimate = saddle_counts(query, priced({"p": 5.0}), (0.0, 4.0, 6.0, 8.0))
+    assert estimate.log_counts[0] == -math.inf
+    assert math.isclose(math.exp(estimate.log_counts[1]), 1.0, rel_tol=1e-9)
+    assert estimate.log_counts[2] == -math.inf
+
+
+@pytest.mark.parametrize(("edges", "match"), [((1.0,), "strictly ascending"), ((2.0, 1.0), "strictly ascending")])
+def test_what_the_saddle_point_refuses(edges, match):
+    """Bins that do not order, and a query without a term.
+
+    Args:
+        edges (tuple): The bins' boundaries.
+        match (str): The refusal's wording.
+    """
+    query, algebra = sum_of_choices(4)
+    with pytest.raises(ValueError, match=match):
+        saddle_counts(query, algebra, edges)
+    with pytest.raises(ValueError, match="the query has no term"):
+        saddle_counts(generator_query(hollow_space(), NOWHERE), UNIT, (0.0, 1.0))
+
+
+def test_a_bin_holding_only_the_dearest_or_the_cheapest_cost_is_counted_exactly():
+    """No tilted mean reaches an extreme cost, so a bin that holds nothing else counts its terms exactly."""
+    query, algebra = sum_of_choices(8)
+    top = saddle_counts(query, algebra, (24.0, 25.0))
+    assert math.exp(top.log_counts[0]) == 1
+    bottom = saddle_counts(query, algebra, (-1.0, 0.0, 0.5))
+    assert bottom.log_counts[0] == -math.inf
+    assert math.isfinite(bottom.log_counts[1])
+    duplicated = generator_query(space_of([("S", "p", ()), ("S", "q", ()), ("S", "r", ())]), "S")
+    exact = saddle_counts(duplicated, priced({"p": 1.0, "q": 1.0, "r": 4.0}), (4.0, 9.0))
+    assert math.isclose(math.exp(exact.log_counts[0]), 1.0)
+    # two dearest choices in each of two holes: four terms of the dearest cost, and four of the cheapest the other way round
+    pairs = generator_query(space_of([("S", "f", ("D", "D")), ("D", "x", ()), ("D", "y", ()), ("D", "z", ())]), "S")
+    assert (
+        round(math.exp(saddle_counts(pairs, priced({"f": 0, "x": 0, "y": 3, "z": 3}), (6.0, 7.0)).log_counts[0])) == 4
+    )
+    assert (
+        round(math.exp(saddle_counts(pairs, priced({"f": 0, "x": 3, "y": 0, "z": 0}), (-1.0, 0.0, 0.5)).log_counts[1]))
+        == 4
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# The saddle mixture: the mixture of tilts with the saddle point's counts in place of the pilot
+# ---------------------------------------------------------------------------------------------
+
+# Forty choices of 0, 1 or 3: mean 53.3, standard deviation 7.9; bins over two deviations either side, on the lattice.
+CHOICE_EDGES = (38.0, 42.0, 46.0, 50.0, 54.0, 58.0, 62.0, 66.0, 70.0)
+CHOICE_TARGET = (0.05, 0.1, 0.15, 0.2, 0.2, 0.15, 0.1, 0.05)
+CHOICE_THETAS = (-0.08, 0.0, 0.08)
+
+
+def test_the_saddle_mixture_draws_no_pilot_and_counts_by_the_saddle_point(monkeypatch):
+    """No draw before the stream: the counts per bin are the saddle point's, with no error bar of their own.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    query, algebra = sum_of_choices(40)
+    streams = []
+    original = TiltedSearch.keyed_stream
+    monkeypatch.setattr(TiltedSearch, "keyed_stream", lambda self, rng: streams.append(1) or original(self, rng))
+    mixture = saddle_mixture(query, algebra, CHOICE_THETAS, CHOICE_EDGES, CHOICE_TARGET)
+    assert streams == []
+    assert mixture.pilot_counts == (0, 0, 0)
+    assert all(math.isnan(error) for error in mixture.relative_error)
+    assert mixture.log_estimate == saddle_counts(query, algebra, CHOICE_EDGES).log_counts
+    assert mixture.missing_target == 0.0
+
+
+def test_the_saddle_mixture_follows_the_target():
+    """The first term of 4 000 streams, by bin, against the target: the saddle point's error of about 1 % cannot show."""
+    query, algebra = sum_of_choices(40)
+    mixture = saddle_mixture(query, algebra, CHOICE_THETAS, CHOICE_EDGES, CHOICE_TARGET)
+    draws = 4000
+    by_bin = [0] * len(CHOICE_TARGET)
+    for seed in range(draws):
+        by_bin[mixture.bin_of(algebra.fold(next(mixture.stream(random.Random(seed)))))] += 1
+    chi_square = sum(
+        (observed - draws * mass) ** 2 / (draws * mass) for observed, mass in zip(by_bin, CHOICE_TARGET, strict=True)
+    )
+    assert chi_square < 24.32, (by_bin, chi_square)  # the 0.999 quantile of chi-square with seven degrees of freedom
+
+
+def test_the_saddle_mixture_leaves_out_bins_below_the_least_share_and_says_so():
+    """A bin whose share of the target is below the least share is neither estimated nor reached, and reported missing."""
+    query, algebra = sum_of_choices(40)
+    target = (1e-9, *CHOICE_TARGET[1:])
+    mixture = saddle_mixture(query, algebra, CHOICE_THETAS, CHOICE_EDGES, target, least_share=1e-6)
+    assert mixture.log_estimate[0] == -math.inf
+    assert math.isclose(mixture.missing_target, 1e-9 / sum(target))
+
+
+def test_what_the_saddle_mixture_refuses():
+    """What the mixture refuses, and a query without a term."""
+    query, algebra = sum_of_choices(4)
+    with pytest.raises(ValueError, match="strictly ascending"):
+        saddle_mixture(query, algebra, (0.1,), (2.0, 1.0), (1.0,))
+    with pytest.raises(ValueError, match="distinct"):
+        saddle_mixture(query, algebra, (0.1, 0.1), (0.0, 5.0), (1.0,))
+    with pytest.raises(ValueError, match="the query has no term"):
+        saddle_mixture(generator_query(hollow_space(), NOWHERE), UNIT, (0.1,), (0.0, 5.0), (1.0,))
+
+
+# ---------------------------------------------------------------------------------------------
+# The saddle point, reviewed: the lattice of a query's costs, the moments' precision, the step bound, the far tail
+# ---------------------------------------------------------------------------------------------
+
+
+def digit_sums(parts, holes, head=0.0, extra=()):
+    """``S -> f(D x holes)``, ``D`` one clause per part: a term's cost is ``head`` plus a part per hole.
+
+    Args:
+        parts (Sequence[float]): The parts' costs.
+        holes (int): The number of holes.
+        head (float): The cost of ``f``. (Default value = 0.0)
+        extra (Sequence[tuple]): Further ``(head, terminal, holes, cost)`` clauses. (Default value = ())
+
+    Returns:
+        tuple: The query and its algebra.
+    """
+    rules = [("S", "f", tuple("D" for _ in range(holes)))] + [("D", f"d{index}", ()) for index in range(len(parts))]
+    costs = {"f": head} | {f"d{index}": part for index, part in enumerate(parts)}
+    for nonterminal, terminal, hole_types, cost in extra:
+        rules.append((nonterminal, terminal, hole_types))
+        costs[terminal] = cost
+    return generator_query(space_of(rules), "S"), priced(costs)
+
+
+def digit_sum_counts(parts, holes, head=0):
+    """The exact number of terms per cost of :func:`digit_sums`, by convolution in whole numbers.
+
+    Args:
+        parts (Sequence[int]): The parts' costs, whole numbers.
+        holes (int): The number of holes.
+        head (int): The cost of ``f``. (Default value = 0)
+
+    Returns:
+        dict: The number of terms per cost.
+    """
+    row = {head: 1}
+    for _ in range(holes):
+        wider = {}
+        for cost, count in row.items():
+            for part in parts:
+                wider[cost + part] = wider.get(cost + part, 0) + count
+        row = wider
+    return row
+
+
+def relative_errors(estimate, row, edges):
+    """The estimate's relative error per bin against exact counts: 0 where both are empty, inf where one of them is.
+
+    Args:
+        estimate (SaddleCounts): The estimate.
+        row (dict): The exact number of terms per cost.
+        edges (Sequence[float]): The bins' boundaries.
+
+    Returns:
+        list: One relative error per bin.
+    """
+    errors = []
+    for index in range(len(edges) - 1):
+        exact = sum(count for cost, count in row.items() if edges[index] <= cost < edges[index + 1])
+        log_count = estimate.log_counts[index]
+        if exact == 0 or log_count == -math.inf:
+            errors.append(0.0 if exact == 0 and log_count == -math.inf else math.inf)
+        else:
+            errors.append(math.exp(log_count - math.log(exact)) - 1)
+    return errors
+
+
+def test_a_bin_holding_one_lattice_point_counts_the_terms_of_that_cost():
+    """Unit bins on the unit lattice, and width-2 bins on a lattice of 2: each bin holds one cost, and its terms."""
+    query, algebra = digit_sums([0, 1, 3], 20)
+    edges = [float(value) for value in range(20, 41)]
+    errors = relative_errors(saddle_counts(query, algebra, edges), digit_sum_counts([0, 1, 3], 20), edges)
+    assert max(abs(error) for error in errors) < 0.05, errors
+    query, algebra = digit_sums([0, 2, 6], 20)
+    edges = [float(value) for value in range(40, 81, 2)]
+    errors = relative_errors(saddle_counts(query, algebra, edges), digit_sum_counts([0, 2, 6], 20), edges)
+    assert max(abs(error) for error in errors) < 0.05, errors
+
+
+def central(errors, edges, mean, deviation):
+    """The errors of the bins whose middles lie within two deviations of the mean, where the saddle point is sharp.
+
+    Args:
+        errors (list): The relative errors per bin.
+        edges (Sequence[float]): The bins' boundaries.
+        mean (float): The untilted mean cost.
+        deviation (float): The untilted standard deviation.
+
+    Returns:
+        list: Their absolute values, at least four of them.
+    """
+    kept = [
+        abs(error)
+        for index, error in enumerate(errors)
+        if abs((edges[index] + edges[index + 1]) / 2 - mean) <= 2 * deviation
+    ]
+    assert len(kept) >= 4
+    return kept
+
+
+def test_the_lattice_is_the_spacing_of_the_querys_costs_and_not_of_the_clauses():
+    """Parts 1 and 3 add up to every other whole number only; a cost of 1 no query reaches changes no spacing.
+
+    On the unit lattice the bins two wide of the first case were off by 35 %, and those of the second, the odd whole
+    numbers, by 39 %; on the query's own lattice every bin within two deviations is within 5 %.
+    """
+    query, algebra = digit_sums([1, 3], 20)
+    edges = [float(value) for value in range(30, 52, 2)]
+    errors = relative_errors(saddle_counts(query, algebra, edges), digit_sum_counts([1, 3], 20), edges)
+    assert max(central(errors, edges, 40, math.sqrt(20))) < 0.05, errors
+    query, algebra = digit_sums([0, 2], 20, head=1)
+    edges = [float(value) for value in range(9, 34, 4)]
+    errors = relative_errors(saddle_counts(query, algebra, edges), digit_sum_counts([0, 2], 20, head=1), edges)
+    assert max(central(errors, edges, 21, math.sqrt(20))) < 0.05, errors
+    edges = [float(value) for value in range(150, 460, 25)]
+    alone = saddle_counts(*digit_sums([0, 100], 6), edges)
+    beside = saddle_counts(*digit_sums([0, 100], 6, extra=[("X", "x", (), 1)]), edges)
+    assert alone.log_counts == beside.log_counts
+    errors = relative_errors(alone, digit_sum_counts([0, 100], 6), edges)
+    assert errors.count(0.0) == 9  # the bins between the multiples of 100 hold nothing, and are read so
+    assert max(abs(error) for error in errors) < 0.1, errors
+
+
+def test_costs_in_halves_are_read_on_their_lattice_as_whole_numbers_are_on_theirs():
+    """Halving every cost and every edge changes no count."""
+    edges = [float(value) for value in range(22, 60, 3)]
+    whole = saddle_counts(*digit_sums([0, 1, 3], 30), edges)
+    halves = saddle_counts(*digit_sums([0, 0.5, 1.5], 30), [edge / 2 for edge in edges])
+    assert all(math.isfinite(log_count) for log_count in whole.log_counts)
+    for here, there in zip(whole.log_counts, halves.log_counts, strict=True):
+        assert math.isclose(here, there, rel_tol=1e-9), (whole.log_counts, halves.log_counts)
+
+
+def test_edges_between_lattice_points_take_the_points_between_them():
+    """Bins from half-way to half-way hold the whole numbers inside them."""
+    query, algebra = digit_sums([0, 1, 3], 20)
+    edges = [value + 0.5 for value in range(14, 46, 4)]
+    errors = relative_errors(saddle_counts(query, algebra, edges), digit_sum_counts([0, 1, 3], 20), edges)
+    assert max(abs(error) for error in errors) < 0.05, errors
+
+
+def test_a_cost_every_term_shares_moves_the_bins_and_nothing_else():
+    """A head costing 100: the counts of the bins moved by 100 are the counts without it."""
+    edges = [float(value) for value in range(6, 50, 4)]
+    plain = saddle_counts(*digit_sums([0, 1, 3], 20), edges)
+    moved = saddle_counts(*digit_sums([0, 1, 3], 20, head=100), [edge + 100 for edge in edges])
+    for here, there in zip(plain.log_counts, moved.log_counts, strict=True):
+        assert math.isclose(here, there, rel_tol=1e-9), (plain.log_counts, moved.log_counts)
+
+
+def test_the_extreme_counts_are_exact_below_holes_that_are_not_leaves():
+    """``S -> f(A, A)``, ``A -> g(D, D)``: sixteen terms cost nothing and one costs 12, all four digits dear."""
+    query = generator_query(
+        space_of([("S", "f", ("A", "A")), ("A", "g", ("D", "D")), ("D", "x", ()), ("D", "y", ()), ("D", "z", ())]), "S"
+    )
+    estimate = saddle_counts(query, priced({"f": 0, "g": 0, "x": 0, "y": 0, "z": 3}), (-1.0, 0.5, 11.5, 13.0))
+    assert round(math.exp(estimate.log_counts[0]), 9) == 16
+    assert round(math.exp(estimate.log_counts[2]), 9) == 1
+
+
+def test_only_the_initial_nodes_that_reach_the_cheapest_cost_count_there():
+    """``S -> p | q``, ``p`` costing 1 and ``q`` 2: the bin of cost 1 holds one term."""
+    query = generator_query(space_of([("S", "p", ()), ("S", "q", ())]), "S")
+    estimate = saddle_counts(query, priced({"p": 1, "q": 2}), (1.0, 2.0, 3.0))
+    assert round(math.exp(estimate.log_counts[0]), 9) == 1
+    assert round(math.exp(estimate.log_counts[1]), 9) == 1
+
+
+def test_a_language_of_one_cost_is_counted_whole():
+    """Two terms of one cost: the bin holding it holds both."""
+    query = generator_query(space_of([("S", "p", ()), ("S", "q", ())]), "S")
+    assert round(math.exp(saddle_counts(query, priced({"p": 1, "q": 1}), (0.0, 2.0)).log_counts[0]), 9) == 2
+
+
+def test_a_bin_ending_at_the_cheapest_cost_holds_nothing():
+    """Costs off every lattice floating point adds exactly: the bin up to the cheapest cost excludes it."""
+    query, algebra = digit_sums([0.5, 0.6, 0.9], 5)
+    assert saddle_counts(query, algebra, (0.0, 2.5, 3.0)).log_counts[0] == -math.inf
+
+
+def test_a_tilt_that_leans_on_one_cost_counts_the_terms_of_that_cost():
+    """Costs off every lattice, a bin holding only the cheapest cost and far less: its one term."""
+    query, algebra = digit_sums([0.0, 0.1, 0.3], 20)
+    estimate = saddle_counts(query, algebra, (-1.0, 1e-300, 1.0))
+    assert math.isclose(math.exp(estimate.log_counts[0]), 1.0, rel_tol=1e-6)
+
+
+def test_the_moments_keep_their_precision_where_the_costs_span_a_billion():
+    """A term costing nothing beside two sums of ten parts near 1e8: where the tilt leans on the sums, their moments.
+
+    The free term sets the query's cheapest cost to 0, so the sums' shares are read ``10^9`` above it.
+    """
+    base = 1e8
+    rules = [("S", "f", ("D",) * 10), ("S", "g", ("D",) * 10), ("S", "z", ())]
+    rules += [("D", "d0", ()), ("D", "d1", ()), ("D", "d3", ())]
+    query = generator_query(space_of(rules), "S")
+    algebra = priced({"f": 0, "g": 0, "z": 0, "d0": base, "d1": base + 1, "d3": base + 3})
+    offsets = digit_sum_counts([0, 1, 3], 10)
+    for theta in (-3.0, -0.4):
+        weights = {offset: 2 * count * math.exp(-theta * (offset - 30)) for offset, count in offsets.items()}
+        mean = sum(offset * weight for offset, weight in weights.items()) / sum(weights.values())
+        variance = sum((offset - mean) ** 2 * weight for offset, weight in weights.items()) / sum(weights.values())
+        search = tilted_search(query, algebra, theta)
+        assert abs(search.mean_cost - (10 * base + mean)) <= 1e-6, (theta, search.mean_cost - 10 * base, mean)
+        assert math.isclose(search.variance_cost, variance, rel_tol=1e-6), (theta, search.variance_cost, variance)
+
+
+def test_a_spread_beyond_floating_point_leaves_the_table_and_the_search_as_they_were():
+    """Costs 0 and 1e160: the table and the tilted search stand, their variance is infinite, and the saddle point refuses."""
+    query = generator_query(space_of([("S", "a", ()), ("S", "b", ())]), "S")
+    algebra = priced({"a": 0.0, "b": 1e160})
+    table = tilt_table(query.solution_space, algebra, 0.0)
+    assert math.isclose(table.mean_cost["S"], 5e159)
+    assert table.variance["S"] == math.inf
+    assert tilted_search(query, algebra, 0.0).variance_cost == math.inf
+    with pytest.raises(ValueError, match="variance"):
+        saddle_counts(query, algebra, (0.0, 1e150, 2e160))
+
+
+def count_tables(monkeypatch):
+    """Count the tilt tables computed from here on.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+
+    Returns:
+        list: One entry per table computed.
+    """
+    computed = []
+    table = tilt_module.TiltProgram.table
+    monkeypatch.setattr(
+        tilt_module.TiltProgram, "table", lambda self, theta: computed.append(theta) or table(self, theta)
+    )
+    return computed
+
+
+def test_the_step_bound_counts_every_table_the_fallback_included(monkeypatch):
+    """With Newton switched off every bin falls back to bracketing and bisection, and the bound still holds.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    query, algebra = sum_of_choices(40)
+    program = tilt_program(query.solution_space, algebra)
+    monkeypatch.setattr(tilt_module, "_NEWTON_STEPS", 0)
+    computed = count_tables(monkeypatch)
+    with pytest.raises(ValueError, match="more than 10 tilt tables"):
+        saddle_counts(query, algebra, CHOICE_EDGES, program=program, max_steps=10)
+    assert 0 < len(computed) <= 10
+
+
+def test_newton_finds_each_bins_tilt_from_its_neighbours_without_bisecting(monkeypatch):
+    """Eight bins, each tilt warm-started from its neighbour's: eight tables, and no bracketing at all.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    query, algebra = sum_of_choices(40)
+    program = tilt_program(query.solution_space, algebra)
+    computed = count_tables(monkeypatch)
+    monkeypatch.setattr(tilt_module, "_theta_between", lambda *_args: pytest.fail("a tilt was bracketed and bisected"))
+    saddle_counts(query, algebra, CHOICE_EDGES, program=program)
+    assert len(computed) <= 12
+
+
+def simpson_log_mass(alpha, beta):
+    """The log of the standard normal mass on a narrow interval by Simpson's rule, which the code does not use.
+
+    Args:
+        alpha (float): The lower end.
+        beta (float): The upper end.
+
+    Returns:
+        float: The log of the mass, its relative error below ``(width * max(1, |x|))**4 / 500``.
+    """
+    ends = (alpha, (alpha + beta) / 2, beta)
+    log_densities = [-x * x / 2 - math.log(2 * math.pi) / 2 for x in ends]
+    top = max(log_densities)
+    weighted = sum(weight * math.exp(value - top) for weight, value in zip((1, 4, 1), log_densities, strict=True))
+    return math.log((beta - alpha) / 6) + top + math.log(weighted)
+
+
+def fraction_log_tail(x):
+    """``log Q(x)`` for ``x >= 5`` by Laplace's continued fraction, which the code does not use.
+
+    Args:
+        x (float): The point.
+
+    Returns:
+        float: The log of the standard normal's upper tail at ``x``.
+    """
+    denominator = x
+    for depth in range(400, 0, -1):
+        denominator = x + depth / denominator
+    return -x * x / 2 - math.log(2 * math.pi) / 2 - math.log(denominator)
+
+
+@pytest.mark.parametrize("x", [5.0, 10.0, 20.0, 36.0, 37.5, 40.0, 60.0, 200.0])
+def test_the_upper_tail_is_the_continued_fractions_near_and_far(x):
+    """Below the switch the complementary error function, beyond it the asymptotic series: both to 1e-10 in log.
+
+    Args:
+        x (float): The point.
+    """
+    assert abs(_log_upper_tail(x) - fraction_log_tail(x)) <= 1e-10
+
+
+@pytest.mark.parametrize(("alpha", "beta"), [(40.0, 41.0), (36.0, 38.0), (37.5, 60.0), (-41.0, -40.0), (-38.0, -36.0)])
+def test_an_interval_in_the_far_tail_has_the_mass_of_the_tails_between_its_ends(alpha, beta):
+    """Both ends beyond the switch, or one on either side of it.
+
+    Args:
+        alpha (float): The lower end.
+        beta (float): The upper end.
+    """
+    near, far = (alpha, beta) if alpha > 0 else (-beta, -alpha)
+    expected = fraction_log_tail(near) + math.log1p(-math.exp(fraction_log_tail(far) - fraction_log_tail(near)))
+    assert abs(_log_gaussian_interval(alpha, beta) - expected) <= 1e-9
+
+
+@pytest.mark.parametrize(
+    ("alpha", "beta"),
+    [
+        (-1e-17, 1e-17),
+        (-1e-16, 1e-16),
+        (-1e-300, 1e-300),
+        (36.999999999999, 37.000000000001),
+        (10.0, 10.000000000001),
+        (-10.000000000001, -10.0),
+        (3.0, 3.000001),
+        (-2.5e-4, 2.5e-4),
+    ],
+)
+def test_a_narrow_interval_has_the_density_times_its_width(alpha, beta):
+    """Where two tails or two error functions would cancel, the mass is read off the density.
+
+    Args:
+        alpha (float): The lower end.
+        beta (float): The upper end.
+    """
+    assert abs(_log_gaussian_interval(alpha, beta) - simpson_log_mass(alpha, beta)) <= 1e-9
+
+
+@pytest.mark.parametrize(("alpha", "beta"), [(-1.0, 0.0), (2.0, 3.0), (-3.0, -2.0), (-0.001, 50.0), (-50.0, 50.0)])
+def test_a_wide_interval_has_the_mass_the_error_function_gives(alpha, beta):
+    """Away from the tails, the error function's difference, which cancels nothing there.
+
+    Args:
+        alpha (float): The lower end.
+        beta (float): The upper end.
+    """
+    expected = math.log((math.erf(beta / math.sqrt(2)) - math.erf(alpha / math.sqrt(2))) / 2)
+    assert abs(_log_gaussian_interval(alpha, beta) - expected) <= 1e-12
+
+
+@pytest.mark.parametrize(
+    ("options", "match"),
+    [
+        ({"max_steps": 0}, "max_steps"),
+        ({"max_steps": True}, "max_steps"),
+        ({"max_steps": 2.5}, "max_steps"),
+        ({"only": [99]}, "bin"),
+        ({"only": [-1]}, "bin"),
+        ({"only": ["a"]}, "bin"),
+    ],
+)
+def test_what_the_saddle_point_refuses_of_its_options(options, match):
+    """A step bound that is not a positive whole number, and bins that are not the edges' bins.
+
+    Args:
+        options (dict): The keyword arguments.
+        match (str): The refusal's wording.
+    """
+    query, algebra = sum_of_choices(4)
+    with pytest.raises(ValueError, match=match):
+        saddle_counts(query, algebra, (0.0, 5.0, 13.0), **options)
+
+
+@pytest.mark.parametrize("least_share", [math.nan, 1.5, -0.1, True, "0.1"])
+def test_the_least_share_is_a_share(least_share):
+    """Between 0 and 1, a real number.
+
+    Args:
+        least_share: The share passed.
+    """
+    query, algebra = sum_of_choices(40)
+    with pytest.raises(ValueError, match="least share"):
+        saddle_mixture(query, algebra, CHOICE_THETAS, CHOICE_EDGES, CHOICE_TARGET, least_share=least_share)
+
+
+def test_a_saddle_mixture_whose_target_no_term_reaches_says_so_without_a_pilot():
+    """The target on a bin past every term: refused, in words about the counts, not about pilot draws."""
+    query, algebra = sum_of_choices(4)
+    with pytest.raises(ValueError, match="holds a term") as refusal:
+        saddle_mixture(query, algebra, (0.1,), (100.0, 200.0), (1.0,))
+    assert "pilot" not in str(refusal.value)
+
+
+def test_the_saddle_point_is_exported_where_the_tilt_is():
+    """``cosy.search`` exports what the tilt module lists, the saddle point's names among them."""
+    import cosy.search as search_package  # noqa: PLC0415
+
+    for name in ("SaddleCounts", "saddle_counts", "saddle_mixture"):
+        assert name in tilt_module.__all__
+        assert getattr(search_package, name) is getattr(tilt_module, name)
+
+
+def test_a_newton_step_that_would_overshoot_is_halved_until_it_helps(monkeypatch):
+    """A digit costing nothing beside a thousand costing 1: at theta 0 the variance is tiny, and the full step lands
+    where the variance is nearly zero, so that Newton would stall there; halved, the steps land without bisection.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    rules = [("S", "f", ("D", "D")), ("D", "x0", ())] + [("D", f"x{index}", ()) for index in range(1, 1001)]
+    costs = {"f": 0, "x0": 0} | {f"x{index}": 1 for index in range(1, 1001)}
+    query, algebra = generator_query(space_of(rules), "S"), priced(costs)
+    monkeypatch.setattr(tilt_module, "_theta_between", lambda *_args: pytest.fail("a tilt was bracketed and bisected"))
+    estimate = saddle_counts(query, algebra, (0.5, 1.5))
+    assert math.isfinite(estimate.log_counts[0])
+    assert 0.5 <= tilted_search(query, algebra, estimate.thetas[0]).mean_cost <= 1.5
+
+
+def test_a_clause_without_weight_adds_nothing_to_the_variance_not_even_an_infinite_one():
+    """``A``'s two terms lie 1e160 apart, so its variance leaves floating point; where ``f(A)`` weighs nothing beside
+    ``g``, the variance of ``S`` is ``g``'s, which is none."""
+    space = space_of([("S", "f", ("A",)), ("S", "g", ()), ("A", "a", ()), ("A", "b", ())])
+    table = tilt_table(space, priced({"f": 1e163, "g": 0, "a": 0, "b": 1e160}), 1e-160)
+    assert table.variance["A"] == math.inf
+    assert table.variance["S"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("parts", "head", "unit"),
+    [((0, 1, 3), 0, 1.0), ((0, 0.5, 1.5), 0, 0.5), ((0, 0.1, 0.3), 0, 0.0), ((0, 1, 3), 2.0**52, 0.0)],
+)
+def test_the_unit_is_one_that_floating_point_adds_exactly(parts, head, unit):
+    """Whole numbers and halves have theirs; tenths are whole multiples only of a power of two so fine that their sums
+    leave the exact range; whole numbers from ``2^52`` on are no longer added exactly.
+
+    Args:
+        parts (tuple): The digits' costs.
+        head (float): The cost every term shares.
+        unit (float): The unit expected.
+    """
+    query, algebra = digit_sums(parts, 2, head=head)
+    program = tilt_program(query.solution_space, algebra)
+    assert program.unit == unit
+    assert program.spacing["S"] == (parts[1] if unit else 0.0)
+
+
+def test_a_cost_a_partial_term_has_charged_off_the_unit_leaves_no_lattice():
+    """A prescribed part costing half a unit puts the terms off the program's lattice, so none is claimed for them."""
+    query, algebra = digit_sums([0, 1, 3], 4)
+    program = tilt_program(query.solution_space, algebra)
+    assert _query_spacing([(0.5, ("D", "D"))], program, 0.5) == 0.0
+    assert _query_spacing([(1.0, ("D", "D"))], program, 1.0) == 1.0

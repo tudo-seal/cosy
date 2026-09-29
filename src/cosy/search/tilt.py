@@ -54,6 +54,7 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from dataclasses import dataclass
+from fractions import Fraction
 from itertools import pairwise
 from typing import TYPE_CHECKING, Any, Generic
 
@@ -66,7 +67,7 @@ from cosy.search.sampling import _built, keyed_stream, log_sum_exp
 
 if TYPE_CHECKING:
     import random
-    from collections.abc import Callable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
     from cosy.core.solution_space import RHSRule, SolutionSpace
     from cosy.core.tree import Path, Tree
@@ -74,10 +75,13 @@ if TYPE_CHECKING:
     from cosy.search.queries import ResolutionQuery
 
 __all__ = [
+    "SaddleCounts",
     "TiltProgram",
     "TiltTable",
     "TiltedMixture",
     "TiltedSearch",
+    "saddle_counts",
+    "saddle_mixture",
     "theta_for_mean",
     "tilt_program",
     "tilt_table",
@@ -188,6 +192,9 @@ class TiltTable(Generic[NT]):
             its cheapest cost: the tilt of the costs in excess of the cheapest, which is what the table
             computes, so that a large cost every term shares costs no precision.
         mean_excess (Mapping[NT, float]): Per non-terminal with a term, the tilted mean cost less ``m_A``.
+        variance (Mapping[NT, float]): Per non-terminal with a term, the variance of its terms' cost under the tilt,
+            ``d^2 log Z_A / d theta^2``, which the saddle point reads beside the mean; ``inf`` where it leaves floating
+            point, which a spread of costs beyond about ``1e154`` does.
     """
 
     space: SolutionSpace[NT, Any, Any]
@@ -200,6 +207,7 @@ class TiltTable(Generic[NT]):
     dearest: Mapping[NT, float]
     log_excess: Mapping[NT, float]
     mean_excess: Mapping[NT, float]
+    variance: Mapping[NT, float]
 
     def of(self, nonterminal: NT) -> float:
         """Return ``log Z_A(theta)``.
@@ -269,6 +277,16 @@ class TiltProgram(Generic[NT]):
             number of terms is asked exactly.
         cheapest (Mapping[NT, float]): Per non-terminal with a term, the least cost of its terms.
         dearest (Mapping[NT, float]): Per non-terminal with a term, the greatest cost of its terms.
+        cheapest_counts (Mapping[NT, int]): Per non-terminal with a term, the exact number of its terms of the
+            least cost, where a tilted mean never arrives.
+        dearest_counts (Mapping[NT, int]): Per non-terminal with a term, the exact number of its terms of the
+            greatest cost.
+        unit (float): A power of two whose whole multiples every clause's cost is, where floating point adds the
+            costs of every term exactly (each sum of clause costs a multiple of it below ``2^52`` of it); 0 where it
+            does not, and then no spacing is known.
+        spacing (Mapping[NT, float]): Per non-terminal with a term, the greatest common divisor of the differences
+            between its terms' costs, a multiple of ``unit``: its terms cost its cheapest cost plus multiples of it.
+            0 where every term costs the same, and everywhere where ``unit`` is 0.
     """
 
     space: SolutionSpace[NT, Any, Any]
@@ -279,6 +297,10 @@ class TiltProgram(Generic[NT]):
     counts: Mapping[NT, int]
     cheapest: Mapping[NT, float]
     dearest: Mapping[NT, float]
+    cheapest_counts: Mapping[NT, int]
+    dearest_counts: Mapping[NT, int]
+    unit: float
+    spacing: Mapping[NT, float]
 
     def table(self, theta: float) -> TiltTable[NT]:
         """Compute ``log Z_A(theta)`` and the tilted mean cost for every non-terminal, in one pass.
@@ -299,6 +321,7 @@ class TiltProgram(Generic[NT]):
         mean_cost: dict[NT, float] = {}
         log_excess: dict[NT, float] = {}
         mean_excess: dict[NT, float] = {}
+        variance: dict[NT, float] = {}
         for member in self.order:
             member_clauses = self.clauses[member]
             base = cheapest[member]
@@ -310,10 +333,15 @@ class TiltProgram(Generic[NT]):
                 for excess, (_cost, hole_types) in zip(excesses, member_clauses, strict=True)
             ]
             total = log_sum_exp(exponents)
-            mean = sum(
-                math.exp(exponent - total) * (excess + sum(mean_excess[hole] for hole in hole_types))
-                for exponent, excess, (_cost, hole_types) in zip(exponents, excesses, member_clauses, strict=True)
-            )
+            shares = _normalized(exponents, total)
+            # A clause's terms have the clause's excess plus their holes' costs: their mean the sum of the means,
+            # their variance the sum of the variances, the holes being filled independently.
+            conditional = [
+                excess + sum(mean_excess[hole] for hole in hole_types)
+                for excess, (_cost, hole_types) in zip(excesses, member_clauses, strict=True)
+            ]
+            mean = sum(share * value for share, value in zip(shares, conditional, strict=True))
+            spread = _spread(shares, conditional, mean, member_clauses, variance)
             log_mass = -theta * base + total
             if not (math.isfinite(total) and math.isfinite(mean) and math.isfinite(log_mass)):
                 msg = (
@@ -323,6 +351,7 @@ class TiltProgram(Generic[NT]):
                 raise ValueError(msg)
             log_excess[member] = total
             mean_excess[member] = mean
+            variance[member] = spread
             log_z[member] = log_mass
             mean_cost[member] = base + mean
         return TiltTable(
@@ -336,7 +365,118 @@ class TiltProgram(Generic[NT]):
             dearest=self.dearest,
             log_excess=log_excess,
             mean_excess=mean_excess,
+            variance=variance,
         )
+
+
+def _normalized(exponents: Sequence[float], total: float) -> list[float]:
+    """Return the shares ``e^(exponent - total)``, divided by their sum.
+
+    ``total`` is the log of the sum of the ``e^exponent``, rounded at the scale of ``theta`` times the costs, so
+    the shares sum to one only up to that times the machine epsilon; a mean of values as large as the costs would
+    carry the difference times them, and a variance its square. Their sum divides it out.
+
+    Args:
+        exponents (Sequence[float]): The logs of the weights.
+        total (float): The log of their sum.
+
+    Returns:
+        list[float]: The shares, summing to one.
+    """
+    shares = [math.exp(exponent - total) for exponent in exponents]
+    whole = math.fsum(shares)
+    return [share / whole for share in shares]
+
+
+def _spread(
+    shares: Sequence[float],
+    conditional: Sequence[float],
+    mean: float,
+    clauses: Sequence[tuple[float, tuple[NT, ...]]],
+    variance: Mapping[NT, float],
+) -> float:
+    """Return the variance of a mixture of clauses: their holes' variances and the spread of their means, weighted.
+
+    A clause without weight adds nothing, not even an infinite variance of its holes; a spread beyond floating
+    point is ``inf``.
+
+    Args:
+        shares (Sequence[float]): The clauses' shares.
+        conditional (Sequence[float]): The clauses' mean costs.
+        mean (float): The mixture's mean cost.
+        clauses (Sequence[tuple[float, tuple[NT, ...]]]): The clauses: their costs and their holes' non-terminals.
+        variance (Mapping[NT, float]): The variance per non-terminal of a hole.
+
+    Returns:
+        float: The variance, ``inf`` where it leaves floating point.
+    """
+    return sum(
+        share * (sum(variance[hole] for hole in hole_types) + (value - mean) * (value - mean))
+        for share, value, (_cost, hole_types) in zip(shares, conditional, clauses, strict=True)
+        if share > 0
+    )
+
+
+# Floating point adds whole multiples of a power of two exactly while their sums stay below 2^53 of it; half of that
+# leaves room for the cost a partial-term query has already charged.
+_EXACT_MULTIPLES = 2**52
+
+
+def _unit_of(live: Mapping[NT, tuple[_Clause, ...]], order: Sequence[NT]) -> float:
+    """Return a power of two whose whole multiples every clause's cost is, where floating point adds them exactly.
+
+    Every float is a whole multiple of a power of two, so the finest of the clauses' is a unit of all of them; the
+    sums of a term's clause costs are then exact where no partial sum exceeds ``2^52`` units, which the greatest
+    sum of absolute costs below each non-terminal bounds.
+
+    Args:
+        live (Mapping[NT, tuple[_Clause, ...]]): The clauses per non-terminal with a term.
+        order (Sequence[NT]): The non-terminals with a term, every one after its clauses' holes.
+
+    Returns:
+        float: The unit, or 0 where the costs' sums leave the exact range.
+    """
+    denominator = max((Fraction(cost).denominator for member in order for cost, _holes in live[member]), default=1)
+    magnitude: dict[NT, float] = {}
+    for member in order:
+        magnitude[member] = max(
+            abs(cost) + sum(magnitude[hole] for hole in hole_types) for cost, hole_types in live[member]
+        )
+    top = max(magnitude.values(), default=0.0)
+    if not math.isfinite(top) or Fraction(top) * denominator > _EXACT_MULTIPLES:
+        return 0.0
+    return 1 / denominator
+
+
+def _spacing_of(
+    live: Mapping[NT, tuple[_Clause, ...]], order: Sequence[NT], cheapest: Mapping[NT, float], unit: float
+) -> dict[NT, float]:
+    """Return per non-terminal the greatest common divisor of the differences between its terms' costs.
+
+    A clause's terms cost the clause's cheapest completion plus each hole's difference from its own cheapest, so
+    the differences below a non-terminal are generated by its clauses' cheapest completions less its cheapest cost
+    and by its holes' spacings; their greatest common divisor, in units, is exact where the sums are.
+
+    Args:
+        live (Mapping[NT, tuple[_Clause, ...]]): The clauses per non-terminal with a term.
+        order (Sequence[NT]): The non-terminals with a term, every one after its clauses' holes.
+        cheapest (Mapping[NT, float]): The cheapest cost per non-terminal with a term.
+        unit (float): The costs' unit, 0 where none is exact.
+
+    Returns:
+        dict[NT, float]: The spacing per non-terminal with a term, 0 for one whose terms all cost the same or
+            where there is no unit.
+    """
+    if not unit:
+        return dict.fromkeys(order, 0.0)
+    units: dict[NT, int] = {}
+    for member in order:
+        divisor = 0
+        for cost, hole_types in live[member]:
+            low = cost + sum(cheapest[hole] for hole in hole_types)
+            divisor = math.gcd(divisor, round((low - cheapest[member]) / unit), *(units[hole] for hole in hole_types))
+        units[member] = divisor
+    return {member: units[member] * unit for member in order}
 
 
 def tilt_program(
@@ -395,6 +535,8 @@ def tilt_program(
     counts: dict[NT, int] = dict.fromkeys(nonterminals, 0)
     cheapest: dict[NT, float] = {}
     dearest: dict[NT, float] = {}
+    cheapest_counts: dict[NT, int] = {}
+    dearest_counts: dict[NT, int] = {}
     for component in _components(candidates, successors):
         member = component[0]
         if len(component) > 1 or member in successors[member]:
@@ -406,8 +548,20 @@ def tilt_program(
             raise ValueError(msg)
         order.append(member)
         counts[member] = sum(math.prod(counts[hole] for hole in hole_types) for _cost, hole_types in live[member])
-        cheapest[member] = min(cost + sum(cheapest[hole] for hole in hole_types) for cost, hole_types in live[member])
-        dearest[member] = max(cost + sum(dearest[hole] for hole in hole_types) for cost, hole_types in live[member])
+        lows = [cost + sum(cheapest[hole] for hole in hole_types) for cost, hole_types in live[member]]
+        highs = [cost + sum(dearest[hole] for hole in hole_types) for cost, hole_types in live[member]]
+        cheapest[member], dearest[member] = min(lows), max(highs)
+        cheapest_counts[member] = sum(
+            math.prod(cheapest_counts[hole] for hole in hole_types)
+            for low, (_cost, hole_types) in zip(lows, live[member], strict=True)
+            if low == cheapest[member]
+        )
+        dearest_counts[member] = sum(
+            math.prod(dearest_counts[hole] for hole in hole_types)
+            for high, (_cost, hole_types) in zip(highs, live[member], strict=True)
+            if high == dearest[member]
+        )
+    unit = _unit_of(live, order)
     return TiltProgram(
         space=space,
         algebra=algebra,
@@ -417,6 +571,10 @@ def tilt_program(
         counts=counts,
         cheapest=cheapest,
         dearest=dearest,
+        cheapest_counts=cheapest_counts,
+        dearest_counts=dearest_counts,
+        unit=unit,
+        spacing=_spacing_of(live, order, cheapest, unit),
     )
 
 
@@ -523,7 +681,16 @@ class TiltedSearch(Generic[NT, T, G]):
         Returns:
             float: The mean, ``nan`` for a query without a term.
         """
-        return _query_mean(_initial_holes(self.query, self.table.algebra), self.table)
+        return _query_moments(_initial_holes(self.query, self.table.algebra), self.table)[0]
+
+    @property
+    def variance_cost(self) -> float:
+        """Return the variance of the cost of the query's terms under the tilt, ``d^2 log Z / d theta^2`` of the query's mass.
+
+        Returns:
+            float: The variance, ``nan`` for a query without a term.
+        """
+        return _query_moments(_initial_holes(self.query, self.table.algebra), self.table)[1]
 
     def _root_children(self) -> list[tuple[_TiltNode, float]]:
         """Return the query's initial nodes with their ``log w``, computed once for every stream of this search.
@@ -674,19 +841,35 @@ def _initial_holes(
     return [(cost, tuple(holes(goal).values())) for goal, cost in _initial_tilt_nodes(query, algebra)]
 
 
-def _query_mean(initial: Sequence[tuple[float, tuple[NT, ...]]], table: TiltTable[NT]) -> float:
-    """Return the tilted mean cost of the terms below a query's initial nodes, in excess of the cheapest of them.
+def _query_moments(initial: Sequence[tuple[float, tuple[NT, ...]]], table: TiltTable[NT]) -> tuple[float, float]:
+    """Return the tilted mean and variance of the cost of the terms below a query's initial nodes.
 
     Args:
         initial (Sequence[tuple[float, tuple[NT, ...]]]): The initial nodes' costs so far and holes.
         table (TiltTable[NT]): The tilt table.
 
     Returns:
-        float: The mean, ``nan`` without a term.
+        tuple[float, float]: The mean and the variance, both ``nan`` without a term.
+    """
+    _log_mass, mean, variance = _query_summary(initial, table)
+    return mean, variance
+
+
+def _query_summary(initial: Sequence[tuple[float, tuple[NT, ...]]], table: TiltTable[NT]) -> tuple[float, float, float]:
+    """Return the log of the query's tilted mass, and the tilted mean and variance of its terms' cost.
+
+    Computed in excess of the cheapest of them, as the table is, so that a large shared cost costs no precision.
+
+    Args:
+        initial (Sequence[tuple[float, tuple[NT, ...]]]): The initial nodes' costs so far and holes.
+        table (TiltTable[NT]): The tilt table.
+
+    Returns:
+        tuple[float, float, float]: ``log Z``, the mean and the variance; ``-inf`` and two ``nan`` without a term.
     """
     live = [(cost, hole_types) for cost, hole_types in initial if all(hole in table.cheapest for hole in hole_types)]
     if not live:
-        return math.nan
+        return -math.inf, math.nan, math.nan
     bases = [cost + sum(table.cheapest[hole] for hole in hole_types) for cost, hole_types in live]
     base = min(bases)
     exponents = [
@@ -694,10 +877,14 @@ def _query_mean(initial: Sequence[tuple[float, tuple[NT, ...]]], table: TiltTabl
         for least, (_cost, hole_types) in zip(bases, live, strict=True)
     ]
     total = log_sum_exp(exponents)
-    return base + sum(
-        math.exp(exponent - total) * (least - base + sum(table.mean_excess[hole] for hole in hole_types))
-        for exponent, least, (_cost, hole_types) in zip(exponents, bases, live, strict=True)
-    )
+    shares = _normalized(exponents, total)
+    conditional = [
+        least - base + sum(table.mean_excess[hole] for hole in hole_types)
+        for least, (_cost, hole_types) in zip(bases, live, strict=True)
+    ]
+    mean = sum(share * value for share, value in zip(shares, conditional, strict=True))
+    variance = _spread(shares, conditional, mean, live, table.variance)
+    return -table.theta * base + total, base + mean, variance
 
 
 def _query_cost_range(
@@ -847,7 +1034,6 @@ def theta_for_mean(
             f"{cheapest} and {dearest}; no tilt moves the mean to it"
         )
         raise ValueError(msg)
-    allowed = tolerance * span
     steps = 0
 
     def mean_at(theta: float) -> float:
@@ -856,8 +1042,36 @@ def theta_for_mean(
         if steps > max_steps:
             msg = f"no theta found for the mean {target} within {max_steps} steps"
             raise ValueError(msg)
-        return _query_mean(initial, prepared.table(theta))
+        return _query_moments(initial, prepared.table(theta))[0]
 
+    return _theta_between(
+        mean_at,
+        target,
+        span,
+        tolerance * span,
+        f"the mean {target} cannot be met to {tolerance} of the costs' span in floating point",
+    )
+
+
+def _theta_between(mean_at: Callable[[float], float], target: float, span: float, allowed: float, unmet: str) -> float:
+    """Return a ``theta`` whose tilted mean lies within ``allowed`` of a target strictly inside the costs' range.
+
+    From zero, a step of one over the span of the costs, doubled in the direction the target lies until the mean
+    crosses it, then bisection; each step is one call of ``mean_at``, which counts them.
+
+    Args:
+        mean_at (Callable[[float], float]): The tilted mean at a ``theta``.
+        target (float): The mean wanted.
+        span (float): The span between the cheapest and the dearest cost, positive.
+        allowed (float): The error allowed on the mean.
+        unmet (str): The message when floating point cannot meet ``allowed``.
+
+    Returns:
+        float: The ``theta``.
+
+    Raises:
+        ValueError: If floating point cannot meet ``allowed``; and whatever ``mean_at`` raises.
+    """
     at_zero = mean_at(0.0)
     if abs(at_zero - target) <= allowed:
         return 0.0
@@ -876,8 +1090,7 @@ def theta_for_mean(
         if abs(mean - target) <= allowed:
             return middle
         if middle in (near, far):
-            msg = f"the mean {target} cannot be met to {tolerance} of the costs' span in floating point"
-            raise ValueError(msg)
+            raise ValueError(unmet)
         if (mean - target) * direction > 0:
             near = middle
         else:
@@ -954,6 +1167,7 @@ class TiltedMixture(Generic[NT, T, G]):
         relative_error (tuple[float, ...]): The estimate's standard error over the estimate, per bin;
             ``inf`` without an estimate. A bin one pilot draw reached reports exactly one: a single draw
             carries no estimate of its own spread, and the one says only that the estimate rests on it.
+            ``nan`` in every bin where the counts carry no error bar of their own (:func:`saddle_mixture`).
         pilot_counts (tuple[int, ...]): The number of pilot draws of each tilt.
         missing_target (float): The share of the target on bins without an estimate, which the stream
             cannot reach.
@@ -1079,6 +1293,39 @@ class TiltedMixture(Generic[NT, T, G]):
             yield term
 
 
+def _checked_mixture(
+    thetas: Sequence[float], edges: Sequence[float], target: Sequence[float]
+) -> tuple[list[float], list[float], list[float]]:
+    """Return a mixture's tilts, edges and target as real numbers, or refuse them.
+
+    Args:
+        thetas (Sequence[float]): The tilts.
+        edges (Sequence[float]): The bins' boundaries.
+        target (Sequence[float]): The target's mass per bin.
+
+    Returns:
+        tuple[list[float], list[float], list[float]]: The three, checked.
+
+    Raises:
+        ValueError: If the tilts are none or not distinct, the edges not strictly ascending, or the target not one
+            nonnegative mass per bin, not all zero.
+    """
+    checked_thetas = [_real_theta(theta) for theta in thetas]
+    if not checked_thetas or len(set(checked_thetas)) != len(checked_thetas):
+        msg = f"the mixture needs at least one tilt and distinct ones, not {checked_thetas}"
+        raise ValueError(msg)
+    checked_edges = _checked_edges(edges)
+    checked_target = [_real_cost(mass, "a target mass") for mass in target]
+    if (
+        len(checked_target) != len(checked_edges) - 1
+        or any(mass < 0 for mass in checked_target)
+        or sum(checked_target) <= 0
+    ):
+        msg = "the target needs one nonnegative mass per bin, one fewer than the edges, and not all of them zero"
+        raise ValueError(msg)
+    return checked_thetas, checked_edges, checked_target
+
+
 def tilted_mixture(
     query: ResolutionQuery[NT, T, G],
     algebra: AdditiveCostAlgebra[Any],
@@ -1111,18 +1358,7 @@ def tilted_mixture(
         ValueError: If the tilts, the edges, the target or the pilot size are not of the kinds above; where
             :func:`tilted_search` refuses the query; or if no pilot draw falls in a bin with a target.
     """
-    thetas = [_real_theta(theta) for theta in thetas]
-    if not thetas or len(set(thetas)) != len(thetas):
-        msg = f"the mixture needs at least one tilt and distinct ones, not {thetas}"
-        raise ValueError(msg)
-    edges = [_real_cost(edge, "a bin edge") for edge in edges]
-    if len(edges) < _FEWEST_EDGES or any(low >= high for low, high in pairwise(edges)):
-        msg = f"the bin edges must be at least two strictly ascending numbers, not {edges}"
-        raise ValueError(msg)
-    target = [_real_cost(mass, "a target mass") for mass in target]
-    if len(target) != len(edges) - 1 or any(mass < 0 for mass in target) or sum(target) <= 0:
-        msg = "the target needs one nonnegative mass per bin, one fewer than the edges, and not all of them zero"
-        raise ValueError(msg)
+    thetas, edges, target = _checked_mixture(thetas, edges, target)
     if isinstance(pilot, bool) or not isinstance(pilot, int) or pilot < _FEWEST_PILOT_DRAWS:
         msg = f"the pilot size must be a whole number of at least two, not {pilot!r}"
         raise ValueError(msg)
@@ -1173,7 +1409,15 @@ def tilted_mixture(
             variance += pilot * sum((value - mean) ** 2 for value in scaled) / (pilot - 1)
         relative_error.append(math.sqrt(variance))
 
-    return _mixture(searches, edges, target, log_estimate, relative_error, pilot)
+    return _mixture(
+        searches,
+        edges,
+        target,
+        log_estimate,
+        relative_error,
+        pilot,
+        "no pilot draw fell in a bin with a target; spread the tilts over the target's bins or draw more",
+    )
 
 
 def _mixture(
@@ -1183,6 +1427,7 @@ def _mixture(
     log_estimate: Sequence[float],
     relative_error: Sequence[float],
     pilot: int,
+    unreached: str,
 ) -> TiltedMixture[NT, T, G]:
     """Normalize the target over the bins with an estimate and bound the rejection, given the counts per bin.
 
@@ -1193,6 +1438,7 @@ def _mixture(
         log_estimate (Sequence[float]): The log of the (estimated) number of terms per bin.
         relative_error (Sequence[float]): The estimate's relative standard error per bin.
         pilot (int): The number of pilot draws of each tilt.
+        unreached (str): Why no bin with a target has an estimate, for the refusal.
 
     Returns:
         TiltedMixture[NT, T, G]: The construction.
@@ -1203,8 +1449,7 @@ def _mixture(
     shares = tuple(1 / len(searches) for _ in searches)
     reached = [mass if log_estimate[index] > -math.inf else 0.0 for index, mass in enumerate(target)]
     if sum(reached) <= 0:
-        msg = "no pilot draw fell in a bin with a target; spread the tilts over the target's bins or draw more"
-        raise ValueError(msg)
+        raise ValueError(unreached)
     normalized = tuple(mass / sum(reached) for mass in reached)
     probe = TiltedMixture(
         searches=tuple(searches),
@@ -1214,7 +1459,10 @@ def _mixture(
         log_estimate=tuple(log_estimate),
         relative_error=tuple(relative_error),
         pilot_counts=(pilot,) * len(searches),
-        missing_target=1 - sum(reached) / sum(target),
+        missing_target=math.fsum(
+            mass for mass, estimate in zip(target, log_estimate, strict=True) if estimate == -math.inf
+        )
+        / math.fsum(target),
         log_bound=0.0,
     )
     # The least mixture probability on a bin is read only over the costs the query's terms realize: an
@@ -1246,4 +1494,402 @@ def _mixture(
         pilot_counts=probe.pilot_counts,
         missing_target=probe.missing_target,
         log_bound=log_bound,
+    )
+
+
+# Beyond this many standard deviations the complementary error function runs out of floating point, and the tail's
+# asymptotic series takes over, its error below one part in ten billion there.
+_ERFC_RANGE = 37.0
+# An interval narrower than this, in units of the larger of 1 and its ends' distance from the mean, has the density
+# at its middle times its width as its mass, to the second order: the rest is below one part in 10^15, where two
+# tails or two error functions would cancel to their rounding.
+_NARROW = 1e-3
+# The Newton steps the saddle point takes for one bin before it brackets and bisects instead.
+_NEWTON_STEPS = 12
+
+
+def _log_upper_tail(x: float) -> float:
+    """Return ``log Q(x)``, ``Q`` the upper tail of the standard normal distribution.
+
+    Args:
+        x (float): The point.
+
+    Returns:
+        float: ``log(1 - Phi(x))``, accurate far into the tail.
+    """
+    if x < _ERFC_RANGE:
+        return math.log(0.5 * math.erfc(x / math.sqrt(2)))
+    inverse = 1 / (x * x)
+    return -x * x / 2 - math.log(x * math.sqrt(2 * math.pi)) + math.log1p(-inverse + 3 * inverse**2 - 15 * inverse**3)
+
+
+def _log_gaussian_interval(alpha: float, beta: float) -> float:
+    """Return ``log(Phi(beta) - Phi(alpha))`` for ``alpha <= beta``.
+
+    A narrow interval from the density at its middle, ``phi(m) w (1 + (m^2 - 1) w^2 / 24)``; one on either side of
+    the mean from the two error functions, which add; one on one side from the tail both ends lie in.
+
+    Args:
+        alpha (float): The lower end, in standard deviations.
+        beta (float): The upper end.
+
+    Returns:
+        float: The log of the standard normal mass between them, ``-inf`` for an empty interval.
+    """
+    if not alpha < beta:
+        return -math.inf
+    width, middle = beta - alpha, (alpha + beta) / 2
+    if width * max(1.0, abs(alpha), abs(beta)) < _NARROW:
+        return (
+            -middle * middle / 2
+            - math.log(2 * math.pi) / 2
+            + math.log(width)
+            + math.log1p((middle * middle - 1) * width * width / 24)
+        )
+    if alpha >= 0:
+        near, far = _log_upper_tail(alpha), _log_upper_tail(beta)
+    elif beta <= 0:
+        near, far = _log_upper_tail(-beta), _log_upper_tail(-alpha)
+    else:
+        return math.log((math.erf(beta / math.sqrt(2)) + math.erf(-alpha / math.sqrt(2))) / 2)
+    if far >= near:
+        return -math.inf
+    return near + math.log1p(-math.exp(far - near))
+
+
+@dataclass(frozen=True)
+class SaddleCounts:
+    """The saddle point's estimate of the number of a query's terms per cost bin.
+
+    Where a term's cost is a sum of many independent parts, its distribution under a tilt is near a Gaussian, and so
+    the number of terms per unit of cost near the tilted mean is ``Z(theta) e^(theta a) phi((a - mu)/sigma) / sigma``,
+    and a point of a lattice of spacing ``d`` holds ``d`` times that: the saddle point. Each bin is read at a tilt whose
+    mean falls near it, and the local form is integrated over the part of the bin the query's costs reach, in closed
+    form. Its error is the saddle point's: small where many independent parts add up to a law with one mode, large where
+    few discrete costs remain, and large however many parts there are where the terms fall into groups whose costs lie
+    apart, a cheap term beside a cluster of dear ones, say, which one tilt cannot fit both of. It carries no error bar
+    of its own.
+
+    Attributes:
+        edges (tuple[float, ...]): The bins' boundaries; bin ``i`` holds the costs in ``[edges[i], edges[i + 1])``.
+        log_counts (tuple[float, ...]): The log of the estimated number of terms per bin, ``-inf`` for a bin the
+            query's costs do not reach.
+        thetas (tuple[float, ...]): The tilt each bin was read at, ``nan`` for one it was not.
+    """
+
+    edges: tuple[float, ...]
+    log_counts: tuple[float, ...]
+    thetas: tuple[float, ...]
+
+
+def _checked_edges(edges: Sequence[float]) -> list[float]:
+    """Return the bins' edges as real numbers, or refuse them.
+
+    Args:
+        edges (Sequence[float]): The edges.
+
+    Returns:
+        list[float]: The edges.
+
+    Raises:
+        ValueError: If they are not at least two strictly ascending finite real numbers.
+    """
+    checked = [_real_cost(edge, "a bin edge") for edge in edges]
+    if len(checked) < _FEWEST_EDGES or any(low >= high for low, high in pairwise(checked)):
+        msg = f"the bin edges must be at least two strictly ascending numbers, not {checked}"
+        raise ValueError(msg)
+    return checked
+
+
+def _query_extreme_counts(
+    initial: Sequence[tuple[float, tuple[NT, ...]]], program: TiltProgram[NT], cheapest: float, dearest: float
+) -> tuple[int, int]:
+    """Return the exact number of the query's terms of its least and of its greatest cost.
+
+    Args:
+        initial (Sequence[tuple[float, tuple[NT, ...]]]): The initial nodes' costs so far and holes.
+        program (TiltProgram[NT]): The query's program, prepared.
+        cheapest (float): The query's least cost.
+        dearest (float): The query's greatest cost.
+
+    Returns:
+        tuple[int, int]: The two numbers.
+    """
+    at_least, at_most = 0, 0
+    for cost, hole_types in initial:
+        if all(hole in program.cheapest for hole in hole_types):
+            if cost + sum(program.cheapest[hole] for hole in hole_types) == cheapest:
+                at_least += math.prod(program.cheapest_counts[hole] for hole in hole_types)
+            if cost + sum(program.dearest[hole] for hole in hole_types) == dearest:
+                at_most += math.prod(program.dearest_counts[hole] for hole in hole_types)
+    return at_least, at_most
+
+
+def _query_spacing(initial: Sequence[tuple[float, tuple[NT, ...]]], program: TiltProgram[NT], cheapest: float) -> float:
+    """Return the spacing of the lattice a query's costs lie on, counted from its cheapest cost.
+
+    Args:
+        initial (Sequence[tuple[float, tuple[NT, ...]]]): The initial nodes' costs so far and holes.
+        program (TiltProgram[NT]): The query's program, prepared.
+        cheapest (float): The query's least cost.
+
+    Returns:
+        float: The greatest common divisor of the differences between the query's terms' costs; 0 where they all
+            cost the same, where the program's costs have no exact unit, or where a cost a partial term has already
+            charged is off it.
+    """
+    unit = program.unit
+    if not unit:
+        return 0.0
+    divisor = 0
+    for cost, hole_types in initial:
+        if not all(hole in program.cheapest for hole in hole_types):
+            continue
+        if not (cost / unit).is_integer() or abs(cost) / unit > _EXACT_MULTIPLES:
+            return 0.0
+        low = cost + sum(program.cheapest[hole] for hole in hole_types)
+        divisor = math.gcd(
+            divisor, round((low - cheapest) / unit), *(round(program.spacing[hole] / unit) for hole in hole_types)
+        )
+    return divisor * unit
+
+
+def _checked_bins(only: Iterable[int] | None, bins: int) -> set[int]:
+    """Return the bins asked for by index, or refuse them.
+
+    Args:
+        only (Iterable[int] | None): The indices, None for every bin.
+        bins (int): The number of bins.
+
+    Returns:
+        set[int]: The indices.
+
+    Raises:
+        ValueError: If an index is not a whole number naming one of the bins.
+    """
+    if only is None:
+        return set(range(bins))
+    wanted = list(only)
+    if any(isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < bins for index in wanted):
+        msg = f"only names bins by their index, from 0 to {bins - 1}, not {wanted!r}"
+        raise ValueError(msg)
+    return set(wanted)
+
+
+def saddle_counts(
+    query: ResolutionQuery[NT, T, G],
+    algebra: AdditiveCostAlgebra[Any],
+    edges: Sequence[float],
+    *,
+    program: TiltProgram[NT] | None = None,
+    max_steps: int = 4000,
+    only: Iterable[int] | None = None,
+) -> SaddleCounts:
+    """Estimate the number of a query's terms per cost bin by the saddle point.
+
+    Where the query's costs lie on a lattice, its cheapest cost plus whole multiples of a spacing that floating point
+    adds exactly, a bin is the cells of the lattice points it holds, each as wide as the spacing, and a bin holding
+    only the cheapest or the dearest cost counts its terms exactly, no tilted mean arriving there. Elsewhere a bin is
+    the part of it the query's costs reach, and only a bin that touches the dearest cost at its lower edge is counted
+    exactly. The other bins are read from the one whose middle lies nearest the untilted mean outwards, each at a tilt
+    whose mean falls within its cells, found by damped Newton steps on the tilted mean (whose derivative is minus the
+    tilted variance) from its neighbour's tilt, so that a bin costs a few tilt tables; where Newton stalls, the tilt is
+    bracketed and bisected.
+
+    Args:
+        query (ResolutionQuery[NT, T, G]): The query.
+        algebra (AdditiveCostAlgebra[Any]): The additive cost algebra, with finite real costs.
+        edges (Sequence[float]): The bins' boundaries, strictly ascending finite reals, at least two.
+        program (TiltProgram[NT] | None): The query's program already prepared under this algebra. (Default value = None)
+        max_steps (int): How many tilt tables the estimate may compute in all, bracketing and bisection included.
+            (Default value = 4000)
+        only (Iterable[int] | None): The bins to estimate, by index; None for all. A bin left out reads ``-inf``.
+            (Default value = None)
+
+    Returns:
+        SaddleCounts: The estimate.
+
+    Raises:
+        ValueError: If the edges are not of the kind above, ``max_steps`` is not a positive whole number or ``only``
+            names no bin; if the query has no term; if the steps run out; or if the costs' variance under a tilt
+            leaves floating point.
+    """
+    edges = _checked_edges(edges)
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
+        msg = f"max_steps must be a positive whole number, not {max_steps!r}"
+        raise ValueError(msg)
+    bins = len(edges) - 1
+    wanted = _checked_bins(only, bins)
+    prepared = _prepared(query, algebra, program)
+    initial = _initial_holes(query, algebra)
+    cheapest, dearest = _query_cost_range(initial, prepared.cheapest, prepared.dearest)
+    if cheapest > dearest:
+        msg = "the query has no term, so there is nothing to count"
+        raise ValueError(msg)
+    log_counts = [-math.inf] * bins
+    thetas = [math.nan] * bins
+    reached = [
+        index for index in range(bins) if index in wanted and edges[index] <= dearest and cheapest < edges[index + 1]
+    ]
+    if cheapest == dearest:
+        # One cost for every term: the whole count lies in the bin that holds it, exactly.
+        log_mass, _mean, _variance = _query_summary(initial, prepared.table(0.0))
+        for index in reached:
+            log_counts[index], thetas[index] = log_mass, 0.0
+        return SaddleCounts(edges=tuple(edges), log_counts=tuple(log_counts), thetas=tuple(thetas))
+    steps = 0
+    summaries: dict[float, tuple[float, float, float]] = {}
+
+    def summary_at(theta: float) -> tuple[float, float, float]:
+        nonlocal steps
+        if theta not in summaries:
+            steps += 1
+            if steps > max_steps:
+                msg = f"the saddle point needed more than {max_steps} tilt tables"
+                raise ValueError(msg)
+            summary = _query_summary(initial, prepared.table(theta))
+            if not math.isfinite(summary[2]):
+                msg = (
+                    f"the variance of the query's costs under the tilt {theta} leaves floating point, and the saddle "
+                    "point reads it"
+                )
+                raise ValueError(msg)
+            summaries[theta] = summary
+        return summaries[theta]
+
+    def tilt_for(low: float, high: float, start: float) -> tuple[float, tuple[float, float, float]]:
+        middle, allowed = (low + high) / 2, (high - low) / 2
+        theta, summary = start, summary_at(start)
+        for _ in range(_NEWTON_STEPS):
+            _log_mass, mean, variance = summary
+            if abs(mean - middle) <= allowed:
+                return theta, summary
+            step = (mean - middle) / variance if variance > 0 else 0.0
+            while step:
+                trial = summary_at(theta + step)
+                if abs(trial[1] - middle) < abs(mean - middle):
+                    theta, summary = theta + step, trial
+                    break
+                step /= 2
+                if abs(step) <= abs(theta) * 1e-15:
+                    step = 0.0
+            if not step:
+                break
+        theta = _theta_between(
+            lambda value: summary_at(value)[1],
+            middle,
+            dearest - cheapest,
+            allowed,
+            f"no tilt puts the mean within {allowed} of {middle} in floating point",
+        )
+        return theta, summary_at(theta)
+
+    spacing = _query_spacing(initial, prepared, cheapest)
+    spans: dict[int, tuple[float, float]] = {}
+    extremes: dict[int, float] = {}
+    for index in reached:
+        if spacing:
+            first = cheapest + spacing * max(0, math.ceil((edges[index] - cheapest) / spacing))
+            last = cheapest + spacing * min(
+                (dearest - cheapest) // spacing, math.ceil((edges[index + 1] - cheapest) / spacing) - 1
+            )
+            if first > last:
+                continue
+            if first == last and first in (cheapest, dearest):
+                extremes[index] = first
+            else:
+                spans[index] = (first - spacing / 2, last + spacing / 2)
+        else:
+            low, high = max(edges[index], cheapest), min(edges[index + 1], dearest)
+            if low == high:
+                extremes[index] = low
+            else:
+                spans[index] = (low, high)
+    if extremes:
+        at_least, at_most = _query_extreme_counts(initial, prepared, cheapest, dearest)
+        for index, cost in extremes.items():
+            log_counts[index] = math.log(at_least if cost == cheapest else at_most)
+    reached = sorted(spans)
+    if not reached:
+        return SaddleCounts(edges=tuple(edges), log_counts=tuple(log_counts), thetas=tuple(thetas))
+    _log_mass, untilted_mean, _variance = summary_at(0.0)
+    middles = {index: (spans[index][0] + spans[index][1]) / 2 for index in reached}
+    first = min(reached, key=lambda index: abs(middles[index] - untilted_mean))
+    upward = [index for index in reached if index >= first]
+    downward = [index for index in reached if index < first][::-1]
+    for sweep in (upward, downward):
+        start = thetas[first] if sweep is downward else 0.0
+        for index in sweep:
+            low, high = spans[index]
+            theta, (log_mass, mean, variance) = tilt_for(max(low, cheapest), min(high, dearest), start)
+            thetas[index], start = theta, theta
+            if variance > 0:
+                deviation = math.sqrt(variance)
+                shift = mean + theta * variance
+                log_counts[index] = (
+                    log_mass
+                    + theta * mean
+                    + theta * theta * variance / 2
+                    + _log_gaussian_interval((low - shift) / deviation, (high - shift) / deviation)
+                )
+            elif low <= mean <= high:
+                log_counts[index] = log_mass + theta * mean
+    return SaddleCounts(edges=tuple(edges), log_counts=tuple(log_counts), thetas=tuple(thetas))
+
+
+def saddle_mixture(
+    query: ResolutionQuery[NT, T, G],
+    algebra: AdditiveCostAlgebra[Any],
+    thetas: Sequence[float],
+    edges: Sequence[float],
+    target: Sequence[float],
+    *,
+    program: TiltProgram[NT] | None = None,
+    least_share: float = 0.0,
+) -> TiltedMixture[NT, T, G]:
+    """Build the mixture of tilts to a target on cost bins with the saddle point's counts in place of a pilot.
+
+    :func:`tilted_mixture` estimates the number of terms per bin from pilot draws; here :func:`saddle_counts`
+    gives it, deterministically and without a draw. The stream is the same: a bin's terms alike, exactly, and the
+    bins following the target up to the saddle point's error, which carries no error bar of its own.
+
+    Args:
+        query (ResolutionQuery[NT, T, G]): The query to sample from, generator or partial-term.
+        algebra (AdditiveCostAlgebra[Any]): The additive cost algebra, with finite real costs.
+        thetas (Sequence[float]): The tilts of the mixture, distinct finite reals.
+        edges (Sequence[float]): The bins' boundaries, strictly ascending finite reals, at least two.
+        target (Sequence[float]): The target's mass per bin, one fewer than the edges, nonnegative, not all zero.
+        program (TiltProgram[NT] | None): The query's program already prepared under this algebra. (Default value = None)
+        least_share (float): Bins whose share of the target is below this, a real number from 0 to 1, are not
+            estimated, their share reported as out of reach; every tilt table a bin needs is a pass over the
+            program. (Default value = 0.0)
+
+    Returns:
+        TiltedMixture[NT, T, G]: The construction, ready to stream from.
+
+    Raises:
+        ValueError: If the tilts, the edges, the target or the least share are not of the kinds above; where
+            :func:`tilted_search` or :func:`saddle_counts` refuses the query; if the query has no term; or if no bin
+            with a target at or above the least share holds a term.
+    """
+    thetas, edges, target = _checked_mixture(thetas, edges, target)
+    if isinstance(least_share, bool) or not isinstance(least_share, (int, float)) or not 0 <= least_share <= 1:
+        msg = f"the least share must be a real number between 0 and 1, not {least_share!r}"
+        raise ValueError(msg)
+    prepared = _prepared(query, algebra, program)
+    searches = tuple(tilted_search(query, algebra, theta, table=prepared.table(theta)) for theta in thetas)
+    if searches[0].root_log_mass == -math.inf:
+        msg = "the query has no term, so there is nothing to estimate or to draw"
+        raise ValueError(msg)
+    total = sum(target)
+    wanted = [index for index, mass in enumerate(target) if mass > 0 and mass / total >= least_share]
+    counts = saddle_counts(query, algebra, edges, program=prepared, only=wanted)
+    return _mixture(
+        searches,
+        edges,
+        target,
+        counts.log_counts,
+        [math.nan] * len(target),
+        0,
+        "no bin with a target at or above the least share holds a term of the query",
     )
