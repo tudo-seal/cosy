@@ -14,7 +14,9 @@ estimated to add. It also carries random search itself, which is best-first sear
 randomizing cost function, and the samplers the evolutionary and Bayesian methods draw their
 populations from, one of them under a prescribed distribution on an additive cost, and a Markov
 chain on terms that walks to such a distribution where random search would draw from it, and
-particles that walk a search tree on estimated weights and are weighted to the distribution. Beside all of
+particles that walk a search tree on estimated weights and are weighted to the distribution, and the
+counts of a cost rounded to units, which bound the counts of the cost itself and reach its distribution by
+rejection. Beside all of
 these stands the one rule that traverses no derivation tree at all:
 bottom-up search, which iterates the immediate consequence operator of a program to the least
 Herbrand model and reads the inhabitants off it.
@@ -79,6 +81,7 @@ from cosy.search.markov import (
 )
 from cosy.search.partial import Hole, holes, partial_inhabitant, term_depth, term_size
 from cosy.search.queries import ResolutionQuery, checker, generator_query, residual_query
+from cosy.search.rounding import BinBounds, RoundedRejection, bin_count_bounds, rounded_rejection
 from cosy.search.rules import (
     breadth_first,
     deepest_first_subgoal,
@@ -127,6 +130,7 @@ from cosy.search.tilt import (
 
 __all__ = [
     "AdditiveCostAlgebra",
+    "BinBounds",
     "BottomUpCounters",
     "ChainStep",
     "ComponentwiseTuples",
@@ -151,6 +155,7 @@ __all__ = [
     "ProductNonTerminal",
     "Reals",
     "ResolutionQuery",
+    "RoundedRejection",
     "SMCSampler",
     "SaddleCounts",
     "SaddleGrid",
@@ -175,6 +180,7 @@ __all__ = [
     "assert_uniform_cost_complete",
     "best_first",
     "best_first_frontier",
+    "bin_count_bounds",
     "bottom_up",
     "branch_counts",
     "branch_multiplicities",
@@ -206,6 +212,7 @@ __all__ = [
     "reference_score",
     "residual_query",
     "retained_node_count",
+    "rounded_rejection",
     "rule_cost",
     "saddle_counts",
     "saddle_grid",
