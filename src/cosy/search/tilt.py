@@ -78,6 +78,7 @@ __all__ = [
     "SaddleCounts",
     "SaddleGrid",
     "SaddleSearch",
+    "TargetOutOfReach",
     "TiltProgram",
     "TiltTable",
     "TiltedMixture",
@@ -92,6 +93,14 @@ __all__ = [
     "tilted_mixture",
     "tilted_search",
 ]
+
+
+class TargetOutOfReach(ValueError):  # noqa: N818  (a condition, not an error: a sampler ends its stream on it)
+    """No term of the query lies, or is estimated to lie, in a bin the target puts mass on.
+
+    A construction refuses such a target by name, and a sampler takes the refusal as the end of its stream: within the
+    bound there is nothing to draw, which is an answer and not a mistake.
+    """
 
 
 def _real_cost(value: Any, what: str) -> float:
@@ -739,17 +748,15 @@ class TiltedSearch(Generic[NT, T, G]):
         for _, inhabitant in self.keyed_stream(rng):
             yield inhabitant
 
-    def keyed_stream(self, rng: random.Random) -> Iterator[tuple[float, Tree[T]]]:
-        """Draw one stream, keeping the key each term was streamed under.
+    def expansion(self) -> tuple[Any, float, Callable[[Any], tuple[Tree[T] | None, Sequence[tuple[Any, float]]]]]:
+        """Return the search tree this construction's random search walks: its root, the root's log weight, the expansion.
 
-        Args:
-            rng (random.Random): The source of randomness.
+        The expansion names a node's term, or its children with their log weights; :meth:`keyed_stream` runs random
+        search on it, and the particles of :func:`cosy.search.smc.sequential_monte_carlo` walk the same tree.
 
-        Yields:
-            tuple[float, Tree[T]]: The key and the term, in decreasing key order.
+        Returns:
+            tuple: The root node, its log weight (``-inf`` without a term), and the expansion.
         """
-        if self.root_log_mass == -math.inf:
-            return
         select = deepest_first_subgoal if self.subgoal_selection is None else self.subgoal_selection
         space = self.query.solution_space
         root_log_mass = self.root_log_mass
@@ -800,7 +807,31 @@ class TiltedSearch(Generic[NT, T, G]):
                     kept.append(((None, child_cost, (goal, position, rule)), log_weight))
             return None, kept
 
-        yield from keyed_stream((None, 0.0, None), 0.0, expand, rng)
+        return (None, 0.0, None), (0.0 if self.root_log_mass > -math.inf else -math.inf), expand
+
+    def log_target_of(self, term: Tree[T]) -> float:
+        """Return the log of the tilted law's probability of one of the query's terms: ``-theta c(t)`` less the query's log mass.
+
+        Args:
+            term (Tree[T]): A term of the query.
+
+        Returns:
+            float: ``-theta c(t) - log Z``, the weight random search gives the term; ``-inf`` for a query without a term.
+        """
+        if self.root_log_mass == -math.inf:
+            return -math.inf
+        return -self.table.theta * _real_cost(self.table.algebra.fold(term), "the cost of a term") - self.root_log_mass
+
+    def keyed_stream(self, rng: random.Random) -> Iterator[tuple[float, Tree[T]]]:
+        """Draw one stream, keeping the key each term was streamed under.
+
+        Args:
+            rng (random.Random): The source of randomness.
+
+        Yields:
+            tuple[float, Tree[T]]: The key and the term, in decreasing key order.
+        """
+        yield from keyed_stream(*self.expansion(), rng)
 
 
 def _initial_tilt_nodes(
@@ -2225,22 +2256,14 @@ class SaddleSearch(Generic[NT, T, G]):
             object.__setattr__(self, "_root_children_cache", known)
         return known
 
-    def keyed_stream(self, rng: random.Random) -> Iterator[tuple[float, Tree[T]]]:
-        """Run random search on the estimated weights, keeping each term's key.
+    def expansion(self) -> tuple[Any, float, Callable[[Any], tuple[Tree[T] | None, Sequence[tuple[Any, float]]]]]:
+        """Return the search tree this construction's random search walks: its root, the root's log weight, the expansion.
 
-        Its first term is a draw in proportion to the weights along its path; a node whose estimate is positive while
-        no term lies below it in a bin with a target is passed over, and the search goes on with the next key. The
-        later terms are an enumeration of the rest, in the order of keys conditioned on estimates that need not agree
-        with each other.
+        The expansion names a node's term, or its children with their log weights; :meth:`keyed_stream` runs random
+        search on it, and the particles of :func:`cosy.search.smc.sequential_monte_carlo` walk the same tree.
 
-        Args:
-            rng (random.Random): The source of randomness.
-
-        Yields:
-            tuple[float, Tree[T]]: The key and the term, in decreasing key order.
-
-        Raises:
-            ValueError: If the computation rule selects a position that is not an open hole.
+        Returns:
+            tuple: The root node, its log weight (``-inf`` without a term), and the expansion.
         """
         select = deepest_first_subgoal if self.subgoal_selection is None else self.subgoal_selection
         space = self.query.solution_space
@@ -2298,7 +2321,42 @@ class SaddleSearch(Generic[NT, T, G]):
                     )
             return None, kept
 
-        yield from keyed_stream((None, 0.0, None, (), None), 0.0, expand, rng)
+        return (None, 0.0, None, (), None), 0.0, expand
+
+    def log_target_of(self, term: Tree[T]) -> float:
+        """Return the log of the target's weight of one of the query's terms: ``target(b) / N(b)`` for the bin of its cost.
+
+        The weight the search means to give the term, ``N`` the estimated counts, on the scale of the nodes' weights; the
+        search itself gives the term what its path's estimates multiply to.
+
+        Args:
+            term (Tree[T]): A term of the query.
+
+        Returns:
+            float: ``log(target(b) / N(b))``; ``-inf`` outside the bins with a target and an estimate.
+        """
+        cost = _real_cost(self.grid.program.algebra.fold(term), "the cost of a term")
+        index = bisect_right(self.edges, cost) - 1
+        return self.log_rho[index] if 0 <= index < len(self.edges) - 1 else -math.inf
+
+    def keyed_stream(self, rng: random.Random) -> Iterator[tuple[float, Tree[T]]]:
+        """Run random search on the estimated weights, keeping each term's key.
+
+        Its first term is a draw in proportion to the weights along its path; a node whose estimate is positive while
+        no term lies below it in a bin with a target is passed over, and the search goes on with the next key. The
+        later terms are an enumeration of the rest, in the order of keys conditioned on estimates that need not agree
+        with each other.
+
+        Args:
+            rng (random.Random): The source of randomness.
+
+        Yields:
+            tuple[float, Tree[T]]: The key and the term, in decreasing key order.
+
+        Raises:
+            ValueError: If the computation rule selects a position that is not an open hole.
+        """
+        yield from keyed_stream(*self.expansion(), rng)
 
     def stream(self, rng: random.Random, max_draws: int) -> Iterator[Tree[T]]:
         """Draw terms: the first term of a fresh stream each, a term drawn before skipped, until the draws run out.
@@ -2391,7 +2449,7 @@ def saddle_search(
     reached = [mass if log_root_counts[index] > -math.inf else 0.0 for index, mass in enumerate(checked)]
     if sum(reached) <= 0:
         msg = "no bin with a target at or above the least share has an estimated term of the query"
-        raise ValueError(msg)
+        raise TargetOutOfReach(msg)
     normalized = tuple(mass / sum(reached) for mass in reached)
     return SaddleSearch(
         query=query,

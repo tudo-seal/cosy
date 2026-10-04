@@ -13,7 +13,8 @@ the cost of a search node into what its partial inhabitant has already cost and 
 estimated to add. It also carries random search itself, which is best-first search under a
 randomizing cost function, and the samplers the evolutionary and Bayesian methods draw their
 populations from, one of them under a prescribed distribution on an additive cost, and a Markov
-chain on terms that walks to such a distribution where random search would draw from it. Beside all of
+chain on terms that walks to such a distribution where random search would draw from it, and
+particles that walk a search tree on estimated weights and are weighted to the distribution. Beside all of
 these stands the one rule that traverses no derivation tree at all:
 bottom-up search, which iterates the immediate consequence operator of a program to the least
 Herbrand model and reads the inhabitants off it.
@@ -91,6 +92,7 @@ from cosy.search.samplers import (
     MarkovChainSampler,
     Sampler,
     SizeUniformSampler,
+    SMCSampler,
     TiltSampler,
 )
 from cosy.search.sampling import (
@@ -102,10 +104,12 @@ from cosy.search.sampling import (
     weighted_table,
     weighted_tree,
 )
+from cosy.search.smc import Guided, WeightedParticles, sequential_monte_carlo
 from cosy.search.tilt import (
     SaddleCounts,
     SaddleGrid,
     SaddleSearch,
+    TargetOutOfReach,
     TiltedMixture,
     TiltedSearch,
     TiltProgram,
@@ -136,6 +140,7 @@ __all__ = [
     "DepthBoundedRandomSampler",
     "Determinization",
     "Frontier",
+    "Guided",
     "HeapFrontier",
     "Hole",
     "LinearScanFrontier",
@@ -146,12 +151,14 @@ __all__ = [
     "ProductNonTerminal",
     "Reals",
     "ResolutionQuery",
+    "SMCSampler",
     "SaddleCounts",
     "SaddleGrid",
     "SaddleSearch",
     "Sampler",
     "SizeTable",
     "SizeUniformSampler",
+    "TargetOutOfReach",
     "TiltProgram",
     "TiltSampler",
     "TiltTable",
@@ -160,6 +167,7 @@ __all__ = [
     "VisitCounts",
     "WangLandau",
     "WeightedCostTable",
+    "WeightedParticles",
     "WeightedTable",
     "WeightedTree",
     "a_star",
@@ -203,6 +211,7 @@ __all__ = [
     "saddle_grid",
     "saddle_mixture",
     "saddle_search",
+    "sequential_monte_carlo",
     "size_table",
     "size_uniform",
     "term_depth",

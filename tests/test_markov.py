@@ -775,6 +775,16 @@ def test_the_sampler_completes_a_partial_term_and_counts_the_terms_exactly():
     assert sampler.at_least(partial, 0)
 
 
+def test_the_sampler_ends_its_stream_where_no_term_lies_in_a_bin_with_a_target():
+    """Counts that say no bin with a target has a term, or a target no drawn term reaches: the stream ends."""
+    query, algebra = nested()
+    edges, target = (0.0, 1.6, 3.1, 4.6, 7.0), (0.3, 0.2, 0.4, 0.1)
+    sampler = MarkovChainSampler(algebra, 0.0, edges, target, random.Random(1), log_counts=[-math.inf] * 4)
+    assert list(itertools.islice(sampler.sample(query), 5)) == []
+    beyond = MarkovChainSampler(algebra, 0.0, (20.0, 30.0), (1.0,), random.Random(1), log_counts=[0.0])
+    assert list(itertools.islice(beyond.sample(query), 5)) == []
+
+
 @pytest.mark.parametrize(
     ("change", "message"),
     [({"burn_in": -1}, "burn-in"), ({"thin": 0}, "thin"), ({"root_share": 2.0}, "root share")],

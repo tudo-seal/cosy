@@ -8,7 +8,7 @@ ask. Within a bound the question changes, and what the caller sees is a stream t
 clause that reacts to "the stream gave nothing" therefore reacts to a *halting request*, never to
 an emptiness test, which in Python terms means a `StopIteration` and never an `is_empty()` oracle.
 
-Four of them, and the difference is what they promise:
+Six of them, and the difference is what they promise:
 
 * :class:`DepthBoundedRandomSampler` draws independently: one draw runs a depth-first search whose
   clause order is uniformly random, and takes the first inhabitant it yields. It promises
@@ -29,8 +29,12 @@ Four of them, and the difference is what they promise:
   query's terms (:mod:`cosy.search.markov`) whose law is a target on cost bins spread evenly over the
   terms of a bin. It promises that law in the limit only, draws with replacement, and its states are
   correlated; it needs no count of the terms below a node, only counts per bin, given or learned.
+* :class:`SMCSampler` draws from the weighted particles of sequential Monte Carlo runs
+  (:mod:`cosy.search.smc`) guided by the saddle search's estimates and weighted to its target, the
+  target on cost bins spread over a bin's terms by the estimated counts. It promises that law as the
+  number of particles grows; a run's draws are with replacement and share ancestors.
 
-All five run on *any* resolution query of a program they apply to, generator or partial-term alike,
+All six run on *any* resolution query of a program they apply to, generator or partial-term alike,
 which is what lets a mutation operator take the same sampler parameter as an initialization. The
 counting samplers apply where their counts do: the cost table's sampler, like the size table's form,
 refuses a program in which a predicate reads a hole, and it refuses one in which clauses of cost
@@ -53,6 +57,7 @@ sampler states is not, so the filter states it where it holds regardless.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from cosy.search.cost_tables import WeightedCostTable, _whole_cap, weighted_cost_table
@@ -72,7 +77,8 @@ from cosy.search.sampling import (
     weighted_table,
     weighted_tree,
 )
-from cosy.search.tilt import TiltedSearch, _real_theta, tilted_search
+from cosy.search.smc import WeightedParticles, sequential_monte_carlo
+from cosy.search.tilt import SaddleSearch, TargetOutOfReach, TiltedSearch, _real_theta, saddle_search, tilted_search
 
 if TYPE_CHECKING:
     import random
@@ -87,10 +93,16 @@ __all__ = [
     "CostTableSampler",
     "DepthBoundedRandomSampler",
     "MarkovChainSampler",
+    "SMCSampler",
     "Sampler",
     "SizeUniformSampler",
     "TiltSampler",
 ]
+
+
+# The runs in a row whose every particle ends where the target weighs nothing before the sampler gives up: a run of a few
+# particles can, by chance; a hundred in a row say the guide leads nowhere the target is.
+_EMPTY_RUNS = 100
 
 
 def _uniform(_value: Any) -> float:
@@ -738,13 +750,18 @@ class MarkovChainSampler:
             query (ResolutionQuery[Any, Any, Any]): The query to complete.
 
         Yields:
-            Tree[Any]: The states, with replacement.
+            Tree[Any]: The states, with replacement. The stream ends at once where no term of the query lies in a bin
+                with a target, or none is found to by the draws a start allows: within the bound, nothing to draw.
 
         Raises:
-            ValueError: Where the chain refuses the query's program or finds no start inside its target.
+            ValueError: Where the chain refuses the query's program.
         """
-        chain = self._construction(query)
-        steps = chain.run(self.rng, self._start)
+        try:
+            chain = self._construction(query)
+            start = self._start if self._start is not None else chain.initial(self.rng)
+        except TargetOutOfReach:
+            return
+        steps = chain.run(self.rng, start)
         for _ in range(self.burn_in):
             next(steps)
         while True:
@@ -769,3 +786,152 @@ class MarkovChainSampler:
             return True
         chain = self._construction(query)
         return tilted_search(query, self.algebra, self.theta, table=chain.table).total >= count
+
+
+class SMCSampler:
+    """Terms drawn from the weighted particles of sequential Monte Carlo runs, guided by the saddle search, as a sampler.
+
+    Each run sends ``particles`` particles from the query's root to its terms, each choosing children in proportion to
+    the saddle search's estimates (:func:`cosy.search.tilt.saddle_search`) and weighted to its target, the target's
+    mass on a bin spread evenly over the bin's terms by the estimated counts; ``draws_per_run`` terms are then drawn
+    from the run's weighted particles, and the next run begins. The weights correct the estimates' disagreement among
+    siblings, so a bin's terms come alike as the particles grow; the bins carry the target as far as the estimated
+    counts per bin are right. The stream is with replacement, a run's draws share ancestors, and nothing is claimed
+    about a prefix.
+
+    Like :class:`TiltSampler` it keeps the last construction it built, keyed by the identity of the query, so that an
+    initialization asking :meth:`at_least` and then drawing prepares the program and the grid once; :meth:`forget`
+    gives it back. The last run stays readable as :attr:`last_run`.
+
+    Attributes:
+        algebra (AdditiveCostAlgebra): The additive cost algebra whose fold is the cost.
+        edges (tuple[float, ...]): The bins' boundaries.
+        target (tuple[float, ...]): The target's mass per bin.
+        rng (random.Random): The source of randomness.
+        particles (int): The particles of one run.
+        draws_per_run (int): The terms drawn from one run's weighted particles.
+        threshold (float): The share of the particles below which their effective number triggers a resampling.
+        last_run (WeightedParticles | None): The last run's particles; None before any.
+    """
+
+    def __init__(
+        self,
+        algebra: AdditiveCostAlgebra[Any],
+        edges: Sequence[float],
+        target: Sequence[float],
+        rng: random.Random,
+        *,
+        particles: int = 1000,
+        draws_per_run: int | None = None,
+        threshold: float = 0.5,
+    ) -> None:
+        """Build the sampler.
+
+        Args:
+            algebra (AdditiveCostAlgebra[Any]): The additive cost algebra, with finite real costs.
+            edges (Sequence[float]): The bins' boundaries, strictly ascending finite reals, at least two.
+            target (Sequence[float]): The target's mass per bin, one fewer than the edges, nonnegative, not all zero.
+            rng (random.Random): The source of randomness.
+            particles (int): The particles of one run, at least one. (Default value = 1000)
+            draws_per_run (int | None): The terms drawn from one run, at least one; None draws as many as there are
+                particles. (Default value = None)
+            threshold (float): The share of the particles below which their effective number triggers a resampling,
+                from 0 to 1. (Default value = 0.5)
+
+        Raises:
+            ValueError: If the particles or the draws per run are below one, or the threshold is outside ``[0, 1]``.
+        """
+        if isinstance(particles, bool) or not isinstance(particles, int) or particles < 1:
+            msg = f"the particles must be a whole number of at least one, not {particles!r}"
+            raise ValueError(msg)
+        draws = particles if draws_per_run is None else draws_per_run
+        if isinstance(draws, bool) or not isinstance(draws, int) or draws < 1:
+            msg = f"the draws per run must be a whole number of at least one, not {draws!r}"
+            raise ValueError(msg)
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 <= threshold <= 1:
+            msg = f"the threshold is a share of the particles, a real number from 0 to 1, not {threshold!r}"
+            raise ValueError(msg)
+        self.algebra = algebra
+        self.edges = tuple(edges)
+        self.target = tuple(target)
+        self.rng = rng
+        self.particles = particles
+        self.draws_per_run = draws
+        self.threshold = float(threshold)
+        self.last_run: WeightedParticles[Any] | None = None
+        self._query: ResolutionQuery[Any, Any, Any] | None = None
+        self._search: SaddleSearch[Any, Any, Any] | None = None
+
+    def forget(self) -> None:
+        """Drop the cached construction and the last run.
+
+        Returns:
+            None
+        """
+        self._query = None
+        self._search = None
+        self.last_run = None
+
+    def _construction(self, query: ResolutionQuery[Any, Any, Any]) -> SaddleSearch[Any, Any, Any]:
+        """Return the saddle search for a query, building it at most once in a row.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Returns:
+            SaddleSearch: The guide and its target.
+        """
+        if self._search is None or self._query is not query:
+            self._search = saddle_search(query, self.algebra, self.edges, self.target)
+            self._query = query
+        return self._search
+
+    def sample(self, query: ResolutionQuery[Any, Any, Any]) -> Iterator[Tree[Any]]:
+        """Stream terms drawn from the weighted particles of one run after another, without end.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Yields:
+            Tree[Any]: The terms, with replacement. The stream ends at once where the saddle search estimates no term of
+                the query in a bin with a target: within the bound, nothing to draw.
+
+        Raises:
+            ValueError: Where the saddle search refuses the query otherwise, or where ``_EMPTY_RUNS`` runs in a row have
+                every particle end in a dead end or on a term the target does not weigh, which a few particles can do by
+                chance and many hardly ever.
+        """
+        try:
+            search = self._construction(query)
+        except TargetOutOfReach:
+            return
+        empty = 0
+        while True:
+            run = sequential_monte_carlo(search, self.rng, self.particles, threshold=self.threshold)
+            self.last_run = run
+            if run.log_normalizer == -math.inf:
+                empty += 1
+                if empty >= _EMPTY_RUNS:
+                    msg = f"{_EMPTY_RUNS} runs in a row had no particle reach a term the target weighs"
+                    raise ValueError(msg)
+                continue
+            empty = 0
+            yield from run.draw(self.rng, self.draws_per_run)
+
+    def at_least(self, query: ResolutionQuery[Any, Any, Any], count: int) -> bool:
+        """Decide whether the query has at least ``count`` terms.
+
+        Exact, from the number of terms the tilt keeps in whole numbers, which counts the whole language and not only
+        the bins with a target; under ambiguity the numbers are of derivations. Both can only overstate.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+            count (int): The number of completions asked for.
+
+        Returns:
+            bool: True if the query has at least ``count`` terms.
+        """
+        if count <= 0:
+            return True
+        program = self._construction(query).grid.program
+        return tilted_search(query, self.algebra, 0.0, table=program.table(0.0)).total >= count

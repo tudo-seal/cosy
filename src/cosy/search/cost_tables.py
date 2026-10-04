@@ -1107,17 +1107,15 @@ class WeightedCostTable(Generic[NT, T, G]):
         for _, inhabitant in self.keyed_stream(rng):
             yield inhabitant
 
-    def keyed_stream(self, rng: random.Random) -> Iterator[tuple[float, Tree[T]]]:
-        """Draw one stream, keeping the key each inhabitant was streamed under.
+    def expansion(self) -> tuple[Any, float, Callable[[Any], tuple[Tree[T] | None, Sequence[tuple[Any, float]]]]]:
+        """Return the search tree this construction's random search walks: its root, the root's log weight, the expansion.
 
-        Args:
-            rng (random.Random): The source of randomness.
+        The expansion names a node's term, or its children with their log weights; :meth:`keyed_stream` runs random
+        search on it, and the particles of :func:`cosy.search.smc.sequential_monte_carlo` walk the same tree.
 
-        Yields:
-            tuple[float, Tree[T]]: The key and the inhabitant, in decreasing key order.
+        Returns:
+            tuple: The root node, its log weight (``-inf`` without a term), and the expansion.
         """
-        if not self.root_counts:
-            return
         select = deepest_first_subgoal if self.subgoal_selection is None else self.subgoal_selection
 
         rank = self._cache("_rank_cache")
@@ -1183,7 +1181,29 @@ class WeightedCostTable(Generic[NT, T, G]):
                     kept.append(((None, child_cost, (goal, position, rule)), log_weight))
             return None, kept
 
-        yield from keyed_stream((None, 0, None), self.log_weight_of(None, 0), expand, rng)
+        return (None, 0, None), self.log_weight_of(None, 0), expand
+
+    def log_target_of(self, term: Tree[T]) -> float:
+        """Return the log of the weight random search gives one of the query's terms: ``pi(c) / N_r(c)`` for its cost.
+
+        Args:
+            term (Tree[T]): A term of the query.
+
+        Returns:
+            float: The log unit weight of the term's cost; ``-inf`` for a cost the table holds no weight for.
+        """
+        return self.log_unit_weights.get(self.algebra.fold(term), -math.inf)
+
+    def keyed_stream(self, rng: random.Random) -> Iterator[tuple[float, Tree[T]]]:
+        """Draw one stream, keeping the key each inhabitant was streamed under.
+
+        Args:
+            rng (random.Random): The source of randomness.
+
+        Yields:
+            tuple[float, Tree[T]]: The key and the inhabitant, in decreasing key order.
+        """
+        yield from keyed_stream(*self.expansion(), rng)
 
 
 def weighted_cost_table(

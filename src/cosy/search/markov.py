@@ -59,7 +59,15 @@ from cosy.core.tree import Tree
 from cosy.search.counting import _admitted, decomposable_or_raise
 from cosy.search.partial import holes
 from cosy.search.sampling import log_sum_exp
-from cosy.search.tilt import _checked_edges, _initial_tilt_nodes, _prepared, _real_cost, _real_rule_cost, _real_theta
+from cosy.search.tilt import (
+    TargetOutOfReach,
+    _checked_edges,
+    _initial_tilt_nodes,
+    _prepared,
+    _real_cost,
+    _real_rule_cost,
+    _real_theta,
+)
 
 if TYPE_CHECKING:
     import random
@@ -507,7 +515,7 @@ class MetropolisChain(Generic[NT, T, G]):
                 self.memory.remember(term, derivation)
                 return term
         msg = f"none of {max_draws} drawn terms lies inside the chain's target; give the chain a start"
-        raise ValueError(msg)
+        raise TargetOutOfReach(msg)
 
     def run(self, rng: random.Random, start: Tree[T] | None = None) -> Iterator[ChainStep[T]]:
         """Run the chain, one step per element, without end.
@@ -698,7 +706,7 @@ def _log_rho(log_target: Sequence[float], log_counts: Sequence[float]) -> tuple[
     )
     if all(value == -math.inf for value in log_rho):
         msg = "no bin with a target has a term, so the chain has no law to walk to"
-        raise ValueError(msg)
+        raise TargetOutOfReach(msg)
     return log_rho
 
 
