@@ -25,8 +25,12 @@ Four of them, and the difference is what they promise:
   in proportion to their counts, tilted, with one real number per non-terminal and no table of
   counts, over a program whose language is finite. Under unambiguity its prefixes are samples without
   replacement as well.
+* :class:`MarkovChainSampler` is not random search: it streams the states of a Markov chain on the
+  query's terms (:mod:`cosy.search.markov`) whose law is a target on cost bins spread evenly over the
+  terms of a bin. It promises that law in the limit only, draws with replacement, and its states are
+  correlated; it needs no count of the terms below a node, only counts per bin, given or learned.
 
-All four run on *any* resolution query of a program they apply to, generator or partial-term alike,
+All five run on *any* resolution query of a program they apply to, generator or partial-term alike,
 which is what lets a mutation operator take the same sampler parameter as an initialization. The
 counting samplers apply where their counts do: the cost table's sampler, like the size table's form,
 refuses a program in which a predicate reads a hole, and it refuses one in which clauses of cost
@@ -52,6 +56,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from cosy.search.cost_tables import WeightedCostTable, _whole_cap, weighted_cost_table
+from cosy.search.markov import (
+    MetropolisChain,
+    VisitCounts,
+    WangLandau,
+    counts_from_visits,
+    metropolis_chain,
+    wang_landau,
+)
 from cosy.search.partial import term_size
 from cosy.search.rules import depth_first, uniform_random_clause_order
 from cosy.search.sampling import (
@@ -64,14 +76,21 @@ from cosy.search.tilt import TiltedSearch, _real_theta, tilted_search
 
 if TYPE_CHECKING:
     import random
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Mapping, Sequence
 
     from cosy.core.solution_space import Goal
     from cosy.core.tree import Tree
     from cosy.search.costs import AdditiveCostAlgebra
     from cosy.search.queries import ResolutionQuery
 
-__all__ = ["CostTableSampler", "DepthBoundedRandomSampler", "Sampler", "SizeUniformSampler", "TiltSampler"]
+__all__ = [
+    "CostTableSampler",
+    "DepthBoundedRandomSampler",
+    "MarkovChainSampler",
+    "Sampler",
+    "SizeUniformSampler",
+    "TiltSampler",
+]
 
 
 def _uniform(_value: Any) -> float:
@@ -567,3 +586,186 @@ class TiltSampler:
         if count <= 0:
             return True
         return self._construction(query).total >= count
+
+
+class MarkovChainSampler:
+    """The states of a Metropolis-Hastings chain on the query's terms, to a target on cost bins, as a sampler.
+
+    The chain of :mod:`cosy.search.markov`: its law spreads the target's mass on a bin evenly over the bin's terms, by
+    the counts per bin the caller gives, or by counts a Wang-Landau walk learns first when none are given. The stream
+    is the chain's states after ``burn_in`` steps, every ``thin``-th one. Counts learned by the walk are rough; ``visits``
+    steps of a run on them correct them by the chain's visits before the stream begins. It promises the law in the limit and nothing
+    about a prefix: the states are correlated, a term may recur, and how fast the chain mixes is the caller's to read.
+    It applies where the tilt applies: an additive cost algebra with finite real costs, a finite language, no predicate
+    reading a hole.
+
+    Like :class:`TiltSampler` it keeps the last construction it built, keyed by the identity of the query, so that an
+    initialization asking :meth:`at_least` and then drawing prepares the program once; :meth:`forget` gives it back.
+    The counts a walk learned are kept with it and stay readable as :attr:`last_estimate`.
+
+    Attributes:
+        algebra (AdditiveCostAlgebra): The additive cost algebra whose fold is the cost.
+        theta (float): The tilt every regrowth draws by.
+        edges (tuple[float, ...]): The bins' boundaries.
+        target (tuple[float, ...]): The target's mass per bin.
+        rng (random.Random): The source of randomness.
+        log_counts (tuple[float, ...] | None): The log of the number of terms per bin, or None to learn them.
+        root_share (float): The probability of regrowing the whole term in a step.
+        burn_in (int): The steps taken before the first state is streamed.
+        thin (int): The steps from one streamed state to the next.
+        wang_landau (Mapping[str, Any]): The options of the Wang-Landau walk, when counts are learned.
+        visits (int): The steps of the run that corrects learned counts by the chain's visits; 0 for none.
+        last_estimate (WangLandau | None): What the last walk learned; None before any, or with counts given.
+        last_correction (VisitCounts | None): What the last correction by visits read; None before any, or without one.
+    """
+
+    def __init__(
+        self,
+        algebra: AdditiveCostAlgebra[Any],
+        theta: float,
+        edges: Sequence[float],
+        target: Sequence[float],
+        rng: random.Random,
+        *,
+        log_counts: Sequence[float] | None = None,
+        root_share: float = 0.5,
+        burn_in: int = 0,
+        thin: int = 1,
+        wang_landau: Mapping[str, Any] | None = None,
+        visits: int = 0,
+    ) -> None:
+        """Build the sampler.
+
+        Args:
+            algebra (AdditiveCostAlgebra[Any]): The additive cost algebra, with finite real costs.
+            theta (float): The tilt every regrowth draws by, any finite real number.
+            edges (Sequence[float]): The bins' boundaries, strictly ascending finite reals, at least two.
+            target (Sequence[float]): The target's mass per bin, one fewer than the edges, nonnegative, not all zero.
+            rng (random.Random): The source of randomness.
+            log_counts (Sequence[float] | None): The log of the number of the query's terms per bin, one per bin, or
+                None to learn them by Wang-Landau before the first state. (Default value = None)
+            root_share (float): The probability of regrowing the whole term in a step, from 0 to 1.
+                (Default value = 0.5)
+            burn_in (int): The steps taken before the first state is streamed, at least 0. (Default value = 0)
+            thin (int): The steps from one streamed state to the next, at least 1. (Default value = 1)
+            wang_landau (Mapping[str, Any] | None): Options of :func:`cosy.search.markov.wang_landau` for the walk.
+                (Default value = None)
+            visits (int): The steps of the run on the learned counts that corrects them by the chain's visits
+                (:func:`cosy.search.markov.counts_from_visits`), at least 0; 0 keeps the walk's counts. Not read when
+                counts are given. (Default value = 0)
+
+        Raises:
+            ValueError: If ``theta`` is not a finite real number, the root share not in ``[0, 1]``, the burn-in
+                negative, the thinning below one or the correction's steps negative.
+        """
+        if isinstance(root_share, bool) or not isinstance(root_share, (int, float)) or not 0 <= root_share <= 1:
+            msg = f"the root share is a probability, a real number from 0 to 1, not {root_share!r}"
+            raise ValueError(msg)
+        if isinstance(burn_in, bool) or not isinstance(burn_in, int) or burn_in < 0:
+            msg = f"the burn-in counts steps and is a whole number not below 0, not {burn_in!r}"
+            raise ValueError(msg)
+        if isinstance(thin, bool) or not isinstance(thin, int) or thin < 1:
+            msg = f"the thinning counts steps and is a whole number of at least 1, not {thin!r}"
+            raise ValueError(msg)
+        self.algebra = algebra
+        self.theta = _real_theta(theta)
+        self.edges = tuple(edges)
+        self.target = tuple(target)
+        self.rng = rng
+        self.log_counts = None if log_counts is None else tuple(log_counts)
+        self.root_share = float(root_share)
+        self.burn_in = burn_in
+        self.thin = thin
+        if isinstance(visits, bool) or not isinstance(visits, int) or visits < 0:
+            msg = f"the correction by visits counts steps and is a whole number not below 0, not {visits!r}"
+            raise ValueError(msg)
+        self.wang_landau: Mapping[str, Any] = dict(wang_landau or {})
+        self.visits = visits
+        self.last_estimate: WangLandau[Any] | None = None
+        self.last_correction: VisitCounts[Any] | None = None
+        self._query: ResolutionQuery[Any, Any, Any] | None = None
+        self._chain: MetropolisChain[Any, Any, Any] | None = None
+        self._start: Tree[Any] | None = None
+
+    def forget(self) -> None:
+        """Drop the cached construction and the learned counts.
+
+        Returns:
+            None
+        """
+        self._query = None
+        self._chain = None
+        self._start = None
+        self.last_estimate = None
+        self.last_correction = None
+
+    def _construction(self, query: ResolutionQuery[Any, Any, Any]) -> MetropolisChain[Any, Any, Any]:
+        """Return the chain for a query, building it, and learning its counts if none were given, at most once in a row.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to walk on.
+
+        Returns:
+            MetropolisChain: The chain, on the given or the learned counts.
+        """
+        if self._chain is None or self._query is not query:
+            given = self.log_counts
+            counts = [0.0] * (len(self.edges) - 1) if given is None else list(given)
+            chain = metropolis_chain(
+                query, self.algebra, self.theta, self.edges, self.target, counts, root_share=self.root_share
+            )
+            self._start = None
+            self.last_estimate = None
+            self.last_correction = None
+            if given is None:
+                learned = wang_landau(chain, self.rng, **self.wang_landau)
+                chain = chain.with_log_counts(learned.log_counts)
+                self._start = learned.term
+                self.last_estimate = learned
+                if self.visits:
+                    corrected = counts_from_visits(chain, self.rng, self.visits, start=learned.term)
+                    chain = chain.with_log_counts(corrected.log_counts)
+                    self._start = corrected.term
+                    self.last_correction = corrected
+            self._chain = chain
+            self._query = query
+        return self._chain
+
+    def sample(self, query: ResolutionQuery[Any, Any, Any]) -> Iterator[Tree[Any]]:
+        """Stream the chain's states after the burn-in, every ``thin``-th one, without end.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Yields:
+            Tree[Any]: The states, with replacement.
+
+        Raises:
+            ValueError: Where the chain refuses the query's program or finds no start inside its target.
+        """
+        chain = self._construction(query)
+        steps = chain.run(self.rng, self._start)
+        for _ in range(self.burn_in):
+            next(steps)
+        while True:
+            for _ in range(self.thin - 1):
+                next(steps)
+            yield next(steps).term
+
+    def at_least(self, query: ResolutionQuery[Any, Any, Any], count: int) -> bool:
+        """Decide whether the query has at least ``count`` terms.
+
+        Exact, from the number of terms the tilt table keeps in whole numbers, which counts the whole language and not
+        only the bins with a target; under ambiguity the numbers are of derivations. Both can only overstate.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+            count (int): The number of completions asked for.
+
+        Returns:
+            bool: True if the query has at least ``count`` terms.
+        """
+        if count <= 0:
+            return True
+        chain = self._construction(query)
+        return tilted_search(query, self.algebra, self.theta, table=chain.table).total >= count

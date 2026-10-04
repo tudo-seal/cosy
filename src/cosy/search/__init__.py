@@ -12,7 +12,8 @@ function may map into, the best-first frontier over them, and the additive cost 
 the cost of a search node into what its partial inhabitant has already cost and what its holes are
 estimated to add. It also carries random search itself, which is best-first search under a
 randomizing cost function, and the samplers the evolutionary and Bayesian methods draw their
-populations from, one of them under a prescribed distribution on an additive cost. Beside all of
+populations from, one of them under a prescribed distribution on an additive cost, and a Markov
+chain on terms that walks to such a distribution where random search would draw from it. Beside all of
 these stands the one rule that traverses no derivation tree at all:
 bottom-up search, which iterates the immediate consequence operator of a program to the least
 Herbrand model and reads the inhabitants off it.
@@ -66,6 +67,15 @@ from cosy.search.determinize import (
 )
 from cosy.search.gumbel import condition_on_maximum, gumbel_key, gumbel_noise
 from cosy.search.kernels import k_sst, k_st, normalized, reference_score
+from cosy.search.markov import (
+    ChainStep,
+    MetropolisChain,
+    VisitCounts,
+    WangLandau,
+    counts_from_visits,
+    metropolis_chain,
+    wang_landau,
+)
 from cosy.search.partial import Hole, holes, partial_inhabitant, term_depth, term_size
 from cosy.search.queries import ResolutionQuery, checker, generator_query, residual_query
 from cosy.search.rules import (
@@ -75,7 +85,14 @@ from cosy.search.rules import (
     fewest_arguments_first,
     uniform_random_clause_order,
 )
-from cosy.search.samplers import CostTableSampler, DepthBoundedRandomSampler, Sampler, SizeUniformSampler, TiltSampler
+from cosy.search.samplers import (
+    CostTableSampler,
+    DepthBoundedRandomSampler,
+    MarkovChainSampler,
+    Sampler,
+    SizeUniformSampler,
+    TiltSampler,
+)
 from cosy.search.sampling import (
     WeightedTable,
     WeightedTree,
@@ -107,6 +124,7 @@ from cosy.search.tilt import (
 __all__ = [
     "AdditiveCostAlgebra",
     "BottomUpCounters",
+    "ChainStep",
     "ComponentwiseTuples",
     "CostDomain",
     "CostFunction",
@@ -121,7 +139,9 @@ __all__ = [
     "HeapFrontier",
     "Hole",
     "LinearScanFrontier",
+    "MarkovChainSampler",
     "MergedNonTerminal",
+    "MetropolisChain",
     "NonNegativeReals",
     "ProductNonTerminal",
     "Reals",
@@ -137,6 +157,8 @@ __all__ = [
     "TiltTable",
     "TiltedMixture",
     "TiltedSearch",
+    "VisitCounts",
+    "WangLandau",
     "WeightedCostTable",
     "WeightedTable",
     "WeightedTree",
@@ -152,6 +174,7 @@ __all__ = [
     "checker",
     "condition_on_maximum",
     "cost_table",
+    "counts_from_visits",
     "coupled_clauses",
     "decomposable_or_raise",
     "deepest_first_subgoal",
@@ -166,6 +189,7 @@ __all__ = [
     "k_sst",
     "k_st",
     "least_herbrand_model",
+    "metropolis_chain",
     "normalized",
     "partial_inhabitant",
     "random_search",
@@ -191,6 +215,7 @@ __all__ = [
     "unabstracted_clauses",
     "uniform_cost",
     "uniform_random_clause_order",
+    "wang_landau",
     "weighted_cost_table",
     "weighted_table",
     "weighted_tree",
