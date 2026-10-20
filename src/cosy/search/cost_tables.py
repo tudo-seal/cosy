@@ -202,23 +202,21 @@ def _named(symbol: Any) -> str:
     return getattr(symbol, "__name__", None) or repr(symbol)
 
 
-def _value_typecode(cost_cap: int) -> str:
-    """Return the smallest unsigned array type that holds every cost value up to a cap.
+def _value_typecode(largest: int) -> str | None:
+    """Return the smallest unsigned array type that holds every whole number up to a largest one.
+
+    The item sizes are measured, not assumed, since a platform decides them.
 
     Args:
-        cost_cap (int): The cap, a nonnegative whole number.
+        largest (int): The largest value to hold, a nonnegative whole number.
 
     Returns:
-        str: The array type code.
-
-    Raises:
-        ValueError: If no unsigned array type holds the cap.
+        str | None: The array type code, or None if no unsigned array type holds the value.
     """
     for code in ("B", "H", "I", "L", "Q"):
-        if cost_cap < 2 ** (8 * array(code).itemsize):
+        if largest < 2 ** (8 * array(code).itemsize):
             return code
-    msg = f"no unsigned array type holds the cost cap {cost_cap}"
-    raise ValueError(msg)
+    return None
 
 
 def _whole_cap(cost_cap: Any) -> int:
@@ -1155,29 +1153,37 @@ class WeightedCostTable(Generic[NT, T, G]):
         weights[key] = weight
         return weight
 
-    def _log_row(self, hole_types: tuple[NT, ...]) -> tuple[array[int], array[float]]:
-        """Return a tuple of holes' split row as its realized values and the logarithms of their counts, read once and kept.
+    def _log_row(self, hole_types: tuple[NT, ...]) -> tuple[Sequence[int], array[float]]:
+        """Return a tuple of holes' split row within the search's cap, as values and the logarithms of their counts, read once and kept.
 
         A weight needs a count only as its logarithm, so the row is kept in that form: a whole
-        number and a float per entry, in two arrays, where the exact row holds a dictionary entry
-        and a large integer, about a tenth of the memory. The exact row is left to the table's
-        bounded cache, and the logarithm of a count is taken once per tuple, not once per weight.
+        number and a float per entry, in two arrays, where the exact row holds a dictionary slot and
+        a large integer. On rows of a thousand entries that is a twentieth to a tenth of the memory,
+        on rows of a few entries about two thirds. Only the values up to the search's cap are kept:
+        a table filled to a higher cap holds more, and no weight below the cap reads them, since
+        every cost so far is nonnegative. The exact row is left to the table's bounded cache, and
+        the logarithm of a count is taken once per tuple, not once per weight.
 
         Args:
             hole_types (tuple[NT, ...]): The holes, in canonical order, at least one.
 
         Returns:
-            tuple[array, array]: The realized total costs of the split row, and the logarithm of
-                the count of each, in the row's order.
+            tuple[Sequence[int], array]: The realized total costs of the split row up to the cap,
+                in the smallest unsigned array type that holds them (a list past every such type),
+                and the logarithm of the count of each, in the row's order.
         """
         rows = self._cache("_log_rows")
         known = rows.get(hole_types)
         if known is not None:
             return known
-        row = self.table.split_row(hole_types)
+        reachable = [
+            (value, count) for value, count in self.table.split_row(hole_types).items() if value <= self.cost_cap
+        ]
+        code = _value_typecode(max((value for value, _count in reachable), default=0))
+        values = [value for value, _count in reachable]
         known = (
-            array(_value_typecode(self.cost_cap), row.keys()),
-            array("d", [math.log(count) for count in row.values()]),
+            values if code is None else array(code, values),
+            array("d", [math.log(count) for _value, count in reachable]),
         )
         rows[hole_types] = known
         return known

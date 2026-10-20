@@ -1608,3 +1608,51 @@ def test_a_tuple_whose_kept_suffix_is_empty_has_the_empty_row():
     table = CostTable(space=None, algebra=UNIT, cost_cap=10, counts=counts)
     assert dict(table.split_row(("A", "B"))) == {}
     assert dict(table.split_row(("C", "A", "B"))) == {}
+
+
+# What a review of the memory change found, each finding now a test here. A table may be
+# filled past the search's cap, so a row's values are bounded by the table's cap and not the search's; a cap may pass every array
+# type; tuples that share a suffix must not multiply it out again under a bound that can hold it; a row longer than the bound must not
+# flush the rows that fit; a single hole's row is the table's own and costs the bound nothing; a table's own bound is its bound, zero
+# included; and a count past the float range is weighed by its exact logarithm.
+
+
+@pytest.mark.parametrize("search_cap", [200, 255])
+def test_a_table_filled_past_the_searchs_cap_streams_what_its_own_table_streams(search_cap):
+    """Values above the search's cap stay in the table's rows, past every type the search's cap would choose.
+
+    Args:
+        search_cap (int): The search's cap, below 256 where the table's 300 is not.
+    """
+    space = list_space()
+    query = generator_query(space, LIST)
+    wide = cost_table(space, UNIT, 300)
+    assert any(value > 255 for row in wide.counts.values() for value in row), (
+        "no value past the byte range tests nothing"
+    )
+    reading = list(
+        itertools.islice(
+            weighted_cost_table(query, UNIT, falling, search_cap, table=wide).keyed_stream(random.Random(2)), 200
+        )
+    )
+    own = list(
+        itertools.islice(weighted_cost_table(query, UNIT, falling, search_cap).keyed_stream(random.Random(2)), 200)
+    )
+    assert own, "an empty stream compares nothing"
+    assert [term for _key, term in reading] == [term for _key, term in own]
+    assert [key for key, _term in reading] == [key for key, _term in own]
+
+
+@pytest.mark.parametrize("cap", [2**64, 10**20])
+def test_a_cap_past_every_array_type_streams_what_a_cap_above_the_dearest_term_streams(cap):
+    """A cap no machine integer holds is still a cap, and above the dearest term it streams what any such cap streams.
+
+    Args:
+        cap (int): A cap of at least 2 to the 64.
+    """
+    query = generator_query(priced_space(), PRICED)
+    huge = list(weighted_cost_table(query, WEIGHTED, falling, cap).keyed_stream(random.Random(4)))
+    plain = list(weighted_cost_table(query, WEIGHTED, falling, 100).keyed_stream(random.Random(4)))
+    assert plain, "an empty stream compares nothing"
+    assert [term for _key, term in huge] == [term for _key, term in plain]
+    assert [key for key, _term in huge] == [key for key, _term in plain]
