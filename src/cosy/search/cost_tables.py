@@ -365,10 +365,11 @@ _SECONDS_PER_PACKED_SLOT = 3e-7
 # Below this many pairs the pair-by-pair product is too cheap to be worth weighing at all.
 _PACK_FROM_PAIRS = 4096
 
-# The entries the exact split rows of a table may hold together, unless the table names its own bound: about a gigabyte at the
-# hundred bytes an entry of a dictionary of large counts takes. A stream reads one row per tuple of holes it weighs, and kept for
+# The entries the exact split rows of two or more holes a table keeps may hold together, unless the table names its own bound. An
+# entry of such a row, a dictionary slot and a large count, took 100 to 230 bytes on rows of a thousand entries, up to some 500 on
+# rows of one, so ten million entries are one to a few gigabytes. A stream reads one row per tuple of holes it weighs, and kept for
 # the table's lifetime those rows grew to tens of gigabytes within a few hundred draws on a wide program; past the bound the least
-# recently used row is evicted and multiplied out again if it is asked for again.
+# recently used row is evicted and multiplied out again if it is asked for again. The bound counts entries, not bytes.
 ROW_CACHE_ENTRIES = 10_000_000
 
 
@@ -879,7 +880,12 @@ def _cyclic_rows(
 
 
 def cost_table(
-    space: SolutionSpace[NT, T, G], algebra: AdditiveCostAlgebra[Any], cost_cap: int, *, check: bool = True
+    space: SolutionSpace[NT, T, G],
+    algebra: AdditiveCostAlgebra[Any],
+    cost_cap: int,
+    *,
+    check: bool = True,
+    row_cache_entries: int | None = None,
 ) -> CostTable[NT]:
     """Fill ``N_A(a)`` for every non-terminal of a program and every cost value up to a cap.
 
@@ -890,6 +896,9 @@ def cost_table(
         cost_cap (int): The largest cost value counted.
         check (bool): Whether to decide the decomposition hypothesis first. Leaving it on is the
             supported use. (Default value = True)
+        row_cache_entries (int | None): The bound on the entries of the split rows the table
+            keeps; None reads the module's ``ROW_CACHE_ENTRIES`` when a row is kept.
+            (Default value = None)
 
     Returns:
         CostTable[NT]: The filled table.
@@ -963,6 +972,7 @@ def cost_table(
         algebra=algebra,
         cost_cap=cost_cap,
         counts=MappingProxyType({nt: MappingProxyType(dict(sorted(row.items()))) for nt, row in rows.items()}),
+        row_cache_entries=row_cache_entries,
     )
 
 

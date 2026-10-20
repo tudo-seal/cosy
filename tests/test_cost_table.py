@@ -25,6 +25,7 @@ that clauses of cost zero close, a cost that is not a whole number, a negative c
 reads a hole, and a table filled under another algebra or to a lower cap.
 """
 
+import dataclasses
 import inspect
 import itertools
 import math
@@ -39,6 +40,7 @@ from cosy.core.types import DataGroup
 from cosy.search import generator_query, residual_query
 from cosy.search.cost_tables import (
     CostTable,
+    WeightedCostTable,
     _dict_product,
     _initial_cost_nodes,
     _packed_product,
@@ -1718,3 +1720,51 @@ def test_a_single_holes_row_is_the_tables_own_and_costs_the_bound_nothing():
     assert table.split_row(("A",)) is counts["A"]
     assert ("B", "C") in table.__dict__["_split_rows"], "a single hole's row evicted a row of two"
     assert held_entries(table) == table.__dict__["_split_entries"] <= 5
+
+
+@pytest.mark.parametrize("bound", [0, 20])
+def test_a_table_keeps_its_own_bound_whatever_the_modules(monkeypatch, bound):
+    """``row_cache_entries`` is the table's bound, and zero keeps nothing; the module's default does not override it.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+        bound (int): The table's own bound.
+    """
+    monkeypatch.setattr(cost_tables_module, "ROW_CACHE_ENTRIES", MANY_ENTRIES)
+    space = split_space()
+    table = dataclasses.replace(cost_table(space, UNIT, 13), row_cache_entries=bound)
+    sampler = weighted_cost_table(generator_query(space, SPLIT), UNIT, falling, 13, table=table)
+    streamed = 0
+    for _term in itertools.islice(sampler.stream(random.Random(3)), 300):
+        streamed += 1
+        assert held_entries(table) <= bound, f"after {streamed} terms the rows hold {held_entries(table)} entries"
+    assert streamed == 300
+
+
+def test_the_entries_the_table_counts_are_the_entries_it_keeps():
+    """After every question the running count is the sum of the kept rows' lengths, and within the bound."""
+    rng = random.Random(9)
+    sorts = [f"s{index}" for index in range(6)]
+    counts = {name: {value: rng.randint(1, 5) for value in rng.sample(range(10), rng.randint(1, 4))} for name in sorts}
+    table = CostTable(space=None, algebra=UNIT, cost_cap=25, counts=counts, row_cache_entries=30)
+    for _question in range(500):
+        holes_ = tuple(rng.choice(sorts) for _hole in range(rng.randint(1, 5)))
+        assert dict(table.split_row(holes_)) == independent_split_row(table, holes_)
+        assert table.__dict__.get("_split_entries", 0) == held_entries(table) <= 30
+
+
+def test_a_count_past_the_float_range_weighs_as_its_exact_logarithm():
+    """``math.log`` takes an integer of any size exactly; a count first turned into a float would overflow."""
+    counts = {"A": {0: 2**1100, 1: 3**700 + 1}}
+    table = CostTable(space=None, algebra=UNIT, cost_cap=3, counts=counts)
+    weighted = WeightedCostTable(
+        query=None,
+        algebra=UNIT,
+        cost_cap=3,
+        table=table,
+        root_counts={},
+        unit_weights={},
+        log_unit_weights={0: -1.0, 1: -2.0, 2: -3.0},
+    )
+    expected = log_sum_exp([math.log(2**1100) - 2.0, math.log(3**700 + 1) - 3.0])
+    assert weighted._log_weight_of_holes(("A",), 1) == expected  # noqa: SLF001
