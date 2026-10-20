@@ -14,7 +14,7 @@ for what each of them contributes to the convergence argument below.
 | Mutation | :class:`ResolutionMutation` |
 | Recombination | :class:`SubtreeSwap`, :class:`SubtreeGraft` |
 | Parent selection | :class:`TournamentSelection`, :class:`RankBasedSelection`, :class:`FitnessProportionalSelection`, :class:`LexicaseSelection` |
-| Survivor selection | :class:`GenerousConservativeReplacement`, :class:`FitnessBasedReplacement` |
+| Survivor selection | :class:`GenerousConservativeReplacement`, :class:`FitnessBasedReplacement`, :class:`CrowdedTruncation` |
 | Termination | :class:`Generations`, :class:`NoImprovement`, :class:`TargetFitness`, combined by :class:`AnyOf` |
 | Evaluation | :class:`FitnessComparator`, plus a :class:`Scalarization` where numbers are needed |
 
@@ -83,6 +83,7 @@ from cosy.evolutionary_algorithms.recombination import (
     SubtreeSwap,
 )
 from cosy.evolutionary_algorithms.selection import (
+    CrowdedTruncation,
     FitnessBasedReplacement,
     FitnessProportionalSelection,
     GenerousConservativeReplacement,
@@ -91,6 +92,7 @@ from cosy.evolutionary_algorithms.selection import (
     RankBasedSelection,
     SurvivorSelection,
     TournamentSelection,
+    crowding_distances,
     dominance_fronts,
 )
 from cosy.evolutionary_algorithms.termination import (
@@ -105,6 +107,7 @@ __all__ = [
     "AggregatedFitnessComparator",
     "AnyOf",
     "Comparison",
+    "CrowdedTruncation",
     "EAState",
     "EvolutionarySearch",
     "ExpScalarization",
@@ -135,6 +138,7 @@ __all__ = [
     "TargetFitness",
     "Termination",
     "TournamentSelection",
+    "crowding_distances",
     "dominance_fronts",
     "induced_fitness",
 ]

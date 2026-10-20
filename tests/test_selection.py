@@ -28,6 +28,7 @@ from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms import (
     AggregatedFitnessComparator,
     Comparison,
+    CrowdedTruncation,
     ExpScalarization,
     Fitness,
     FitnessBasedReplacement,
@@ -841,6 +842,7 @@ def test_lexicase_refuses_settings_outside_their_range(kwargs, message):
     [
         FitnessBasedReplacement(),
         GenerousConservativeReplacement(ExpScalarization(), random.Random(0)),
+        CrowdedTruncation(),
     ],
 )
 def test_survivor_selection_sees_parents_and_offspring(operator):
@@ -1048,6 +1050,7 @@ def test_no_operator_touches_the_global_random_stream():
     GenerousConservativeReplacement(ExpScalarization(), random.Random(0)).select_survivors(
         population[:1], population[1:], fitness, MAXIMIZING, 2
     )
+    CrowdedTruncation().select_survivors(population[:1], population[1:], fitness, MAXIMIZING, 2)
     assert random.random() == before
 
 
@@ -1065,4 +1068,6 @@ def test_selection_works_under_a_partial_order():
     winners = {parent for _ in range(200) for parent in tournament.select_parents(population, fitness, pareto)}
     assert winners == {population[0], population[1]}
     survivors = FitnessBasedReplacement().select_survivors(population[:1], population[1:], fitness, pareto, 2)
+    assert set(survivors) == {population[0], population[1]}
+    survivors = CrowdedTruncation().select_survivors(population[:1], population[1:], fitness, pareto, 2)
     assert set(survivors) == {population[0], population[1]}

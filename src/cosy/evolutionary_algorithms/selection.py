@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound="Hashable")  # type of terminals
 
 __all__ = [
+    "CrowdedTruncation",
     "FitnessBasedReplacement",
     "FitnessProportionalSelection",
     "GenerousConservativeReplacement",
@@ -52,6 +53,7 @@ __all__ = [
     "RankBasedSelection",
     "SurvivorSelection",
     "TournamentSelection",
+    "crowding_distances",
     "dominance_fronts",
 ]
 
@@ -115,6 +117,106 @@ def dominance_fronts(
         front_members = set(front)
         remaining = [candidate for candidate in remaining if candidate not in front_members]
     return fronts
+
+
+def _objective_vector(fitness: Fitness) -> tuple[float, ...]:
+    """Read a fitness value as its vector of objectives.
+
+    A value is placed by whether it *has a length*, for the reason
+    :meth:`LexicaseSelection._cases` gives: ``numpy.ndarray`` has one without being a ``Sequence``,
+    and a float-like scalar has none and is a single objective.
+
+    Args:
+        fitness (Fitness): The value to read.
+
+    Returns:
+        tuple[float, ...]: Its objectives, as they are; no direction is applied, since a distance has none.
+    """
+    try:
+        return tuple(float(objective) for objective in fitness)  # type: ignore[union-attr]
+    except TypeError:
+        return (float(fitness),)  # type: ignore[arg-type]
+
+
+# Per objective a front has two boundary solutions, so a front of at most this many has no inner solution at all.
+_BOUNDARY_SOLUTIONS = 2
+
+
+def crowding_distances(front: Sequence[Tree[T]], fitness: Mapping[Tree[T], Fitness]) -> list[float]:
+    """Return the crowding distance of every place of a front.
+
+    The density estimate of NSGA-II (Deb, Pratap, Agarwal and Meyarivan 2002, §III-B): per objective
+    the front is sorted, its two boundary solutions get an infinite distance, and every other one the
+    gap between its two neighbours divided by the objective's extent; the distances are summed over
+    the objectives. A larger distance is a less crowded solution. The paper normalizes by "the
+    maximum and minimum values of the mth objective function" without saying over which set; here
+    it is the front's, the set the distances are computed for.
+
+    Three cases the procedure leaves open are settled here. An objective in which the whole front is
+    equal has no extent and no boundary: it adds nothing, where marking the ends of an arbitrary order
+    infinite would favour whichever members happened to come first. A value that is infinite is the
+    most extreme of its objective, so its solution is a boundary solution there and gets an infinite
+    distance; the driver admits such a value, since it compares equal to itself, and in a maximized
+    objective it is the best one there is. The finite values of that objective are measured among
+    themselves, and their own extremes, next to an infinitely distant neighbour, are boundary
+    solutions too, even where the finite values are a single one or all equal. A solution with a
+    value that is not a number, a failed measurement, gets distance
+    0, the most crowded, and the others are measured as if it were absent. The sort is stable, so
+    equal values keep their order in the front and the distances are deterministic. Where an extent
+    would overflow the floats, the differences are taken on halved values, which measures the front
+    as the same front scaled down.
+
+    Args:
+        front (Sequence[Tree[T]]): The solutions of one front. A population is a multiset, so an
+            individual may stand in it more than once, and every place gets a distance of its own.
+        fitness (Mapping[Tree[T], Fitness]): The fitness of each, a vector of objectives.
+
+    Returns:
+        list[float]: One distance per place of ``front``, in its order, never one that is not a
+            number.
+
+    Raises:
+        ValueError: If the vectors without a failed value do not all have the same number of
+            objectives.
+    """
+    vectors = [_objective_vector(fitness[member]) for member in front]
+    distances = [0.0] * len(front)
+    measured = [index for index, vector in enumerate(vectors) if not any(math.isnan(value) for value in vector)]
+    widths = {len(vectors[index]) for index in measured}
+    if len(widths) > 1:
+        msg = f"a crowding distance needs one number of objectives for the whole front, got {sorted(widths)}"
+        raise ValueError(msg)
+    if len(measured) <= _BOUNDARY_SOLUTIONS:
+        for index in measured:
+            distances[index] = math.inf
+        return distances
+    for objective in range(widths.pop()):
+        finite = []
+        for index in measured:
+            if math.isinf(vectors[index][objective]):
+                distances[index] = math.inf
+            else:
+                finite.append(index)
+        order = sorted(finite, key=lambda index: vectors[index][objective])
+        if not order:
+            continue
+        low, high = vectors[order[0]][objective], vectors[order[-1]][objective]
+        if high == low:
+            # Beside an infinite value the finite extremes are the objective's own extremes on
+            # that side, a boundary however narrow the finite values lie; without one, an
+            # objective in which the whole front is equal marks nothing.
+            if len(order) < len(measured):
+                distances[order[0]] = distances[order[-1]] = math.inf
+            continue
+        # Halving is exact for the magnitudes at which the extent overflows, and the difference of
+        # two halved floats cannot overflow; below that, the factor 1 leaves every value as it is.
+        scale = 1.0 if math.isfinite(high - low) else 0.5
+        extent = high * scale - low * scale
+        distances[order[0]] = distances[order[-1]] = math.inf
+        for position in range(1, len(order) - 1):
+            gap = vectors[order[position + 1]][objective] * scale - vectors[order[position - 1]][objective] * scale
+            distances[order[position]] += gap / extent
+    return distances
 
 
 def _proportional_weights(values: Sequence[float]) -> list[float]:
@@ -754,6 +856,70 @@ class FitnessBasedReplacement(SurvivorSelection[T]):
             survivors.extend(front[: size - len(survivors)])
             if len(survivors) == size:
                 break
+        return survivors
+
+
+class CrowdedTruncation(SurvivorSelection[T]):
+    """(mu + lambda) truncation by fronts with the last front cut by crowding distance: NSGA-II's replacement.
+
+    The parents and the offspring compete together (Deb, Pratap, Agarwal and Meyarivan 2002,
+    §III-C), so the population is elitist without an archive. Whole fronts are kept in order while
+    they fit; the first front that does not is sorted by :func:`crowding_distances`, taken within
+    that front, and its least crowded members fill the remaining places, its boundary solutions
+    first, since their distance is infinite. The sort is stable, so equal distances keep the input
+    order and the cut is deterministic. Where every front fits, the result is
+    :class:`FitnessBasedReplacement`'s.
+
+    **Neither generous nor conservative in the sense the guarantee asks**, for the reasons
+    :class:`FitnessBasedReplacement` gives. It always keeps a maximal element: the first front is
+    never empty, and when it is the front that is cut, its boundary solutions are kept first.
+    """
+
+    def select_survivors(
+        self,
+        parents: Sequence[Tree[T]],
+        offspring: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+        size: int,
+    ) -> list[Tree[T]]:
+        """Keep the best fronts of both populations, cutting the last one by crowding.
+
+        Args:
+            parents (Sequence[Tree[T]]): The finished generation.
+            offspring (Sequence[Tree[T]]): Its offspring.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of every individual, a vector of
+                objectives wherever a front has to be cut.
+            comparator (FitnessComparator): The partial order.
+            size (int): The population size mu.
+
+        Returns:
+            list[Tree[T]]: The ``size`` survivors.
+
+        Raises:
+            ValueError: If ``size`` is negative, or fewer than ``size`` individuals were offered;
+                if the comparator leaves no remaining individual maximal (see
+                :func:`dominance_fronts`); or if a front to be cut mixes numbers of objectives (see
+                :func:`crowding_distances`).
+        """
+        if size < 0:
+            msg = f"a population size cannot be negative: {size}"
+            raise ValueError(msg)
+        pool = [*parents, *offspring]
+        if len(pool) < size:
+            msg = f"survivor selection was offered {len(pool)} individuals for {size} places"
+            raise ValueError(msg)
+        survivors: list[Tree[T]] = []
+        for front in dominance_fronts(pool, fitness, comparator):
+            room = size - len(survivors)
+            if room <= 0:
+                break
+            if len(front) <= room:
+                survivors.extend(front)
+                continue
+            distances = crowding_distances(front, fitness)
+            least_crowded = sorted(range(len(front)), key=lambda index: -distances[index])
+            survivors.extend(front[index] for index in least_crowded[:room])
         return survivors
 
 
