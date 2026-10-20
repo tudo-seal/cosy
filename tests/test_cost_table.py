@@ -1656,3 +1656,65 @@ def test_a_cap_past_every_array_type_streams_what_a_cap_above_the_dearest_term_s
     assert plain, "an empty stream compares nothing"
     assert [term for _key, term in huge] == [term for _key, term in plain]
     assert [key for key, _term in huge] == [key for key, _term in plain]
+
+
+def counted_products(monkeypatch):
+    """Count the products of rows the table multiplies out from here on.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+
+    Returns:
+        list: One entry per product.
+    """
+    products = []
+    original = _product
+
+    def counting(left, right, cap):
+        products.append(1)
+        return original(left, right, cap)
+
+    monkeypatch.setattr(cost_tables_module, "_product", counting)
+    return products
+
+
+def test_tuples_that_share_a_suffix_multiply_it_out_once_under_a_bound_that_holds_it(monkeypatch):
+    """Four hundred tuples end in one suffix of eight holes; a bound of five rows keeps that suffix, so it is built once.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    shared = tuple(f"a{index}" for index in range(8))
+    counts = {name: {0: 1, 1: 1} for name in shared} | {f"b{index}": {0: 1} for index in range(400)}
+    products = counted_products(monkeypatch)
+
+    def multiplied(bound):
+        products.clear()
+        table = CostTable(space=None, algebra=UNIT, cost_cap=20, counts=counts, row_cache_entries=bound)
+        for index in range(400):
+            assert dict(table.split_row((f"b{index}", *shared))) == {value: math.comb(8, value) for value in range(9)}
+        return len(products)
+
+    assert multiplied(MANY_ENTRIES) == 7 + 400, "the shared suffix is seven products, and each tuple one more"
+    assert multiplied(5 * 9) == 7 + 400, "a bound that holds the shared suffix multiplies it out once"
+
+
+def test_a_row_longer_than_the_bound_is_not_kept_and_evicts_nothing():
+    """A row that cannot fit is handed back and dropped; the rows that fit stay."""
+    counts = {"A": {0: 1, 1: 1}, "B": {0: 1, 1: 1}, "C": dict.fromkeys(range(7), 1), "D": dict.fromkeys(range(7), 1)}
+    table = CostTable(space=None, algebra=UNIT, cost_cap=20, counts=counts, row_cache_entries=10)
+    table.split_row(("A", "B"))
+    assert held_entries(table) == 3
+    assert dict(table.split_row(("C", "D"))) == independent_split_row(table, ("C", "D"))
+    assert ("A", "B") in table.__dict__["_split_rows"], "the row that fits was evicted for one that does not"
+    assert held_entries(table) <= 10
+
+
+def test_a_single_holes_row_is_the_tables_own_and_costs_the_bound_nothing():
+    """The row of one hole is the table's row of its sort, already held; keeping it again would evict for nothing."""
+    counts = {"A": dict.fromkeys(range(6), 1), "B": {0: 1, 1: 1}, "C": {0: 1}}
+    table = CostTable(space=None, algebra=UNIT, cost_cap=20, counts=counts, row_cache_entries=5)
+    table.split_row(("B", "C"))
+    assert table.split_row(("A",)) is counts["A"]
+    assert ("B", "C") in table.__dict__["_split_rows"], "a single hole's row evicted a row of two"
+    assert held_entries(table) == table.__dict__["_split_entries"] <= 5

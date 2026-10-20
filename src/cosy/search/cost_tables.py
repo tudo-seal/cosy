@@ -461,10 +461,12 @@ class CostTable(Generic[NT]):
     def split_row(self, nonterminals: Sequence[NT]) -> Mapping[int, int]:
         """Return the number of ways to fill a tuple of holes, per total cost up to the cap.
 
-        The holes are filled independently, so the row is the product of theirs. Rows are kept
-        within a bound on their entries (``row_cache_entries``), the least recently used evicted
-        first, so a tuple of holes is multiplied out again only when its row was evicted, and to
-        the same counts.
+        The holes are filled independently, so the row is the product of theirs. The row of one
+        hole is the table's own row of its sort, handed back as it is. The rows of two or more holes
+        are kept within a bound on their entries (``row_cache_entries``), the least recently used
+        evicted first. A tuple is built from the longest suffix still kept, which counts as used,
+        so tuples that share a suffix multiply it out once as long as the bound holds it; an evicted
+        row is multiplied out again when it is asked for, to the same counts.
 
         Args:
             nonterminals (Sequence[NT]): The non-terminals of the holes.
@@ -474,6 +476,10 @@ class CostTable(Generic[NT]):
                 tuple, the empty product: one way to fill no holes, at no cost.
         """
         holes_types = tuple(nonterminals)
+        if not holes_types:
+            return MappingProxyType({0: 1})
+        if len(holes_types) == 1:
+            return self.counts.get(holes_types[0]) or MappingProxyType({})
         cache = self.__dict__.get("_split_rows")
         if cache is None:
             cache = OrderedDict()
@@ -482,20 +488,23 @@ class CostTable(Generic[NT]):
         if cached is not None:
             cache.move_to_end(holes_types)
             return cached
-        if not holes_types:
-            return MappingProxyType({0: 1})
-        # Built from the last hole backwards, one suffix at a time, each kept: a loop and not a
-        # recursion, so the length of a tuple costs time and never the stack.
-        start = len(holes_types) - 1
-        while start > 0 and holes_types[start - 1 :] in cache:
-            start -= 1
+        # The longest kept proper suffix is the base, looked for directly: the bound may have
+        # evicted a shorter suffix while a longer one is kept. From there the tuple is built back to
+        # its first hole, one suffix at a time: a loop and not a recursion, so the length of a tuple
+        # costs time and never the stack.
+        start = next(
+            (position for position in range(1, len(holes_types)) if holes_types[position:] in cache),
+            len(holes_types) - 1,
+        )
         suffix = holes_types[start:]
         # A kept row is read with `is not None` and never with `or`: an empty one is a suffix without
         # a fill within the cap, and so is every tuple that ends in it.
         kept = cache.get(suffix)
-        row: Mapping[int, int] = kept if kept is not None else (self.counts.get(suffix[0]) or MappingProxyType({}))
-        if len(suffix) == 1:
-            self._keep(cache, suffix, row)
+        if kept is not None:
+            cache.move_to_end(suffix)
+            row: Mapping[int, int] = kept
+        else:
+            row = self.counts.get(suffix[0]) or MappingProxyType({})
         for position in range(start - 1, -1, -1):
             suffix = holes_types[position:]
             row = MappingProxyType(_product(self.counts.get(suffix[0]) or {}, row, self.cost_cap))
@@ -507,22 +516,25 @@ class CostTable(Generic[NT]):
     ) -> None:
         """Keep a split row as the most recently used, and evict the least recently used past the bound.
 
-        A row is evicted only from the cache, never from a caller that holds it, so a product being
-        built keeps its operand however the cache changes meanwhile. A row longer than the bound
-        on its own is evicted too: the bound holds after every call.
+        A row longer than the bound on its own is not kept and evicts nothing, so the rows that fit
+        stay and the bound holds after every call. A row is evicted only from the cache, never from
+        a caller that holds it, so a product being built keeps its operand however the cache
+        changes meanwhile.
 
         Args:
             cache (OrderedDict): The kept rows, least recently used first.
             key (tuple[NT, ...]): The tuple of holes.
             row (Mapping[int, int]): Its split row.
         """
+        bound = ROW_CACHE_ENTRIES if self.row_cache_entries is None else self.row_cache_entries
+        if len(row) > bound:
+            return
         held = self.__dict__.get("_split_entries", 0)
         replaced = cache.pop(key, None)
         if replaced is not None:
             held -= len(replaced)
         cache[key] = row
         held += len(row)
-        bound = ROW_CACHE_ENTRIES if self.row_cache_entries is None else self.row_cache_entries
         while held > bound and cache:
             _, evicted = cache.popitem(last=False)
             held -= len(evicted)
