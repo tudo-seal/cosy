@@ -44,10 +44,22 @@ polynomial in the size of the program and exponential in the arity of the coupli
 price of turning a filter into a specification, and it is still incomparably cheaper than the tree
 form, whose cost is the number of inhabitants. What bounds it in practice is ``|Q|``, and that is
 a property of the repository's abstraction rather than of this module.
+
+**What a rule costs, and what is not built.** A large program instantiates tens of millions of
+rules, so the construction keeps one :class:`ProductNonTerminal` per sort and state and one
+argument per name, sort and state, shared by every rule that names them, and builds each rule once,
+as the rule the result holds; the merged start symbol holds the very rule objects of the start's
+states. It does not prune its result. A rule is instantiated only over reached states, and a state
+is reached only through a rule over states reached before it, so every sort of the product program
+is productive by construction and a prune would remove nothing, at the price of an inverse grammar
+of one set per rule: measured on a laws-compiled CNN search space of 17 million rules, the prune
+took more than half of the construction's time and two fifths of the memory it added.
+The non-terminals of the result come in the order the fixed point first reached them.
 """
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from itertools import product
 from typing import TYPE_CHECKING, Any, Generic, cast
@@ -57,6 +69,7 @@ from cosy.core.solution_space import (
     NT,
     G,
     NonTerminalArgument,
+    RHSRule,
     SolutionSpace,
     T,
 )
@@ -66,7 +79,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
 
     from cosy.core.recognizable import StateRelation, TreeAbstraction
-    from cosy.core.solution_space import Argument, RHSRule
+    from cosy.core.solution_space import Argument
 
 __all__ = [
     "Determinization",
@@ -432,7 +445,8 @@ def determinize(
 
     Returns:
         Determinization[NT, T, G]: The product program, its start symbol, the reachable states and
-            the abstractions they range over.
+            the abstractions they range over. Every sort of the program is productive, so it is
+            returned as built, not pruned (see the module's note on cost).
 
     Raises:
         ValueError: If some clause reads a hole through a predicate without an abstraction, or if
@@ -449,8 +463,46 @@ def determinize(
 
     states: dict[NT, list[tuple[Any, ...]]] = {nonterminal: [] for nonterminal in space.nonterminals()}
     reached: dict[NT, set[tuple[Any, ...]]] = {nonterminal: set() for nonterminal in states}
-    produced: dict[Any, list[tuple[int, T, tuple[Argument, ...]]]] = {}
+    # The rules of each product sort by the index of the clause they instantiate, so that a sort's
+    # rules come out in the program's clause order however the fixed point reached them.
+    produced: dict[Any, dict[int, list[RHSRule[Any, T, G]]]] = {}
+    products: dict[tuple[NT, tuple[Any, ...]], ProductNonTerminal[NT]] = {}
+    holes: dict[tuple[str | None, NT, tuple[Any, ...]], NonTerminalArgument[Any]] = {}
     total_states = 0
+
+    def product_of(nonterminal: NT, state: tuple[Any, ...]) -> ProductNonTerminal[NT]:
+        """Return the one product non-terminal of a sort and a state.
+
+        Args:
+            nonterminal (NT): The sort.
+            state (tuple[Any, ...]): The state.
+
+        Returns:
+            ProductNonTerminal[NT]: The pair, built at its first use.
+        """
+        key = (nonterminal, state)
+        found = products.get(key)
+        if found is None:
+            found = ProductNonTerminal(nonterminal, state)
+            products[key] = found
+        return found
+
+    def hole_of(argument: NonTerminalArgument[NT], state: tuple[Any, ...]) -> NonTerminalArgument[Any]:
+        """Return the one argument naming a hole of a sort in a state.
+
+        Args:
+            argument (NonTerminalArgument[NT]): The hole of the original clause.
+            state (tuple[Any, ...]): The state it is instantiated at.
+
+        Returns:
+            NonTerminalArgument[Any]: The argument, built at its first use.
+        """
+        key = (argument.name, argument.origin, state)
+        found = holes.get(key)
+        if found is None:
+            found = NonTerminalArgument(argument.name, product_of(argument.origin, state))
+            holes[key] = found
+        return found
 
     def instantiate(clause: _Clause[NT, T, G], hole_states: tuple[tuple[Any, ...], ...]) -> None:
         """Emit the instance of one clause for one assignment of states to its holes.
@@ -494,19 +546,14 @@ def determinize(
                     f"state_limit if the carrier really is this large."
                 )
                 raise ValueError(msg)
-        arguments = tuple(
-            argument
-            if slot is None
-            else NonTerminalArgument(
-                argument.name,
-                ProductNonTerminal(argument.origin, hole_states[slot]),
-            )
+        arguments: tuple[Argument, ...] = tuple(
+            argument if slot is None else hole_of(cast("NonTerminalArgument[NT]", argument), hole_states[slot])
             for argument, slot in zip(clause.rule.arguments, clause.slots, strict=True)
         )
-        instance = (clause.index, clause.rule.terminal, arguments)
-        produced.setdefault(ProductNonTerminal(clause.head, head_state), []).append(instance)
+        rule: RHSRule[Any, T, G] = RHSRule(arguments, (), clause.rule.terminal)
+        produced.setdefault(product_of(clause.head, head_state), {}).setdefault(clause.index, []).append(rule)
         if clause.head == start:
-            produced.setdefault(merged, []).append(instance)
+            produced.setdefault(merged, {}).setdefault(clause.index, []).append(rule)
 
     inner = [clause for clause in clauses if clause.hole_origins]
     for clause in clauses:
@@ -533,17 +580,17 @@ def determinize(
         if not progressed:
             break
 
-    determinized: SolutionSpace[Any, T, G] = SolutionSpace()
-    for head, instances in produced.items():
-        # By clause index, so that the program order of the original survives the order in which
-        # the fixed point happened to reach the states. The sort is stable, so the instances of
-        # one clause keep the order the enumeration produced them in, and the result of the
-        # construction does not depend on the shape of the fixed-point iteration.
-        for _index, terminal, arguments in sorted(instances, key=lambda instance: instance[0]):
-            determinized.add_rule(head, terminal, arguments, ())
+    # By clause index, so that the program order of the original survives the order in which the
+    # fixed point happened to reach the states; within one clause the rules keep the order the
+    # enumeration produced them in, so the result does not depend on the shape of the iteration.
+    rules: dict[Any, deque[RHSRule[Any, T, G]]] = {}
+    for head in list(produced):
+        by_clause = produced.pop(head)
+        rules[head] = deque(rule for index in sorted(by_clause) for rule in by_clause[index])
+    determinized: SolutionSpace[Any, T, G] = SolutionSpace(rules)
 
     return Determinization(
-        space=determinized.prune(),
+        space=determinized,
         start=merged,
         states={nonterminal: tuple(reached) for nonterminal, reached in states.items()},
         abstractions=tuple(abstractions),
