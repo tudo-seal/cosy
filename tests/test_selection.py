@@ -19,6 +19,7 @@ population, are separate protocols, and that separation is pinned too.
 
 import math
 import random
+import threading
 from collections import Counter
 
 import pytest
@@ -113,6 +114,71 @@ def test_dominance_fronts_keep_the_input_order():
     """Within a front the individuals stay in the order they were passed in."""
     population, fitness = scored([1.0, 1.0, 1.0, 1.0])
     assert dominance_fronts(population, fitness, MAXIMIZING) == [population]
+
+
+class _EveryoneFitterComparator:
+    """A comparator under which every individual is fitter than every other and than itself: none is maximal."""
+
+    def compare(self, _first: Fitness, _second: Fitness) -> Comparison:
+        return Comparison.GREATER
+
+
+def test_dominance_fronts_refuse_a_comparator_without_a_maximal_element():
+    """An empty front removes nothing, so the loop would never end; it is refused instead.
+
+    The call runs in a thread of its own, so that a hang becomes a failure on every platform: it
+    must answer within five seconds, and with the refusal. A thread that never answers is left
+    behind as a daemon, which the interpreter does not wait for.
+    """
+    population = individuals(3)
+    fitness = dict.fromkeys(population, 1.0)
+    answers: list[object] = []
+
+    def call() -> None:
+        try:
+            answers.append(dominance_fronts(population, fitness, _EveryoneFitterComparator()))
+        except ValueError as refusal:
+            answers.append(refusal)
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "dominance_fronts did not return"
+    assert len(answers) == 1
+    assert isinstance(answers[0], ValueError)
+    assert "no remaining individual is maximal" in str(answers[0])
+
+
+class _SelfFitterComparator:
+    """A total order, except that the value 9 calls itself fitter than itself."""
+
+    def compare(self, first: Fitness, second: Fitness) -> Comparison:
+        if first == second == (9.0,):
+            return Comparison.GREATER
+        if first == second:
+            return Comparison.EQUAL
+        return Comparison.GREATER if first > second else Comparison.LESS  # type: ignore[operator]
+
+
+def test_dominance_fronts_refuse_a_single_remaining_individual_fitter_than_itself():
+    """After the first front only one individual is left, and it is not maximal: refused, not looped on."""
+    population = individuals(2)
+    fitness = dict(zip(population, [(10.0,), (9.0,)], strict=True))
+    answers: list[object] = []
+
+    def call() -> None:
+        try:
+            answers.append(dominance_fronts(population, fitness, _SelfFitterComparator()))
+        except ValueError as refusal:
+            answers.append(refusal)
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "dominance_fronts did not return"
+    assert len(answers) == 1
+    assert isinstance(answers[0], ValueError)
+    assert "none of the 1 left" in str(answers[0])
 
 
 # ---------------------------------------------------------------------------

@@ -87,6 +87,11 @@ def dominance_fronts(
     Returns:
         list[list[Tree[T]]]: The fronts, fittest first. Within a front the input order is kept,
             so a caller that has to cut a front short cuts it deterministically.
+
+    Raises:
+        ValueError: If no remaining individual is maximal, which a strict partial order rules out:
+            a comparator that calls an individual fitter than itself, or a cycle of fitter ones,
+            would leave an empty front that removes nothing, and the construction would not end.
     """
     remaining = list(individuals)
     fronts: list[list[Tree[T]]] = []
@@ -98,6 +103,12 @@ def dominance_fronts(
                 comparator.compare(fitness[other], fitness[candidate]) is Comparison.GREATER for other in remaining
             )
         ]
+        if not front:
+            msg = (
+                "the comparator is not a strict partial order: no remaining individual is maximal, "
+                f"so none of the {len(remaining)} left can form a front"
+            )
+            raise ValueError(msg)
         fronts.append(front)
         # Removing by identity of the front's membership would drop every copy of a repeated
         # individual at once, which is correct: copies are equally fit, so they share a front.
