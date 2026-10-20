@@ -62,7 +62,11 @@ the table is as large as the realized values are many. The size table is small b
 a cost like a parameter count realizes so many values that only a coarsened algebra keeps the rows
 short. That is the caller's modelling decision, and why the table takes the algebra as given. A
 component with a cycle is filled one cost value after the other up to the cap, whether or not the
-values are realized, so there the time grows with the cap itself.
+values are realized, so there the time grows with the cap itself. A stream reads the split row of
+every tuple of holes it weighs: it keeps each as the logarithms of its counts, a float and a whole
+number per entry, and the exact rows it multiplied out within a bound on their entries
+(``ROW_CACHE_ENTRIES``), the least recently used evicted first. Neither changes a weight, since a
+weight needs a count only as its logarithm.
 
 **The weighted form.** :class:`WeightedCostTable` answers the oracle :func:`~cosy.search.sampling.keyed_stream`
 asks for, from the table. A node's branch counts depend on the node only through the cost of its
@@ -76,7 +80,9 @@ the cap every inhabitant of cost at most ``C`` is streamed exactly once, in decr
 from __future__ import annotations
 
 import math
+from array import array
 from bisect import bisect_right
+from collections import OrderedDict
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic
@@ -194,6 +200,25 @@ def _named(symbol: Any) -> str:
         str: Its rendering.
     """
     return getattr(symbol, "__name__", None) or repr(symbol)
+
+
+def _value_typecode(cost_cap: int) -> str:
+    """Return the smallest unsigned array type that holds every cost value up to a cap.
+
+    Args:
+        cost_cap (int): The cap, a nonnegative whole number.
+
+    Returns:
+        str: The array type code.
+
+    Raises:
+        ValueError: If no unsigned array type holds the cap.
+    """
+    for code in ("B", "H", "I", "L", "Q"):
+        if cost_cap < 2 ** (8 * array(code).itemsize):
+            return code
+    msg = f"no unsigned array type holds the cost cap {cost_cap}"
+    raise ValueError(msg)
 
 
 def _whole_cap(cost_cap: Any) -> int:
@@ -342,6 +367,12 @@ _SECONDS_PER_PACKED_SLOT = 3e-7
 # Below this many pairs the pair-by-pair product is too cheap to be worth weighing at all.
 _PACK_FROM_PAIRS = 4096
 
+# The entries the exact split rows of a table may hold together, unless the table names its own bound: about a gigabyte at the
+# hundred bytes an entry of a dictionary of large counts takes. A stream reads one row per tuple of holes it weighs, and kept for
+# the table's lifetime those rows grew to tens of gigabytes within a few hundred draws on a wide program; past the bound the least
+# recently used row is evicted and multiplied out again if it is asked for again.
+ROW_CACHE_ENTRIES = 10_000_000
+
 
 def _product(left: Mapping[int, int], right: Mapping[int, int], cap: int) -> dict[int, int]:
     """Multiply two rows as polynomials in the cost, by the product an estimate of their costs prefers.
@@ -404,12 +435,15 @@ class CostTable(Generic[NT]):
         counts (Mapping[NT, Mapping[int, int]]): Per non-terminal, its realized cost values up to the
             cap with their counts, ascending. A non-terminal without a term below the cap has an
             empty row, and one the program never mentions has none.
+        row_cache_entries (int | None): The entries the split rows this table keeps may hold
+            together; None reads the module's ``ROW_CACHE_ENTRIES`` when a row is kept.
     """
 
     space: SolutionSpace[NT, Any, Any]
     algebra: AdditiveCostAlgebra[Any]
     cost_cap: int
     counts: Mapping[NT, Mapping[int, int]]
+    row_cache_entries: int | None = None
 
     def of(self, nonterminal: NT, cost: int) -> int:
         """Return ``N_A(a)``.
@@ -429,8 +463,10 @@ class CostTable(Generic[NT]):
     def split_row(self, nonterminals: Sequence[NT]) -> Mapping[int, int]:
         """Return the number of ways to fill a tuple of holes, per total cost up to the cap.
 
-        The holes are filled independently, so the row is the product of theirs. Rows are kept, so
-        a tuple of holes is multiplied out once per table however often a search asks for it.
+        The holes are filled independently, so the row is the product of theirs. Rows are kept
+        within a bound on their entries (``row_cache_entries``), the least recently used evicted
+        first, so a tuple of holes is multiplied out again only when its row was evicted, and to
+        the same counts.
 
         Args:
             nonterminals (Sequence[NT]): The non-terminals of the holes.
@@ -442,10 +478,11 @@ class CostTable(Generic[NT]):
         holes_types = tuple(nonterminals)
         cache = self.__dict__.get("_split_rows")
         if cache is None:
-            cache = {}
+            cache = OrderedDict()
             object.__setattr__(self, "_split_rows", cache)
         cached = cache.get(holes_types)
         if cached is not None:
+            cache.move_to_end(holes_types)
             return cached
         if not holes_types:
             return MappingProxyType({0: 1})
@@ -460,12 +497,38 @@ class CostTable(Generic[NT]):
         kept = cache.get(suffix)
         row: Mapping[int, int] = kept if kept is not None else (self.counts.get(suffix[0]) or MappingProxyType({}))
         if len(suffix) == 1:
-            cache[suffix] = row
+            self._keep(cache, suffix, row)
         for position in range(start - 1, -1, -1):
             suffix = holes_types[position:]
             row = MappingProxyType(_product(self.counts.get(suffix[0]) or {}, row, self.cost_cap))
-            cache[suffix] = row
+            self._keep(cache, suffix, row)
         return row
+
+    def _keep(
+        self, cache: OrderedDict[tuple[NT, ...], Mapping[int, int]], key: tuple[NT, ...], row: Mapping[int, int]
+    ) -> None:
+        """Keep a split row as the most recently used, and evict the least recently used past the bound.
+
+        A row is evicted only from the cache, never from a caller that holds it, so a product being
+        built keeps its operand however the cache changes meanwhile. A row longer than the bound
+        on its own is evicted too: the bound holds after every call.
+
+        Args:
+            cache (OrderedDict): The kept rows, least recently used first.
+            key (tuple[NT, ...]): The tuple of holes.
+            row (Mapping[int, int]): Its split row.
+        """
+        held = self.__dict__.get("_split_entries", 0)
+        replaced = cache.pop(key, None)
+        if replaced is not None:
+            held -= len(replaced)
+        cache[key] = row
+        held += len(row)
+        bound = ROW_CACHE_ENTRIES if self.row_cache_entries is None else self.row_cache_entries
+        while held > bound and cache:
+            _, evicted = cache.popitem(last=False)
+            held -= len(evicted)
+        object.__setattr__(self, "_split_entries", held)
 
     def split_counts(self, nonterminals: Sequence[NT], total: int) -> int:
         """Return the number of ways to fill a tuple of holes at a total cost.
@@ -1060,6 +1123,10 @@ class WeightedCostTable(Generic[NT, T, G]):
     def _log_weight_of_holes(self, hole_types: tuple[NT, ...], cost: int) -> float:
         """Return a node's ``log w`` from the multiset of its holes and its cost so far.
 
+        Read from the split row's logarithms (:meth:`_log_row`). Every summand is the one the exact
+        row gives, the logarithm of a count plus a unit weight, and :func:`log_sum_exp` adds them
+        exactly rounded whatever their order, so the weight is the exact row's to the last bit.
+
         Args:
             hole_types (tuple[NT, ...]): The node's holes, in canonical order; empty on a success node.
             cost (int): The cost of its partial inhabitant.
@@ -1067,10 +1134,53 @@ class WeightedCostTable(Generic[NT, T, G]):
         Returns:
             float: ``log sum_a B_n(a) pi(a) / N_r(a)``, ``-inf`` without a completion within the cap.
         """
-        known = self._cache("_weight_cache").get((hole_types, cost))
+        weights = self._cache("_weight_cache")
+        key = (hole_types, cost)
+        known = weights.get(key)
         if known is not None:
             return known
-        return self._weight(hole_types, cost, self._branch_counts_of_holes(hole_types, cost))
+        if not hole_types:
+            return self._weight(hole_types, cost, self._branch_counts_of_holes(hole_types, cost))
+        values, logs = self._log_row(hole_types)
+        log_unit_weights = self.log_unit_weights
+        cost_cap = self.cost_cap
+        terms: list[float] = []
+        for value, log_count in zip(values, logs, strict=True):
+            total = cost + value
+            if total <= cost_cap:
+                log_unit = log_unit_weights.get(total)
+                if log_unit is not None:
+                    terms.append(log_count + log_unit)
+        weight = log_sum_exp(terms)
+        weights[key] = weight
+        return weight
+
+    def _log_row(self, hole_types: tuple[NT, ...]) -> tuple[array[int], array[float]]:
+        """Return a tuple of holes' split row as its realized values and the logarithms of their counts, read once and kept.
+
+        A weight needs a count only as its logarithm, so the row is kept in that form: a whole
+        number and a float per entry, in two arrays, where the exact row holds a dictionary entry
+        and a large integer, about a tenth of the memory. The exact row is left to the table's
+        bounded cache, and the logarithm of a count is taken once per tuple, not once per weight.
+
+        Args:
+            hole_types (tuple[NT, ...]): The holes, in canonical order, at least one.
+
+        Returns:
+            tuple[array, array]: The realized total costs of the split row, and the logarithm of
+                the count of each, in the row's order.
+        """
+        rows = self._cache("_log_rows")
+        known = rows.get(hole_types)
+        if known is not None:
+            return known
+        row = self.table.split_row(hole_types)
+        known = (
+            array(_value_typecode(self.cost_cap), row.keys()),
+            array("d", [math.log(count) for count in row.values()]),
+        )
+        rows[hole_types] = known
+        return known
 
     def _weight(self, hole_types: tuple[NT, ...] | None, cost: int, counts: Mapping[int, int]) -> float:
         """Return the log-sum-exp of branch counts under the unit weights, and keep it.

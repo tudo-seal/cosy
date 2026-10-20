@@ -62,6 +62,7 @@ from tests.search_fixtures import (
     PRICED,
     PRICED_Q,
     ROUND,
+    SPLIT,
     TAGGED,
     TUPLE_SORT,
     USED,
@@ -1385,6 +1386,212 @@ def test_the_cost_form_never_pushes_a_clause_a_literal_predicate_refuses_below_t
     streamed = list(lazy.keyed_stream(random.Random(seed)))
     assert_streams_agree(list(eager.keyed_stream(random.Random(seed))), streamed)
     assert len(streamed) == 2
+
+
+# The memory a stream keeps. A node's weight is ``log sum_a B_n(a) pi(a) / N_r(a)``, and ``B_n`` is the split row of the node's
+# holes shifted by its cost so far, so a stream reads the split row of every tuple of holes it weighs. Those rows were kept, exact,
+# for the table's lifetime, and on a wide program they hold the stream's whole memory. The weights now read each tuple's split row
+# once, as the logarithms of its counts, and the exact rows are kept within a bound; neither may change a weight, a key or a draw.
+
+# Spaces whose streams weigh tuples of holes of several lengths: (name, build, start, algebra, cap, draws).
+STREAM_SPACES = [
+    ("split", split_space, SPLIT, UNIT, 13, 300),
+    ("priced", priced_space, PRICED, WEIGHTED, 6, 300),
+]
+MANY_ENTRIES = 10**12
+
+
+def independent_split_row(table, hole_types):
+    """Return the split row of a tuple of holes as the plain product of its holes' rows, sharing no cache with the table.
+
+    Args:
+        table (CostTable): The table whose rows are multiplied.
+        hole_types (tuple): The non-terminals of the holes, at least one.
+
+    Returns:
+        dict[int, int]: The number of ways to fill the holes per total cost up to the cap.
+    """
+    row = {0: 1}
+    for nonterminal in reversed(hole_types):
+        row = _dict_product(table.counts.get(nonterminal) or {}, row, table.cost_cap)
+    return row
+
+
+def reference_log_weight(weighted, hole_types, cost):
+    """Return a node's ``log sum_a B_n(a) pi(a) / N_r(a)`` from its exact split row: the formula the weights are defined by.
+
+    Args:
+        weighted (WeightedCostTable): The construction whose unit weights are read.
+        hole_types (tuple): The node's holes; empty on a success node.
+        cost (int): The cost of its partial inhabitant.
+
+    Returns:
+        float: The node's log weight.
+    """
+    row = independent_split_row(weighted.table, hole_types) if hole_types else {0: 1}
+    return log_sum_exp(
+        [
+            math.log(count) + weighted.log_unit_weights[cost + value]
+            for value, count in row.items()
+            if cost + value <= weighted.cost_cap and cost + value in weighted.log_unit_weights
+        ]
+    )
+
+
+def held_entries(table):
+    """Return the number of entries the exact rows a table keeps hold.
+
+    Args:
+        table (CostTable): The table.
+
+    Returns:
+        int: The sum of the lengths of the rows it keeps.
+    """
+    return sum(len(row) for row in (table.__dict__.get("_split_rows") or {}).values())
+
+
+@pytest.mark.parametrize(("name", "build", "start", "algebra", "cap", "draws"), STREAM_SPACES)
+def test_every_weight_a_stream_reads_is_that_of_the_exact_row_bit_for_bit(name, build, start, algebra, cap, draws):
+    """The weights are computed from the logarithms of the counts, and must equal what the exact row gives, not approximately.
+
+    The keys, and with them the draws, are a function of the weights and the source of randomness, so a weight that moved in its
+    last bit could move a draw.
+
+    Args:
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+        algebra (AdditiveCostAlgebra): The algebra.
+        cap (int): The cost cap.
+        draws (int): How many terms to stream.
+    """
+    weighted = weighted_cost_table(generator_query(build(), start), algebra, falling, cap)
+    streamed = list(itertools.islice(weighted.stream(random.Random(3)), draws))
+    weighed = {
+        key: value for key, value in (weighted.__dict__.get("_weight_cache") or {}).items() if key[0] is not None
+    }
+    assert streamed, name
+    assert len(weighed) >= 20, f"{name}: a stream that weighs few nodes tests little"
+    assert any(len(holes_) >= 2 for holes_, _cost in weighed), f"{name}: no tuple of two holes was weighed"
+    for (hole_types, cost), value in weighed.items():
+        assert value == reference_log_weight(weighted, hole_types, cost), (name, hole_types, cost)
+
+
+def test_a_stream_keeps_the_exact_rows_it_multiplied_within_the_bound(monkeypatch):
+    """The exact rows a stream multiplies out are kept within a bound on their entries, never for the table's lifetime.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    space = split_space()
+    query = generator_query(space, SPLIT)
+    bound = 30
+    unbounded = cost_table(space, UNIT, 13)
+    list(itertools.islice(weighted_cost_table(query, UNIT, falling, 13, table=unbounded).stream(random.Random(3)), 300))
+    monkeypatch.setattr(cost_tables_module, "ROW_CACHE_ENTRIES", bound, raising=False)
+    bounded = cost_table(space, UNIT, 13)
+    streamed = 0
+    for _term in itertools.islice(
+        weighted_cost_table(query, UNIT, falling, 13, table=bounded).stream(random.Random(3)), 300
+    ):
+        streamed += 1
+        assert held_entries(bounded) <= bound, (
+            f"after {streamed} terms the exact rows hold {held_entries(bounded)} entries"
+        )
+    assert streamed == 300
+    if held_entries(unbounded) <= 4 * bound:
+        pytest.fail(
+            f"the stream needs only {held_entries(unbounded)} entries kept, so a bound of {bound} is never tested"
+        )
+
+
+def test_a_stream_asks_for_each_tuple_of_holes_exact_row_once(monkeypatch):
+    """A stream weighs one tuple of holes at many costs, and reads its exact row once, as logarithms, for all of them.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+    """
+    weighted = weighted_cost_table(generator_query(split_space(), SPLIT), UNIT, falling, 13)
+    asked: dict[tuple, int] = {}
+    original = CostTable.split_row
+
+    def counting(self, nonterminals):
+        key = tuple(nonterminals)
+        asked[key] = asked.get(key, 0) + 1
+        return original(self, nonterminals)
+
+    monkeypatch.setattr(CostTable, "split_row", counting)
+    list(itertools.islice(weighted.stream(random.Random(3)), 300))
+    costs_per_tuple: dict[tuple, set] = {}
+    for hole_types, cost in weighted.__dict__.get("_weight_cache") or {}:
+        if hole_types:
+            costs_per_tuple.setdefault(hole_types, set()).add(cost)
+    assert any(len(costs) >= 2 for costs in costs_per_tuple.values()), "no tuple was weighed at two costs"
+    again = {hole_types: count for hole_types, count in asked.items() if count > 1}
+    assert not again, (
+        f"{len(again)} tuples of holes had their exact row asked for again, up to {max(again.values())} times"
+    )
+
+
+@pytest.mark.parametrize(("name", "build", "start", "algebra", "cap", "draws"), STREAM_SPACES)
+@pytest.mark.parametrize("seed", [0, 3, 11])
+def test_the_bound_on_the_exact_rows_changes_no_draw_and_no_key(
+    monkeypatch, name, build, start, algebra, cap, draws, seed
+):
+    """A table that keeps almost no exact row streams what one that keeps every row streams, term for term and key for key.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+        algebra (AdditiveCostAlgebra): The algebra.
+        cap (int): The cost cap.
+        draws (int): How many terms to stream.
+        seed (int): The seed under test.
+    """
+    space = build()
+    query = generator_query(space, start)
+    monkeypatch.setattr(cost_tables_module, "ROW_CACHE_ENTRIES", MANY_ENTRIES, raising=False)
+    keeping = list(
+        itertools.islice(weighted_cost_table(query, algebra, falling, cap).keyed_stream(random.Random(seed)), draws)
+    )
+    monkeypatch.setattr(cost_tables_module, "ROW_CACHE_ENTRIES", 1, raising=False)
+    forgetting = list(
+        itertools.islice(weighted_cost_table(query, algebra, falling, cap).keyed_stream(random.Random(seed)), draws)
+    )
+    assert keeping, name
+    assert [term for _key, term in keeping] == [term for _key, term in forgetting], name
+    assert [key for key, _term in keeping] == [key for key, _term in forgetting], name
+
+
+@pytest.mark.parametrize(("name", "build", "start", "algebra", "cap", "draws"), STREAM_SPACES)
+def test_a_bounded_table_returns_the_rows_an_unbounded_one_returns(
+    monkeypatch, name, build, start, algebra, cap, draws
+):
+    """Whatever the bound evicts is multiplied out again when asked for, to the same counts.
+
+    Args:
+        monkeypatch: pytest's monkeypatch.
+        name (str): The space's name, for the test id.
+        build (Callable): Builds the space.
+        start: The queried non-terminal.
+        algebra (AdditiveCostAlgebra): The algebra.
+        cap (int): The cost cap.
+        draws (int): How many terms to stream.
+    """
+    space = build()
+    weighted = weighted_cost_table(generator_query(space, start), algebra, falling, cap)
+    list(itertools.islice(weighted.stream(random.Random(5)), draws))
+    tuples = sorted(
+        {hole_types for hole_types, _cost in weighted.__dict__.get("_weight_cache") or {} if hole_types}, key=repr
+    )
+    assert tuples, name
+    monkeypatch.setattr(cost_tables_module, "ROW_CACHE_ENTRIES", 3, raising=False)
+    bounded = cost_table(space, algebra, cap)
+    for _round in range(2):
+        for hole_types in tuples:
+            assert dict(bounded.split_row(hole_types)) == independent_split_row(bounded, hole_types), (name, hole_types)
 
 
 def test_a_tuple_whose_kept_suffix_is_empty_has_the_empty_row():
