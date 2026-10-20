@@ -13,7 +13,7 @@ for what each of them contributes to the convergence argument below.
 | Initialization | :class:`SampledInitialization`, :class:`MixtureInitializer` |
 | Mutation | :class:`ResolutionMutation` |
 | Recombination | :class:`SubtreeSwap`, :class:`SubtreeGraft` |
-| Parent selection | :class:`TournamentSelection`, :class:`RankBasedSelection`, :class:`FitnessProportionalSelection`, :class:`LexicaseSelection` |
+| Parent selection | :class:`TournamentSelection`, :class:`RankBasedSelection`, :class:`FitnessProportionalSelection`, :class:`LexicaseSelection`, :class:`CrowdedTournamentSelection` |
 | Survivor selection | :class:`GenerousConservativeReplacement`, :class:`FitnessBasedReplacement`, :class:`CrowdedTruncation` |
 | Termination | :class:`Generations`, :class:`NoImprovement`, :class:`TargetFitness`, combined by :class:`AnyOf` |
 | Evaluation | :class:`FitnessComparator`, plus a :class:`Scalarization` where numbers are needed |
@@ -83,9 +83,11 @@ from cosy.evolutionary_algorithms.recombination import (
     SubtreeSwap,
 )
 from cosy.evolutionary_algorithms.selection import (
+    CrowdedTournamentSelection,
     CrowdedTruncation,
     FitnessBasedReplacement,
     FitnessProportionalSelection,
+    FormedPopulation,
     GenerousConservativeReplacement,
     LexicaseSelection,
     ParentSelection,
@@ -107,6 +109,7 @@ __all__ = [
     "AggregatedFitnessComparator",
     "AnyOf",
     "Comparison",
+    "CrowdedTournamentSelection",
     "CrowdedTruncation",
     "EAState",
     "EvolutionarySearch",
@@ -116,6 +119,7 @@ __all__ = [
     "FitnessComparator",
     "FitnessFunctionMode",
     "FitnessProportionalSelection",
+    "FormedPopulation",
     "Generations",
     "GenerousConservativeReplacement",
     "InitializationError",

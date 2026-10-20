@@ -1,4 +1,4 @@
-"""NSGA-II's crowding: the distance within a front and the cut of the last front by it.
+"""NSGA-II's crowding: the distance within a front, the cut of the last front by it, the tournament under it.
 
 Deb, Pratap, Agarwal and Meyarivan, "A Fast and Elitist Multiobjective Genetic Algorithm: NSGA-II" (2002), §III-B:
 per objective a front is sorted, its two boundary solutions get an infinite distance and every other one the gap
@@ -9,20 +9,29 @@ The distances below are computed by hand from that procedure, and the distances 
 transcription of the paper's two listings on random fronts.
 """
 
+import functools
 import math
 import random
+from collections import Counter
+from typing import Any
 
 import pytest
 
 from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms import (
+    CrowdedTournamentSelection,
     CrowdedTruncation,
     FitnessBasedReplacement,
+    FormedPopulation,
+    Generations,
     ParetoFitnessComparator,
     crowding_distances,
     dominance_fronts,
 )
-from tests.ea_fixtures import chain
+from cosy.search import generator_query
+from tests.ea_fixtures import RECURSIVE_START, chain, recursive_space
+from tests.test_evolutionary import search
+from tests.test_selection import CountingComparator
 
 PARETO = ParetoFitnessComparator()
 
@@ -398,3 +407,313 @@ def test_the_crowded_truncation_refuses_a_negative_size():
     population, fitness = scored([(0.0, 1.0), (1.0, 0.0)])
     with pytest.raises(ValueError, match="a population size cannot be negative: -1"):
         CrowdedTruncation().select_survivors(population, [], fitness, PARETO, -1)
+
+
+# ---------------------------------------------------------------------------
+# The crowded tournament
+# ---------------------------------------------------------------------------
+
+
+def formed(
+    vectors: list[tuple[float, ...]], size: int | None = None
+) -> tuple[list[Tree], FormedPopulation, dict[Tree, tuple[float, ...]]]:
+    """Form a population with a crowded truncation, as NSGA-II forms ``P_{t+1}``.
+
+    Args:
+        vectors (list[tuple[float, ...]]): One vector per individual of the pool.
+        size (int | None): The places, the whole pool where ``None``.
+
+    Returns:
+        tuple: The pool, the population formed from it, and the fitness.
+    """
+    pool, fitness = scored(vectors)
+    truncation: CrowdedTruncation[Any] = CrowdedTruncation()
+    population = truncation.select_survivors(pool, [], fitness, PARETO, len(pool) if size is None else size)
+    assert isinstance(population, FormedPopulation)
+    return pool, population, fitness
+
+
+def wins_of(operator: CrowdedTournamentSelection, population: list[Tree], fitness, draws: int) -> Counter:
+    """Count the winners of ``2 * draws`` tournaments."""
+    return Counter(member for _ in range(draws) for member in operator.select_parents(population, fitness, PARETO))
+
+
+def test_a_tournament_of_everyone_is_won_by_the_dominating_individual():
+    """Rank first: an individual that dominates the rest wins every tournament it is in."""
+    population, fitness = scored([(1.0, 1.0), (0.5, 0.5), (0.4, 0.6), (0.6, 0.4)])
+    operator = CrowdedTournamentSelection(len(population), random.Random(1))
+    for _draw in range(50):
+        assert operator.select_parents(population, fitness, PARETO) == (population[0], population[0])
+
+
+def test_rank_comes_before_distance():
+    """A front of two beats a worse front whose members carry an infinite distance too."""
+    pool, population, fitness = formed([(1.0, 0.9), (0.9, 1.0), (0.1, 0.0), (0.0, 0.1)])
+    operator = CrowdedTournamentSelection(len(population), random.Random(2))
+    assert set(wins_of(operator, population, fitness, 100)) == {pool[0], pool[1]}
+
+
+def test_within_a_rank_the_larger_distance_wins_and_a_tie_is_drawn():
+    """One front: the boundary solutions carry an infinite distance and share the wins, the inner ones win nothing."""
+    pool, population, fitness = formed([(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)])
+    operator = CrowdedTournamentSelection(len(population), random.Random(3))
+    wins = wins_of(operator, population, fitness, 400)
+    assert wins[pool[1]] == wins[pool[2]] == wins[pool[3]] == 0
+    assert 300 <= wins[pool[0]] <= 500
+    assert wins[pool[0]] + wins[pool[4]] == 800
+
+
+def test_the_tournament_reads_the_distances_the_population_was_formed_with():
+    """Deb et al. compute rank and distance "while forming the population P_{t+1}" (p. 186).
+
+    Seven points of one front, five places: the survivors 0.2 and 0.55 carry the distance of the whole front, 0.8,
+    below the 0.9 of the survivor 0.9, not the 1.1 and 1.4 they would have among the survivors alone. So 0.9 wins a
+    binary tournament whenever it meets 0.2 or 0.55: it is drawn into two tournaments in five and meets one of them
+    in half of those, a fifth of all tournaments. Read off the survivors alone, it would win none.
+    """
+    xs = [0.0, 0.1, 0.2, 0.5, 0.55, 0.9, 1.0]
+    pool, population, fitness = formed([(x, 1 - x) for x in xs], size=5)
+    place = {xs[pool.index(member)]: index for index, member in enumerate(population)}
+    assert sorted(place) == [0.0, 0.2, 0.55, 0.9, 1.0]
+    standing = population.standing(fitness, PARETO)
+    assert standing is not None
+    assert [standing[place[x]][1] for x in (0.2, 0.55, 0.9)] == pytest.approx([0.8, 0.8, 0.9])
+    operator = CrowdedTournamentSelection(2, random.Random(5))
+    wins = wins_of(operator, population, fitness, 5000)
+    assert 1800 <= wins[population[place[0.9]]] <= 2200
+
+
+def test_the_standing_follows_the_paper_s_listing_on_random_pools():
+    """The rank and distance of every survivor, as the listing of p. 186 forms them, place by place."""
+    rng = random.Random(37)
+    compared = 0
+    for _trial in range(150):
+        count = rng.randint(2, 14)
+        vectors = [(float(rng.randint(0, 5)), float(rng.randint(0, 5))) for _ in range(count)]
+        pool, fitness = scored(vectors)
+        fronts = reference_fronts(vectors)
+        defined = all(
+            len(front) < 3 or all(len({vectors[i][m] for i in front}) >= 2 for m in range(2)) for front in fronts
+        )
+        if not defined:
+            continue
+        rank_of = {i: rank for rank, front in enumerate(fronts) for i in front}
+        distance_of = {
+            i: distance
+            for front in fronts
+            for i, distance in zip(front, reference_distances([vectors[i] for i in front]), strict=True)
+        }
+        for size in range(count + 1):
+            population = CrowdedTruncation().select_survivors(pool, [], fitness, PARETO, size)
+            expected = [(rank_of[i], distance_of[i]) for i in reference_survivors(vectors, size)]
+            standing = CrowdedTruncation.standing_of(population, fitness, PARETO)
+            assert standing is not None
+            assert [rank for rank, _ in standing] == [rank for rank, _ in expected]
+            assert [distance for _, distance in standing] == pytest.approx([distance for _, distance in expected])
+            compared += 1
+    # Counted from the construction and the reference alone: 1 247 sizes, 517 of them cutting a front, for this
+    # seed.
+    assert compared >= 1100
+
+
+def test_without_a_formed_standing_the_tournament_decides_by_rank_alone():
+    """NSGA-II's first generation uses "the usual binary tournament selection" on the rank (p. 185).
+
+    One front of five, not formed by a truncation: every member ties, and each wins a fifth of the tournaments.
+    """
+    population, fitness = scored([(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)])
+    operator = CrowdedTournamentSelection(2, random.Random(6))
+    wins = wins_of(operator, population, fitness, 5000)
+    assert all(1800 <= wins[member] <= 2200 for member in population), wins
+
+
+def test_a_population_changed_after_forming_has_no_standing():
+    """The standing is read only for the population as it was formed, under its comparator and its measurements."""
+    _pool, population, fitness = formed([(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25)])
+    assert CrowdedTruncation.standing_of(population, fitness, PARETO) is not None
+    assert CrowdedTruncation.standing_of(list(population), fitness, PARETO) is None
+    assert CrowdedTruncation.standing_of(population[::-1], fitness, PARETO) is None
+    assert population.standing(fitness, ParetoFitnessComparator()) is None
+    # Equal values, measured again: new tuples, which a tuple() of a tuple would not be.
+    remeasured = {member: tuple(component for component in value) for member, value in fitness.items()}
+    assert all(remeasured[member] == fitness[member] for member in population)
+    assert population.standing(remeasured, PARETO) is None
+    population[0], population[1] = population[1], population[0]
+    assert population.standing(fitness, PARETO) is None
+    operator = CrowdedTournamentSelection(2, random.Random(7))
+    wins = wins_of(operator, population, fitness, 4000)
+    assert all(1700 <= wins[member] <= 2300 for member in population), "ranked alone: one front, all tied"
+
+
+def test_a_shared_measurement_does_not_let_a_reordered_population_read_the_standing():
+    """Two individuals measured by one value object, swapped in place: the same set, the same values per place,
+    and still not the population that was formed."""
+    pool, fitness = scored([(0.0, 1.0), (0.5, 0.5), (0.5, 0.5), (1.0, 0.0)])
+    fitness[pool[2]] = fitness[pool[1]]
+    population = CrowdedTruncation().select_survivors(pool, [], fitness, PARETO, 4)
+    assert population == pool
+    population[1], population[2] = population[2], population[1]
+    assert population.standing(fitness, PARETO) is None
+
+
+def test_the_rank_alone_is_built_once_for_a_population_and_a_formed_standing_never():
+    """A driver asks for one pair per offspring, every pass over the same population."""
+    population, fitness = scored([(0.0, 1.0), (0.5, 0.5), (1.0, 0.0), (0.2, 0.2)])
+    comparator = CountingComparator(PARETO)
+    operator = CrowdedTournamentSelection(2, random.Random(8))
+    operator.select_parents(population, fitness, comparator)
+    after_the_first_pair = comparator.calls
+    assert after_the_first_pair > 0
+    for _ in range(50):
+        operator.select_parents(population, fitness, comparator)
+    assert comparator.calls == after_the_first_pair
+    formed_population = CrowdedTruncation().select_survivors(population, [], fitness, comparator, 3)
+    after_forming = comparator.calls
+    for _ in range(50):
+        operator.select_parents(formed_population, fitness, comparator)
+    assert comparator.calls == after_forming
+
+
+def test_a_population_ranked_alone_and_then_formed_reads_its_standing():
+    """A ranking kept for the same individuals does not stand in for the standing a formed population carries."""
+    population, fitness = scored([(0.0, 1.0), (0.25, 0.75), (0.5, 0.5), (0.75, 0.25), (1.0, 0.0)])
+    operator = CrowdedTournamentSelection(len(population), random.Random(9))
+    alone = wins_of(operator, population, fitness, 500)
+    assert all(alone[member] > 0 for member in population), "ranked alone: everyone ties"
+    formed_population = CrowdedTruncation().select_survivors(population, [], fitness, PARETO, 5)
+    crowded = wins_of(operator, formed_population, fitness, 500)
+    assert crowded[population[1]] == crowded[population[2]] == crowded[population[3]] == 0
+
+
+def test_the_rank_alone_is_built_again_for_a_new_fitness_mapping():
+    """The same individuals under a different measurement are a different ranking."""
+    population, fitness = scored([(1.0, 1.0), (0.5, 0.5), (0.0, 0.0)])
+    reversed_fitness = dict(zip(population, [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)], strict=True))
+    operator = CrowdedTournamentSelection(len(population), random.Random(13))
+    assert operator.select_parents(population, fitness, PARETO) == (population[0], population[0])
+    assert operator.select_parents(population, reversed_fitness, PARETO) == (population[2], population[2])
+
+
+def test_the_rank_alone_is_built_again_for_a_mapping_edited_in_place():
+    """The very mapping, measured again in place: the ranking follows the values, not the mapping's identity."""
+    population, fitness = scored([(1.0, 1.0), (0.5, 0.5), (0.0, 0.0)])
+    operator = CrowdedTournamentSelection(len(population), random.Random(17))
+    assert operator.select_parents(population, fitness, PARETO) == (population[0], population[0])
+    fitness[population[0]], fitness[population[2]] = (0.0, 0.0), (1.0, 1.0)
+    assert operator.select_parents(population, fitness, PARETO) == (population[2], population[2])
+
+
+def test_the_rank_alone_is_built_again_for_a_new_comparator():
+    """The same measurements under the opposite order are the opposite ranking."""
+    population, fitness = scored([(1.0, 1.0), (0.5, 0.5), (0.0, 0.0)])
+    minimizing = ParetoFitnessComparator(maximize=[False, False])
+    operator = CrowdedTournamentSelection(len(population), random.Random(14))
+    assert operator.select_parents(population, fitness, PARETO) == (population[0], population[0])
+    assert operator.select_parents(population, fitness, minimizing) == (population[2], population[2])
+
+
+def test_a_population_edited_in_place_is_ranked_again():
+    """The ranking is keyed on the members, so an edited list is not answered from it."""
+    members, fitness = scored([(1.0, 1.0), (0.5, 0.5), (0.0, 0.0), (2.0, 2.0)])
+    population = members[:3]
+    operator = CrowdedTournamentSelection(3, random.Random(15))
+    assert operator.select_parents(population, fitness, PARETO) == (members[0], members[0])
+    population[2] = members[3]
+    assert operator.select_parents(population, fitness, PARETO) == (members[3], members[3])
+
+
+def _readable(state) -> bool:
+    return CrowdedTruncation.standing_of(state.population, state.fitness, PARETO) is not None
+
+
+def test_the_driver_breeds_every_generation_from_the_standing_it_was_formed_with():
+    """From the first generation on, every population the driver breeds from carries its standing."""
+    driver = search(
+        11,
+        parent_selection=CrowdedTournamentSelection(2, random.Random(12)),
+        survivor_selection=CrowdedTruncation(),
+        comparator=PARETO,
+        termination=Generations(5),
+    )
+    query = generator_query(recursive_space(), RECURSIVE_START)
+    states = driver.evolutionary_stream(query, lambda tree: (float(tree.size), -float(tree.depth)))
+    assert [_readable(state) for state in states] == [False, True, True, True, True, True]
+
+
+def test_another_use_of_the_truncation_does_not_decouple_a_run():
+    """A report formed with the run's own truncation between generations, and two runs sharing it, interleaved."""
+    truncation = CrowdedTruncation()
+    query = generator_query(recursive_space(), RECURSIVE_START)
+
+    def driver(seed: int):
+        return search(
+            seed,
+            parent_selection=CrowdedTournamentSelection(2, random.Random(seed + 10)),
+            survivor_selection=truncation,
+            comparator=PARETO,
+            termination=Generations(4),
+        )
+
+    readable = []
+    for state in driver(21).evolutionary_stream(query, lambda tree: (float(tree.size), -float(tree.depth))):
+        truncation.select_survivors(state.population, [], state.fitness, PARETO, 3)
+        readable.append(_readable(state))
+    assert readable == [False, True, True, True, True]
+    first = driver(22).evolutionary_stream(query, lambda tree: (float(tree.size), -float(tree.depth)))
+    second = driver(23).evolutionary_stream(query, lambda tree: (float(tree.depth), -float(tree.size)))
+    pairs = [(_readable(a), _readable(b)) for a, b in zip(first, second, strict=True)]
+    assert pairs == [(False, False)] + [(True, True)] * 4
+
+
+def test_a_continuation_from_a_copied_population_starts_by_rank_alone():
+    """A second run whose first generation is the last one of a run before, copied, starts as NSGA-II does,
+    whatever the identity of the fitness values a memoized measurement hands back."""
+    query = generator_query(recursive_space(), RECURSIVE_START)
+    measure = functools.cache(lambda tree: (float(tree.size), -float(tree.depth)))
+
+    class Continue:
+        def __init__(self, population: list[Tree]) -> None:
+            self.population = population
+
+        def initialize(self, _query: object, _size: int) -> list[Tree]:
+            return list(self.population)
+
+    def driver(seed: int, **overrides):
+        return search(
+            seed,
+            parent_selection=CrowdedTournamentSelection(2, random.Random(seed + 10)),
+            survivor_selection=CrowdedTruncation(),
+            comparator=PARETO,
+            population_size=10,
+            **overrides,
+        )
+
+    final = list(driver(8, termination=Generations(3)).evolutionary_stream(query, measure))[-1]
+    assert _readable(final)
+    continued = driver(9, initializer=Continue(final.population), termination=Generations(0))
+    first = next(iter(continued.evolutionary_stream(query, measure)))
+    assert not _readable(first)
+
+
+def test_a_repeated_individual_competes_with_the_standing_of_each_of_its_places():
+    """Each place stands for itself, as each individual of NSGA-II carries a rank and a distance of its own.
+
+    Three objectives: the repeated individual is the largest in the first, so its second place is a boundary
+    solution there, while its first place is an inner one at distance 1.5 (0.5 in each objective). Every other place
+    is a boundary solution, so in a tournament of the whole population the repeated individual ties with the two
+    others and wins a third of the draws. Read off its first place alone, it would win none.
+    """
+    pool, fitness = scored([(1.0, 0.5, 0.5), (0.0, 1.0, 0.0), (0.5, 0.0, 1.0)])
+    repeated = [pool[0], pool[0], pool[1], pool[2]]
+    population = CrowdedTruncation().select_survivors(repeated, [], fitness, PARETO, 4)
+    assert population == repeated
+    assert crowding_distances(population, fitness) == [pytest.approx(1.5), math.inf, math.inf, math.inf]
+    operator = CrowdedTournamentSelection(len(population), random.Random(4))
+    wins = wins_of(operator, population, fitness, 300)
+    assert 120 <= wins[pool[0]] <= 280
+
+
+def test_a_crowded_tournament_needs_a_participant():
+    """A tournament of no one decides nothing."""
+    with pytest.raises(ValueError, match="at least one participant"):
+        CrowdedTournamentSelection(0, random.Random(0))

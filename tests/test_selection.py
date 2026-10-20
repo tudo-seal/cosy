@@ -28,6 +28,7 @@ from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms import (
     AggregatedFitnessComparator,
     Comparison,
+    CrowdedTournamentSelection,
     CrowdedTruncation,
     ExpScalarization,
     Fitness,
@@ -194,6 +195,7 @@ def test_dominance_fronts_refuse_a_single_remaining_individual_fitter_than_itsel
         FitnessProportionalSelection(ExpScalarization(), random.Random(0)),
         RankBasedSelection(1.7, random.Random(0)),
         LexicaseSelection(random.Random(0)),
+        CrowdedTournamentSelection(2, random.Random(0)),
     ],
 )
 def test_parent_selection_returns_a_pair_of_members(operator):
@@ -217,6 +219,7 @@ def test_parent_selection_returns_a_pair_of_members(operator):
         FitnessProportionalSelection(ExpScalarization(), random.Random(0)),
         RankBasedSelection(1.7, random.Random(0)),
         LexicaseSelection(random.Random(0)),
+        CrowdedTournamentSelection(2, random.Random(0)),
     ],
 )
 def test_parent_selection_refuses_an_empty_population(operator):
@@ -235,6 +238,7 @@ def test_parent_selection_refuses_an_empty_population(operator):
         TournamentSelection(2, random.Random(0)),
         FitnessProportionalSelection(ExpScalarization(), random.Random(0)),
         RankBasedSelection(1.7, random.Random(0)),
+        CrowdedTournamentSelection(2, random.Random(0)),
     ],
 )
 def test_the_two_parents_may_coincide_and_may_differ(operator):
@@ -1041,6 +1045,7 @@ def test_no_operator_touches_the_global_random_stream():
         TournamentSelection(2, random.Random(0)),
         FitnessProportionalSelection(ExpScalarization(), random.Random(0)),
         RankBasedSelection(1.7, random.Random(0)),
+        CrowdedTournamentSelection(2, random.Random(0)),
     ]
     random.seed(999)
     before = random.random()
@@ -1069,5 +1074,8 @@ def test_selection_works_under_a_partial_order():
     assert winners == {population[0], population[1]}
     survivors = FitnessBasedReplacement().select_survivors(population[:1], population[1:], fitness, pareto, 2)
     assert set(survivors) == {population[0], population[1]}
+    crowded = CrowdedTournamentSelection(3, random.Random(21))
+    winners = {parent for _ in range(200) for parent in crowded.select_parents(population, fitness, pareto)}
+    assert winners == {population[0], population[1]}
     survivors = CrowdedTruncation().select_survivors(population[:1], population[1:], fitness, pareto, 2)
     assert set(survivors) == {population[0], population[1]}

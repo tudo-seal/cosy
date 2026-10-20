@@ -44,9 +44,11 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound="Hashable")  # type of terminals
 
 __all__ = [
+    "CrowdedTournamentSelection",
     "CrowdedTruncation",
     "FitnessBasedReplacement",
     "FitnessProportionalSelection",
+    "FormedPopulation",
     "GenerousConservativeReplacement",
     "LexicaseSelection",
     "ParentSelection",
@@ -217,6 +219,62 @@ def crowding_distances(front: Sequence[Tree[T]], fitness: Mapping[Tree[T], Fitne
             gap = vectors[order[position + 1]][objective] * scale - vectors[order[position - 1]][objective] * scale
             distances[order[position]] += gap / extent
     return distances
+
+
+class FormedPopulation(list["Tree[T]"]):
+    """A population :class:`CrowdedTruncation` formed, carrying the standing of every place.
+
+    NSGA-II computes the rank and the crowding distance of every solution "while forming the
+    population P_{t+1}" (Deb, Pratap, Agarwal and Meyarivan 2002, §III-C), and its parent selection
+    reads them there. The truncation hands them over with the population itself, the list it
+    returns and the driver breeds the next generation from, so that every population carries its
+    own and no other call of the truncation can overwrite them. A copy made by slicing or by
+    ``list()`` is an ordinary population again, and :meth:`standing` answers ``None`` for this one
+    too once it has been edited in place, measured again, or is compared under another comparator:
+    never a standing that belongs to another population.
+    """
+
+    def __init__(
+        self,
+        members: Sequence[Tree[T]],
+        standing: Sequence[tuple[int, float]],
+        values: Sequence[Fitness],
+        comparator: FitnessComparator,
+    ) -> None:
+        """Hold the survivors with what they were formed with.
+
+        Args:
+            members (Sequence[Tree[T]]): The survivors, in their order.
+            standing (Sequence[tuple[int, float]]): Per place the rank, 0 for the first front, and
+                the crowding distance within the whole front.
+            values (Sequence[Fitness]): Per place the fitness value it was formed from.
+            comparator (FitnessComparator): The partial order it was formed under.
+        """
+        super().__init__(members)
+        self._members = tuple(members)
+        self._standing = tuple(standing)
+        self._values = tuple(values)
+        self._comparator = comparator
+
+    def standing(
+        self, fitness: Mapping[Tree[T], Fitness], comparator: FitnessComparator
+    ) -> list[tuple[int, float]] | None:
+        """Return the rank and the crowding distance of every place, as the population was formed.
+
+        Args:
+            fitness (Mapping[Tree[T], Fitness]): The fitness the population is read with.
+            comparator (FitnessComparator): The partial order it is compared under.
+
+        Returns:
+            list[tuple[int, float]] | None: Per place its rank and its distance; ``None`` if the
+                list was edited since, a place's fitness is not the very value it was formed
+                from, or the comparator is another one.
+        """
+        if comparator is not self._comparator or tuple(self) != self._members:
+            return None
+        if any(fitness[member] is not value for member, value in zip(self, self._values, strict=True)):
+            return None
+        return list(self._standing)
 
 
 def _proportional_weights(values: Sequence[float]) -> list[float]:
@@ -416,6 +474,137 @@ class TournamentSelection(ParentSelection[T]):
             self._winner(population, fitness, comparator),
             self._winner(population, fitness, comparator),
         )
+
+
+class CrowdedTournamentSelection(ParentSelection[T]):
+    """Draw a tournament uniformly and keep its winner under NSGA-II's crowded comparison.
+
+    The parent selection of NSGA-II (Deb, Pratap, Agarwal and Meyarivan 2002, §III-B and §III-C):
+    a member of lower nondomination rank beats one of higher rank, and within one rank the larger
+    crowding distance beats the smaller. Members equal in both share the win uniformly. The
+    tournament is drawn without replacement, as :class:`TournamentSelection` draws one; Deb et al.
+    use tournaments of two.
+
+    Rank and distance are the ones the population was formed with, as NSGA-II computes them "while
+    forming the population P_{t+1}" (§III-C): a population :class:`CrowdedTruncation` returned is a
+    :class:`FormedPopulation` and carries them, the rank among the fronts of parents and offspring
+    together and the distance within the whole front, for a survivor of a cut front the distance
+    before the cut. Any other population, the first generation's or a copy, has no distances to
+    read, and the tournament compares the rank alone, as NSGA-II's first generation uses "the usual
+    binary tournament selection" on the nondomination level (§III-C). That ranking is built once
+    per population. The standing is per place: a population is a multiset, and each place of a
+    repeated individual competes with the standing of its own place, as each individual of NSGA-II
+    carries its own.
+
+    **Not generous** for a tournament of 2 or more, for the reason :class:`TournamentSelection`
+    gives: a member that loses the crowded comparison to every other wins no tournament it enters.
+
+    Attributes:
+        tournament_size (int): The number of individuals per tournament.
+        rng (random.Random): The source of randomness.
+    """
+
+    def __init__(self, tournament_size: int, rng: random.Random) -> None:
+        """Build the operator.
+
+        Args:
+            tournament_size (int): Individuals per tournament, at least 1.
+            rng (random.Random): The source of randomness.
+
+        Raises:
+            ValueError: If the tournament size is smaller than 1.
+        """
+        if tournament_size < 1:
+            msg = f"a tournament needs at least one participant: {tournament_size}"
+            raise ValueError(msg)
+        self.tournament_size = tournament_size
+        self.rng = rng
+        # The ranking of the population last ranked alone, and what it was built from.
+        self._ranks: list[tuple[int, float]] = []
+        self._ranked_from: tuple[tuple[Tree[T], ...], tuple[Fitness, ...], FitnessComparator] | None = None
+
+    def _standing(
+        self,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+    ) -> list[tuple[int, float]]:
+        """Return, per place, the rank and the negated distance, so that the smaller pair is better.
+
+        The rank alone is answered again only for the same individuals in the same order, the very
+        fitness value at every place and the very comparator, so that neither an edited population
+        nor a mapping edited in place is answered from a stale ranking.
+
+        Args:
+            population (Sequence[Tree[T]]): The current population.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): The partial order.
+
+        Returns:
+            list[tuple[int, float]]: One pair per place of ``population``.
+        """
+        if isinstance(population, FormedPopulation):
+            formed = population.standing(fitness, comparator)
+            if formed is not None:
+                return [(rank, -distance) for rank, distance in formed]
+        members = tuple(population)
+        values = tuple(fitness[member] for member in members)
+        if self._ranked_from is not None:
+            previous_members, previous_values, previous_comparator = self._ranked_from
+            if (
+                previous_comparator is comparator
+                and previous_members == members
+                and all(value is previous for value, previous in zip(values, previous_values, strict=True))
+            ):
+                return self._ranks
+        rank_of: dict[Tree[T], int] = {}
+        for rank, front in enumerate(dominance_fronts(population, fitness, comparator)):
+            for member in front:
+                rank_of.setdefault(member, rank)
+        self._ranks = [(rank_of[member], 0.0) for member in population]
+        self._ranked_from = (members, values, comparator)
+        return self._ranks
+
+    def _winner(self, population: Sequence[Tree[T]], standing: Sequence[tuple[int, float]]) -> Tree[T]:
+        """Run one tournament.
+
+        Args:
+            population (Sequence[Tree[T]]): The population to draw from.
+            standing (Sequence[tuple[int, float]]): Per place of ``population`` its rank and its
+                negated distance, so that the smaller pair is the better place.
+
+        Returns:
+            Tree[T]: The winner.
+        """
+        places = self.rng.sample(range(len(population)), min(self.tournament_size, len(population)))
+        best = min(standing[place] for place in places)
+        return population[self.rng.choice([place for place in places if standing[place] == best])]
+
+    def select_parents(
+        self,
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+    ) -> tuple[Tree[T], Tree[T]]:
+        """Run two tournaments.
+
+        Args:
+            population (Sequence[Tree[T]]): The current population.
+            fitness (Mapping[Tree[T], Fitness]): The fitness of each member.
+            comparator (FitnessComparator): The partial order.
+
+        Returns:
+            tuple[Tree[T], Tree[T]]: The two winners.
+
+        Raises:
+            ValueError: If the population is empty, or if the comparator leaves no remaining
+                individual maximal (see :func:`dominance_fronts`).
+        """
+        if not population:
+            msg = "parent selection needs a non-empty population"
+            raise ValueError(msg)
+        standing = self._standing(population, fitness, comparator)
+        return self._winner(population, standing), self._winner(population, standing)
 
 
 class FitnessProportionalSelection(ParentSelection[T]):
@@ -867,13 +1056,44 @@ class CrowdedTruncation(SurvivorSelection[T]):
     they fit; the first front that does not is sorted by :func:`crowding_distances`, taken within
     that front, and its least crowded members fill the remaining places, its boundary solutions
     first, since their distance is infinite. The sort is stable, so equal distances keep the input
-    order and the cut is deterministic. Where every front fits, the result is
-    :class:`FitnessBasedReplacement`'s.
+    order and the cut is deterministic. Where every front fits, the survivors are
+    :class:`FitnessBasedReplacement`'s, place by place.
+
+    It returns the survivors as a :class:`FormedPopulation`, carrying the rank and the crowding
+    distance every survivor was given while the population was formed, as NSGA-II does: "we
+    calculate these quantities while forming the population P_{t+1}" (§III-C), the rank of the
+    survivor's front among those of parents and offspring, and its distance within that whole
+    front, for a survivor of the cut front the distance before the cut.
+    :class:`CrowdedTournamentSelection` reads them from the population it is handed. Every kept
+    front is measured, so a kept front whose vectors mix numbers of objectives is refused where
+    :class:`FitnessBasedReplacement` would keep it.
 
     **Neither generous nor conservative in the sense the guarantee asks**, for the reasons
     :class:`FitnessBasedReplacement` gives. It always keeps a maximal element: the first front is
     never empty, and when it is the front that is cut, its boundary solutions are kept first.
     """
+
+    @staticmethod
+    def standing_of(
+        population: Sequence[Tree[T]],
+        fitness: Mapping[Tree[T], Fitness],
+        comparator: FitnessComparator,
+    ) -> list[tuple[int, float]] | None:
+        """Return the rank and the distance of every place of a population a truncation formed.
+
+        Args:
+            population (Sequence[Tree[T]]): The population asked about.
+            fitness (Mapping[Tree[T], Fitness]): Its fitness.
+            comparator (FitnessComparator): The partial order it is compared under.
+
+        Returns:
+            list[tuple[int, float]] | None: Per place its rank and its crowding distance; ``None``
+                for a population no truncation formed, or one changed since (see
+                :meth:`FormedPopulation.standing`).
+        """
+        if isinstance(population, FormedPopulation):
+            return population.standing(fitness, comparator)
+        return None
 
     def select_survivors(
         self,
@@ -894,13 +1114,14 @@ class CrowdedTruncation(SurvivorSelection[T]):
             size (int): The population size mu.
 
         Returns:
-            list[Tree[T]]: The ``size`` survivors.
+            list[Tree[T]]: The ``size`` survivors, a :class:`FormedPopulation` carrying their
+                standing.
 
         Raises:
             ValueError: If ``size`` is negative, or fewer than ``size`` individuals were offered;
                 if the comparator leaves no remaining individual maximal (see
-                :func:`dominance_fronts`); or if a front to be cut mixes numbers of objectives (see
-                :func:`crowding_distances`).
+                :func:`dominance_fronts`); or if a front that is kept, whole or cut, mixes numbers
+                of objectives (see :func:`crowding_distances`).
         """
         if size < 0:
             msg = f"a population size cannot be negative: {size}"
@@ -910,17 +1131,21 @@ class CrowdedTruncation(SurvivorSelection[T]):
             msg = f"survivor selection was offered {len(pool)} individuals for {size} places"
             raise ValueError(msg)
         survivors: list[Tree[T]] = []
-        for front in dominance_fronts(pool, fitness, comparator):
+        standing: list[tuple[int, float]] = []
+        for rank, front in enumerate(dominance_fronts(pool, fitness, comparator)):
             room = size - len(survivors)
             if room <= 0:
                 break
-            if len(front) <= room:
-                survivors.extend(front)
-                continue
+            # Every kept front is measured, the whole of it, before any of it is cut.
             distances = crowding_distances(front, fitness)
-            least_crowded = sorted(range(len(front)), key=lambda index: -distances[index])
-            survivors.extend(front[index] for index in least_crowded[:room])
-        return survivors
+            chosen = (
+                range(len(front))
+                if len(front) <= room
+                else sorted(range(len(front)), key=lambda index: -distances[index])[:room]
+            )
+            survivors.extend(front[index] for index in chosen)
+            standing.extend((rank, distances[index]) for index in chosen)
+        return FormedPopulation(survivors, standing, [fitness[member] for member in survivors], comparator)
 
 
 class GenerousConservativeReplacement(SurvivorSelection[T]):
