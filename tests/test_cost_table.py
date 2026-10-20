@@ -1385,3 +1385,19 @@ def test_the_cost_form_never_pushes_a_clause_a_literal_predicate_refuses_below_t
     streamed = list(lazy.keyed_stream(random.Random(seed)))
     assert_streams_agree(list(eager.keyed_stream(random.Random(seed))), streamed)
     assert len(streamed) == 2
+
+
+def test_a_tuple_whose_kept_suffix_is_empty_has_the_empty_row():
+    """A kept suffix whose row is empty is still the suffix's row, and the tuple's row is empty with it.
+
+    ``A`` costs 5 and ``B`` 6, so under a cap of 10 the pair ``(A, B)`` has no fill and every tuple ending in it has none either.
+    Read through ``or``, the kept empty row of ``(A, B)`` was taken for no row at all, and ``(C, A, B)`` was answered with ``C``
+    times ``A`` alone: a node with no completion within the cap got a positive weight, but only once ``(A, B)`` had been asked for,
+    so the answer depended on the order of the questions.
+    """
+    counts = {"A": {5: 1}, "B": {6: 1}, "C": {0: 1}}
+    fresh = CostTable(space=None, algebra=UNIT, cost_cap=10, counts=counts)
+    assert dict(fresh.split_row(("C", "A", "B"))) == {}, "the control: asked first, the tuple has no fill"
+    table = CostTable(space=None, algebra=UNIT, cost_cap=10, counts=counts)
+    assert dict(table.split_row(("A", "B"))) == {}
+    assert dict(table.split_row(("C", "A", "B"))) == {}

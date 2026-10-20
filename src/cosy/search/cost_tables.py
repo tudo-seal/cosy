@@ -455,7 +455,10 @@ class CostTable(Generic[NT]):
         while start > 0 and holes_types[start - 1 :] in cache:
             start -= 1
         suffix = holes_types[start:]
-        row: Mapping[int, int] = cache.get(suffix) or self.counts.get(suffix[0]) or MappingProxyType({})
+        # A kept row is read with `is not None` and never with `or`: an empty one is a suffix without
+        # a fill within the cap, and so is every tuple that ends in it.
+        kept = cache.get(suffix)
+        row: Mapping[int, int] = kept if kept is not None else (self.counts.get(suffix[0]) or MappingProxyType({}))
         if len(suffix) == 1:
             cache[suffix] = row
         for position in range(start - 1, -1, -1):
