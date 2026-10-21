@@ -56,6 +56,7 @@ offending clause and its positions, rather than returning numbers that are quiet
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Generic
@@ -664,6 +665,31 @@ def _largest_term(
     return bound
 
 
+# The entries the convolved rows of two or more holes a size table keeps may hold together, unless the table names its
+# own bound. Every such row holds one count per size up to the table's bound, so the bound is a number of rows times the
+# row length. A stream asks for the row of every tuple of holes it weighs, and kept for the table's lifetime those rows
+# grew by up to about a gigabyte a draw on a synthesized program at a size bound of three thousand; past the bound the
+# least recently used row is evicted and convolved again if it is asked for again. The bound counts entries, not bytes.
+# An entry is a tuple slot of eight bytes and its count, which costs nothing more while it is one of the small integers
+# Python shares and some hundreds of bytes when it has hundreds of digits: about thirteen bytes an entry on that
+# program.
+# The default is a safety cap, not a tuning: on that program a stream of twenty draws kept just under a billion
+# entries, and a bound at a third of that cost a third more time by its nineteenth draw, a tenth of it three fifths
+# more by its fourteenth, the cost growing with every draw, since the rows are asked for again across draws; at a
+# billion the stream ran at its unbounded speed. A smaller machine sets a lower bound on the table it builds.
+ROW_CACHE_ENTRIES = 1_000_000_000
+
+
+class _KeptRows(OrderedDict[tuple[Any, ...], tuple[int, ...]]):
+    """The rows a size table keeps, least recently used first, and the entries they hold.
+
+    The count lives on the cache and not on the table, so that tables sharing one cache, as a shallow copy of a table
+    shares it, count the entries it holds once.
+    """
+
+    entries: int = 0
+
+
 @dataclass(frozen=True)
 class SizeTable(Generic[NT]):
     """``N_A(s)``: the branches rooted at a non-terminal whose term has exactly size ``s``.
@@ -695,11 +721,31 @@ class SizeTable(Generic[NT]):
             suffixes a clause of arity three or more splits into (:func:`_recursive_suffixes`).
             Filled to the size the suffix itself reaches, above which every entry is zero anyway.
             Empty on a program whose clauses have at most two holes, which is the common case.
+        row_cache_entries (int | None): The entries the rows :meth:`split_row` convolves and keeps
+            may hold together, a whole number of at least zero; None reads the module's
+            ``ROW_CACHE_ENTRIES`` when a row is kept. It decides what the table keeps and not what it
+            counts, so it is no part of the table's equality.
+
+    Raises:
+        ValueError: If ``row_cache_entries`` is neither None nor a whole number of at least zero.
     """
 
     bound: int
     counts: Mapping[NT, tuple[int, ...]]
     suffix_counts: Mapping[tuple[NT, ...], tuple[int, ...]] = field(default_factory=dict)
+    row_cache_entries: int | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        """Refuse a bound on the kept entries that is not a whole number of at least zero.
+
+        Raises:
+            ValueError: If ``row_cache_entries`` is neither None nor such a number. A truth value is
+                refused although Python counts it as an integer.
+        """
+        entries = self.row_cache_entries
+        if entries is not None and (isinstance(entries, bool) or not isinstance(entries, int) or entries < 0):
+            msg = f"row_cache_entries is a whole number of entries of at least 0, or None for the module's: {entries!r}"
+            raise ValueError(msg)
 
     def of(self, nonterminal: NT, size: int) -> int:
         """Return ``N_A(s)``.
@@ -745,10 +791,16 @@ class SizeTable(Generic[NT]):
         ``D`` times to do it. Computed as a row it is one walk, and the result is one array instead
         of ``D`` dictionary entries.
 
-        Rows are kept, so a hole tuple is convolved once per table however often it is asked for.
-        Only the tuples a caller actually names are built. The fill builds none of these, since it
-        needs the suffixes (:func:`_recursive_suffixes`) and nothing else, which is what keeps a
-        determinized program's distinct clause tuples out of memory.
+        The row of one hole is the table's row of its sort, or a row of zeros for a non-terminal the
+        table does not know, and a suffix row the fill stored is the fill's; none of them is kept
+        again. The rows of two or more holes are kept within a bound on their entries
+        (``row_cache_entries``), the least recently used evicted first. A tuple is convolved from the
+        longest suffix still at hand, kept or stored, which counts as used, so tuples that share a
+        suffix convolve it once as long as the bound holds it; an evicted row is convolved again when
+        it is asked for, to the same counts. Only the tuples a caller names are built, and their
+        suffixes on the way, which are kept and count against the bound as well. The fill builds none
+        of these, since it needs the suffixes (:func:`_recursive_suffixes`) and nothing else, which is
+        what keeps a determinized program's distinct clause tuples out of memory.
 
         Args:
             nonterminals (Sequence[NT]): The non-terminals of the holes, in clause order.
@@ -758,25 +810,73 @@ class SizeTable(Generic[NT]):
                 ``s``, for ``0 <= s <= bound``.
         """
         holes = tuple(nonterminals)
-        cached = self._rows.get(holes)
-        if cached is not None:
-            return cached
         if not holes:
             # The empty product: one way to fill no holes with nothing, none with anything.
-            row = (1, *(0,) * self.bound)
-        elif len(holes) == 1:
-            row = self.counts.get(holes[0]) or (0,) * (self.bound + 1)
-        else:
-            known = self.suffix_counts.get(holes)
-            if known is not None:
-                row = known
-            else:
-                tail = self.split_row(holes[1:])
-                occupied = self._occupied_row(holes[0])
-                arity = len(holes)
-                row = tuple(_split_over(occupied, tail, size, arity) for size in range(self.bound + 1))
-        self._rows[holes] = row
+            return (1, *(0,) * self.bound)
+        if len(holes) == 1:
+            own = self.counts.get(holes[0])
+            return own if own is not None else (0,) * (self.bound + 1)
+        cache = self._rows
+        cached = cache.get(holes)
+        if cached is not None:
+            cache.move_to_end(holes)
+            return cached
+        stored_rows = self.suffix_counts
+        if stored_rows:
+            stored = stored_rows.get(holes)
+            if stored is not None:
+                return stored
+        # The longest proper suffix at hand is the base, looked for directly: the bound may have
+        # evicted a shorter suffix while a longer one is kept. From there the tuple is convolved back
+        # to its first hole, one suffix at a time: a loop and not a recursion, so the length of a
+        # tuple costs time and never the stack. Without a suffix at hand the base is the last hole.
+        start = len(holes) - 1
+        row = None
+        for position in range(1, len(holes) - 1):
+            suffix = holes[position:]
+            kept = cache.get(suffix)
+            if kept is not None:
+                cache.move_to_end(suffix)
+                start, row = position, kept
+                break
+            if stored_rows:
+                stored = stored_rows.get(suffix)
+                if stored is not None:
+                    start, row = position, stored
+                    break
+        if row is None:
+            row = self.split_row(holes[start:])
+        for position in range(start - 1, -1, -1):
+            suffix = holes[position:]
+            occupied = self._occupied_row(suffix[0])
+            row = tuple(_split_over(occupied, row, size, len(suffix)) for size in range(self.bound + 1))
+            self._keep(cache, suffix, row)
         return row
+
+    def _keep(self, cache: _KeptRows, key: tuple[NT, ...], row: tuple[int, ...]) -> None:
+        """Keep a convolved row as the most recently used, then evict the least recently used down to the bound.
+
+        The bound is read now, the table's own or else the module's, and every row kept restores it:
+        a bound lowered on a table in use evicts what was kept above it at the table's next kept row,
+        even when that row cannot be kept itself. Every row of one table holds ``bound + 1`` entries,
+        so a bound below that keeps nothing. A row is evicted only from the cache, never from a caller
+        that holds it, so a convolution under way keeps its tail however the cache changes.
+
+        Args:
+            cache (_KeptRows): The kept rows, least recently used first, and their entries.
+            key (tuple[NT, ...]): The tuple of holes.
+            row (tuple[int, ...]): Its row.
+        """
+        bound = ROW_CACHE_ENTRIES if self.row_cache_entries is None else self.row_cache_entries
+        replaced = cache.pop(key, None)
+        if replaced is not None:
+            cache.entries -= len(replaced)
+        if len(row) <= bound:
+            cache[key] = row
+            cache.entries += len(row)
+        while cache.entries > bound and cache:
+            _, evicted = cache.popitem(last=False)
+            cache.entries -= len(evicted)
 
     def _occupied_row(self, nonterminal: NT) -> tuple[tuple[int, int], ...]:
         """Return the ``(size, N_A(size))`` pairs of a non-terminal's non-zero rows.
@@ -811,7 +911,7 @@ class SizeTable(Generic[NT]):
         return cache
 
     @property
-    def _rows(self) -> dict[tuple[NT, ...], tuple[int, ...]]:
+    def _rows(self) -> _KeptRows:
         """Return the cache of convolved rows, created on first use.
 
         The dataclass is frozen so that a table can be shared between draws without any caller
@@ -819,16 +919,18 @@ class SizeTable(Generic[NT]):
         ``object.__setattr__`` for that reason.
 
         Returns:
-            dict[tuple[NT, ...], tuple[int, ...]]: The rows built so far, by hole tuple.
+            _KeptRows: The rows kept, by hole tuple, least recently used first, and their entries.
         """
         cache = self.__dict__.get("_split_rows")
         if cache is None:
-            cache = {}
+            cache = _KeptRows()
             object.__setattr__(self, "_split_rows", cache)
         return cache
 
 
-def size_table(space: SolutionSpace[NT, T, G], bound: int, *, check: bool = True) -> SizeTable[NT]:
+def size_table(
+    space: SolutionSpace[NT, T, G], bound: int, *, check: bool = True, row_cache_entries: int | None = None
+) -> SizeTable[NT]:
     """Fill ``N_A(s)`` for every non-terminal of a program and every size up to a bound.
 
     Args:
@@ -837,6 +939,9 @@ def size_table(space: SolutionSpace[NT, T, G], bound: int, *, check: bool = True
         check (bool): Whether to decide the decomposition hypothesis first.  Leaving it on is the
             supported use; turning it off is for a caller that has already decided it for this
             program and is filling several tables from it. (Default value = True)
+        row_cache_entries (int | None): The bound on the entries of the convolved rows the table
+            keeps; None reads the module's ``ROW_CACHE_ENTRIES`` when a row is kept. (Default
+            value = None)
 
     Returns:
         SizeTable[NT]: The filled table.
@@ -979,6 +1084,7 @@ def size_table(space: SolutionSpace[NT, T, G], bound: int, *, check: bool = True
         bound=bound,
         counts=MappingProxyType({nt: tuple(row) for nt, row in rows.items()}),
         suffix_counts=MappingProxyType({suffix: tuple(row) for suffix, row in suffix_rows.items()}),
+        row_cache_entries=row_cache_entries,
     )
     object.__setattr__(table, "_occupied_sizes", {nt: tuple(sizes) for nt, sizes in occupied.items()})
     return table
