@@ -1583,6 +1583,12 @@ class SolutionSpace(Generic[NT, T, G]):
         if start not in self:  # O(1), and unlike `in self.nonterminals()` it builds no snapshot
             return False
 
+        # Each pair of a non-terminal and a subtree is decided once. A tree derivable in several ways asks the same
+        # question of the same subtree through every rule that matches above it, and without remembering the answers
+        # the work multiplies with the depth: two derivations a level ask the leaf 2 ** depth times. The answer of a
+        # pair depends on the pair alone, the space and the interpretation being fixed for the call, so remembering it
+        # changes no answer. Keyed by the subtree's identity, which is stable while the tree is held.
+        decided: dict[tuple[NT, int], bool] = {}
         stack: deque[tuple | Callable] = deque([(start, tree)])
         results: deque[bool] = deque()
 
@@ -1601,17 +1607,23 @@ class SolutionSpace(Generic[NT, T, G]):
             task = stack.pop()
             if isinstance(task, tuple):
                 nt, tree = task
+                key = (nt, id(tree))
+                if key in decided:
+                    results.append(decided[key])
+                    continue
                 # use shared helper to check whether a rule matches the current tree head
                 relevant_rhss = [rhs for rhs in self._rules_of(nt) if self._rule_matches_subtree(rhs, tree)]
 
                 # disjunction of the results for individual rules
-                def or_inputs(count: int = len(relevant_rhss)) -> None:
-                    """_summary_.
+                def or_inputs(count: int = len(relevant_rhss), key: tuple[NT, int] = key) -> None:
+                    """Decide the pair from its rules' results, and remember the decision.
 
                     Args:
-                        count (int): _description_ (Default value = len(relevant_rhss))
+                        count (int): How many rules matched. (Default value = len(relevant_rhss))
+                        key (tuple[NT, int]): The pair decided. (Default value = key)
                     """
-                    results.append(any(get_inputs(count)))
+                    decided[key] = any(get_inputs(count))
+                    results.append(decided[key])
 
                 stack.append(or_inputs)
 
