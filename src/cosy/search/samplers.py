@@ -60,7 +60,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from cosy.search.cost_tables import WeightedCostTable, _whole_cap, weighted_cost_table
+from cosy.search.cost_tables import CostTable, WeightedCostTable, _whole_cap, weighted_cost_table
 from cosy.search.markov import (
     MetropolisChain,
     VisitCounts,
@@ -415,9 +415,14 @@ class CostTableSampler:
     normalized over those values, and the terms of one value are equally likely. Under unambiguity within the cap the stream is a sample
     without replacement, as the size-uniform one is.
 
-    Like :class:`SizeUniformSampler` it keeps the last construction it built, keyed by the identity
-    of the query, so that an initialization asking :meth:`at_least` and then drawing pays for the
-    table once. :meth:`forget` gives it back.
+    The table is a property of the program, the algebra and the cap, not of the query, so the
+    sampler fills it once and reads it for every later query over the same program: a search that
+    asks for many queries -- a mutation opens a residual query at every position it mutates -- pays
+    for one fill, and every query only weights its own goals. A table handed in is read the same
+    way, which is how several samplers of one process share one fill. Like
+    :class:`SizeUniformSampler` it also keeps the last construction it built, keyed by the identity
+    of the query, so that an initialization asking :meth:`at_least` and then drawing builds it once.
+    :meth:`forget` gives back what the sampler built and filled; a table handed in stays.
 
     Attributes:
         algebra (AdditiveCostAlgebra): The additive cost algebra whose fold is the cost.
@@ -433,6 +438,8 @@ class CostTableSampler:
         distribution: Callable[[Any], float],
         cost_cap: int,
         rng: random.Random,
+        *,
+        table: CostTable[Any] | None = None,
     ) -> None:
         """Build the sampler.
 
@@ -442,6 +449,10 @@ class CostTableSampler:
             cost_cap (int): The largest cost a drawn term may have, a nonnegative whole number; a
                 whole float such as a fold of the algebra is read as the number it is.
             rng (random.Random): The source of randomness.
+            table (CostTable[Any] | None): A table already filled under this algebra to at least
+                this cap, read for every query over the program it was filled for; a query over
+                another program gets a table of its own. A table filled under another algebra or
+                to a lower cap is refused when a query reads it. (Default value = None)
 
         Raises:
             ValueError: If the cap is not a nonnegative whole number.
@@ -452,15 +463,32 @@ class CostTableSampler:
         self.rng = rng
         self._query: ResolutionQuery[Any, Any, Any] | None = None
         self._weighted: WeightedCostTable[Any, Any, Any] | None = None
+        self._handed_in = table
+        self._filled: CostTable[Any] | None = None
 
     def forget(self) -> None:
-        """Drop the cached construction.
+        """Drop the cached construction and the table the sampler filled; a table handed in stays.
 
         Returns:
             None
         """
         self._query = None
         self._weighted = None
+        self._filled = None
+
+    def _table_for(self, query: ResolutionQuery[Any, Any, Any]) -> CostTable[Any] | None:
+        """The table held for the query's program, handed in or filled here, or None.
+
+        Args:
+            query (ResolutionQuery[Any, Any, Any]): The query to complete.
+
+        Returns:
+            CostTable | None: A table filled for the program the query asks, if one is held.
+        """
+        for table in (self._handed_in, self._filled):
+            if table is not None and table.space is query.solution_space:
+                return table
+        return None
 
     def _construction(self, query: ResolutionQuery[Any, Any, Any]) -> WeightedCostTable[Any, Any, Any]:
         """Return the weighted construction for a query, building it at most once in a row.
@@ -472,7 +500,10 @@ class CostTableSampler:
             WeightedCostTable: The construction, ready to stream from.
         """
         if self._weighted is None or self._query is not query:
-            self._weighted = weighted_cost_table(query, self.algebra, self.distribution, self.cost_cap)
+            held = self._table_for(query)
+            self._weighted = weighted_cost_table(query, self.algebra, self.distribution, self.cost_cap, table=held)
+            if held is None:
+                self._filled = self._weighted.table
             self._query = query
         return self._weighted
 

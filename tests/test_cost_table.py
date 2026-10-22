@@ -946,13 +946,9 @@ def test_the_root_weight_is_the_sum_of_its_childrens():
     assert log_sum_exp(children) == pytest.approx(lazy.log_weight_of(None, 0), abs=1e-12)
 
 
-def test_the_sampler_counts_again_for_another_query_and_forgets_on_request(monkeypatch):
-    """One fill per query in a row, another for another query, another after ``forget``."""
+def _counting_fills(monkeypatch) -> list:
+    """Count the cost tables filled from here on, by the program each was filled for."""
     module = cost_tables_module
-
-    space = priced_space()
-    whole, part = generator_query(space, PRICED), generator_query(space, PRICED_Q)
-    expected_part = set(weighted_cost_table(part, WEIGHTED, falling, 6).stream(random.Random(0)))
     fills = []
     original = module.cost_table
 
@@ -961,17 +957,78 @@ def test_the_sampler_counts_again_for_another_query_and_forgets_on_request(monke
         return original(*args, **kwargs)
 
     monkeypatch.setattr(module, "cost_table", counted)
+    return fills
+
+
+def test_the_sampler_fills_one_table_for_every_query_over_its_program_and_forgets_on_request(monkeypatch):
+    """One fill for every query over one program, a residual one included, as a mutation asks; another after ``forget``."""
+    space = priced_space()
+    whole, part = generator_query(space, PRICED), generator_query(space, PRICED_Q)
+    expected_part = set(weighted_cost_table(part, WEIGHTED, falling, 6).stream(random.Random(0)))
+    fills = _counting_fills(monkeypatch)
     sampler = CostTableSampler(WEIGHTED, falling, 6, random.Random(5))
     assert sampler.at_least(whole, 1)
     first = list(sampler.sample(whole))
     assert len(fills) == 1, "asking and then drawing counts once"
     in_part = list(sampler.sample(part))
-    assert len(fills) == 2, "another query is counted again"
+    assert len(fills) == 1, "another query over the same program reads the same table"
     assert set(in_part) == expected_part
     assert set(in_part) != set(first)
+    parent = max(first, key=lambda term: (term.depth, str(term)))
+    position = max(parent.positions(), key=len)
+    assert position, "the residual query opens a proper subterm"
+    residual = residual_query(space, PRICED, parent, position)
+    expected_residual = set(weighted_cost_table(residual, WEIGHTED, falling, 6).stream(random.Random(0)))
+    fills.clear()
+    assert set(sampler.sample(residual)) == expected_residual
+    assert fills == [], "a residual query over the same program reads the same table"
     sampler.forget()
     list(sampler.sample(part))
-    assert len(fills) == 3, "forgotten, the same query is counted again"
+    assert fills == [space], "forgotten, the table is filled again"
+
+
+def test_a_query_over_another_program_gets_a_table_of_its_own(monkeypatch):
+    """A table is read only for the program it was filled for; another program's query fills its own, never misreads one."""
+    one, other = list_space(), list_space()
+    fills = _counting_fills(monkeypatch)
+    sampler = CostTableSampler(WEIGHTED, falling, 4, random.Random(2))
+    drawn_one = set(sampler.sample(generator_query(one, LIST)))
+    drawn_other = set(sampler.sample(generator_query(other, LIST)))
+    assert fills == [one, other]
+    assert drawn_one
+    assert {str(term) for term in drawn_one} == {str(term) for term in drawn_other}
+
+
+def test_a_table_handed_in_is_read_and_kept_across_forget_and_streams_what_a_fill_streams(monkeypatch):
+    """A caller shares one filled table among samplers: none of them fills, and each streams what a fill of its own would."""
+    space = priced_space()
+    whole, part = generator_query(space, PRICED), generator_query(space, PRICED_Q)
+    table = cost_table(space, WEIGHTED, 8)
+    expected = list(weighted_cost_table(part, WEIGHTED, falling, 6).stream(random.Random(7)))
+    fills = _counting_fills(monkeypatch)
+    shared = CostTableSampler(WEIGHTED, falling, 6, random.Random(7), table=table)
+    assert expected
+    assert list(shared.sample(part)) == expected, (
+        "a table filled to a higher cap streams what a fill of its own streams"
+    )
+    assert list(shared.sample(whole))
+    shared.forget()
+    assert list(shared.sample(part))
+    assert fills == [], "a table handed in is never filled again, not even after forget"
+    other = CostTableSampler(WEIGHTED, falling, 6, random.Random(7), table=table)
+    assert list(other.sample(part)) == list(
+        CostTableSampler(WEIGHTED, falling, 6, random.Random(7), table=table).sample(part)
+    )
+    assert fills == []
+
+
+def test_a_table_handed_in_below_the_cap_is_refused_not_filled_again(monkeypatch):
+    space = priced_space()
+    sampler = CostTableSampler(WEIGHTED, falling, 6, random.Random(0), table=cost_table(space, WEIGHTED, 4))
+    fills = _counting_fills(monkeypatch)
+    with pytest.raises(ValueError, match="filled to the cost cap 4 but the search asks for 6"):
+        list(sampler.sample(generator_query(space, PRICED)))
+    assert fills == []
 
 
 def test_the_sampler_draws_from_its_own_source_of_randomness():
