@@ -24,6 +24,7 @@ from collections import Counter
 
 import pytest
 
+from cosy.core import Constructor, SpecificationBuilder, Synthesizer
 from cosy.core.tree import Tree
 from cosy.evolutionary_algorithms import Recombination, SubtreeGraft, SubtreeSwap
 from cosy.search import (
@@ -679,3 +680,296 @@ def test_the_graft_rejects_a_candidate_beyond_the_size_bound(recursive):
     for seed in range(40):
         batch = SubtreeGraft(random.Random(seed), max_size=6).recombine(recursive, primary, secondary)
         assert all(term_size(offspring) <= 6 for offspring in batch)
+
+
+# ---------------------------------------------------------------------------
+# The filter in front of the acceptance test
+# ---------------------------------------------------------------------------
+#
+# G4, two sorts:  S -> two(C, D);  C -> lc | uc(C);  D -> ld | ud(D)
+#
+# A subterm below ``uc`` fits where a ``C`` is asked and nowhere else, so its root decides what it
+# can be exchanged with. That is the case a filter is for: the walk over the pairs wastes a
+# membership test on every pair of a ``C`` with a ``D``, and a look at the two roots tells them apart.
+
+
+def lc() -> str:
+    """Leaf of sort ``C``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "c"
+
+
+def uc(c: str) -> str:
+    """Unary combinator on ``C``.
+
+    Args:
+        c (str): The interpreted child.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"uc({c})"
+
+
+def ld() -> str:
+    """Leaf of sort ``D``.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return "d"
+
+
+def ud(d: str) -> str:
+    """Unary combinator on ``D``.
+
+    Args:
+        d (str): The interpreted child.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"ud({d})"
+
+
+def two(c: str, d: str) -> str:
+    """Root combinator taking a ``C`` and a ``D``.
+
+    Args:
+        c (str): The interpreted ``C`` child.
+        d (str): The interpreted ``D`` child.
+
+    Returns:
+        str: Its rendering under ``interpret``.
+    """
+    return f"two({c},{d})"
+
+
+TWO_SORTS_SPECS = {
+    lc: SpecificationBuilder().suffix(Constructor("C")),
+    uc: SpecificationBuilder().argument("c", Constructor("C")).suffix(Constructor("C")),
+    ld: SpecificationBuilder().suffix(Constructor("D")),
+    ud: SpecificationBuilder().argument("d", Constructor("D")).suffix(Constructor("D")),
+    two: SpecificationBuilder()
+    .argument("c", Constructor("C"))
+    .argument("d", Constructor("D"))
+    .suffix(Constructor("S")),
+}
+TWO_SORTS_START = Constructor("S")
+
+
+def _two_sorts_parent(left: int, right: int) -> Tree:
+    """Build ``two(uc^left(lc), ud^right(ld))``.
+
+    Args:
+        left (int): Chain length below the ``C`` argument.
+        right (int): Chain length below the ``D`` argument.
+
+    Returns:
+        Tree: The term.
+    """
+    c: Tree = Tree(lc, ())
+    d: Tree = Tree(ld, ())
+    for _ in range(left):
+        c = Tree(uc, (c,))
+    for _ in range(right):
+        d = Tree(ud, (d,))
+    return Tree(two, (c, d))
+
+
+def _same_sort(replaced: Tree):
+    """The filter of the two-sorted space: a subterm may stand where one of its own sort stands.
+
+    Args:
+        replaced (Tree): The subterm that stands at the position.
+
+    Returns:
+        Callable[[Tree], bool]: True for a subterm with the same root combinator.
+    """
+    return lambda arriving: arriving.root is replaced.root
+
+
+@pytest.fixture
+def two_sorts():
+    """Return the generator query on the two-sorted space, its membership tests counted.
+
+    Returns:
+        tuple: The query and the counting space behind it.
+    """
+    counting = CountingSpace(Synthesizer(TWO_SORTS_SPECS).construct_solution_space(TWO_SORTS_START))
+    return generator_query(counting, TWO_SORTS_START), counting
+
+
+def test_without_a_filter_the_batches_are_the_recorded_ones(recursive):
+    """The operators' decisions under a seed, recorded before the filter existed.
+
+    The filter must leave an operator that is given none exactly as it was: the same pair list, the
+    same order, the same batch. These four batches a seed were rendered from the operators as they
+    stood without the parameter.
+
+    Args:
+        recursive: The recursive-space query fixture.
+    """
+    swaps = [
+        ("T(u(u(u(.))),u(u(.)))", "T(u(u(.)),u(u(u(.))))"),
+        ("T(u(u(u(u(.)))),u(u(.)))", "T(u(.),u(u(u(.))))"),
+        ("T(u(u(.)),u(u(.)))", "T(u(u(.)),u(u(u(u(.)))))"),
+        ("T(u(u(.)),u(u(.)))", "T(u(u(u(.))),u(u(u(.))))"),
+    ]
+    grafts = [
+        ("T(u(u(u(.))),u(u(.)))",),
+        ("T(u(u(u(u(.)))),u(u(.)))",),
+        ("T(u(u(.)),u(u(.)))",),
+        ("T(u(u(.)),u(u(.)))",),
+    ]
+    for seed in range(4):
+        batch = SubtreeSwap(random.Random(seed)).recombine(recursive, parent(3, 2), parent(2, 3))
+        assert tuple(rendered(offspring) for offspring in batch) == swaps[seed]
+        batch = SubtreeGraft(random.Random(seed)).recombine(recursive, parent(3, 2), parent(2, 3))
+        assert tuple(rendered(offspring) for offspring in batch) == grafts[seed]
+    assert len(set(swaps)) > 1, "the seed must decide the batch"
+
+
+def test_a_filter_that_admits_everything_changes_nothing(two_sorts):
+    """The constant filter is the operator without one: the same batch from the same membership tests.
+
+    Args:
+        two_sorts: The two-sorted query and its counting space.
+    """
+    query, counting = two_sorts
+    first, second = _two_sorts_parent(3, 2), _two_sorts_parent(2, 4)
+    for seed in range(20):
+        counting.calls.clear()
+        plain = SubtreeSwap(random.Random(seed)).recombine(query, first, second)
+        plain_tests = len(counting.calls)
+        counting.calls.clear()
+        everything = SubtreeSwap(random.Random(seed), admits=lambda _replaced: lambda _arriving: True)
+        batch = everything.recombine(query, first, second)
+        assert [rendered(offspring) for offspring in batch] == [rendered(offspring) for offspring in plain]
+        assert len(counting.calls) == plain_tests
+
+
+def test_a_necessary_filter_returns_the_same_batch_from_fewer_membership_tests(two_sorts):
+    """A filter that refuses only what cannot be accepted changes the cost and nothing else.
+
+    ``_same_sort`` refuses a ``C`` against a ``D``, which no exchange survives, and admits the rest,
+    which every exchange survives here. So under every seed the batch is the one the plain operator
+    returns, and the membership tests are the two of the accepted pair.
+
+    Args:
+        two_sorts: The two-sorted query and its counting space.
+    """
+    query, counting = two_sorts
+    first, second = _two_sorts_parent(3, 2), _two_sorts_parent(2, 4)
+    saved = 0
+    for seed in range(20):
+        counting.calls.clear()
+        plain = SubtreeSwap(random.Random(seed)).recombine(query, first, second)
+        plain_tests = len(counting.calls)
+        counting.calls.clear()
+        batch = SubtreeSwap(random.Random(seed), admits=_same_sort).recombine(query, first, second)
+        assert len(plain) == 2
+        assert [rendered(offspring) for offspring in batch] == [rendered(offspring) for offspring in plain]
+        assert len(counting.calls) == 2
+        assert all(accepted for _identity, accepted in counting.calls)
+        saved += plain_tests - 2
+    assert saved > 0, "the plain operator must have wasted a test under some seed"
+
+
+def test_a_filter_that_admits_nothing_yields_the_empty_batch_without_a_membership_test(two_sorts):
+    """What the filter refuses is neither built nor tested.
+
+    Args:
+        two_sorts: The two-sorted query and its counting space.
+    """
+    query, counting = two_sorts
+    first, second = _two_sorts_parent(3, 2), _two_sorts_parent(2, 4)
+
+    def nothing(_replaced):
+        return lambda _arriving: False
+
+    assert SubtreeSwap(random.Random(0), admits=nothing).recombine(query, first, second) == []
+    assert SubtreeGraft(random.Random(0), admits=nothing).recombine(query, first, second) == []
+    assert counting.calls == []
+    assert len(SubtreeSwap(random.Random(0)).recombine(query, first, second)) == 2
+
+
+def test_the_walk_stops_at_the_first_accepted_pair(recursive):
+    """The pairs are filtered as they are walked, not all of them before the first is tried.
+
+    On the recursive space every pair is acceptable, so the first pair of the walk is taken: the
+    filter is asked about that pair and about no other, although the parents offer twenty-five.
+
+    Args:
+        recursive: The recursive-space query fixture.
+    """
+    asked = []
+
+    def recording(replaced):
+        def admits(arriving):
+            asked.append((rendered(replaced), rendered(arriving)))
+            return True
+
+        return admits
+
+    first, second = parent(4, 1), parent(2, 3)
+    assert len(_inner(first)) * len(_inner(second)) == 25
+    assert len(SubtreeSwap(random.Random(3), admits=recording).recombine(recursive, first, second)) == 2
+    assert len(asked) == 2  # the one pair, in both directions
+    asked.clear()
+    assert len(SubtreeGraft(random.Random(3), admits=recording).recombine(recursive, first, second)) == 1
+    assert len(asked) == 1
+
+
+def test_the_swap_asks_the_filter_both_ways_and_the_graft_one_way(recursive):
+    """Both children of a swap are asked for, so each subterm must be admitted where the other stands.
+
+    The filter here admits a subterm no larger than the one it replaces. One way alone, a swap could
+    take a pair whose second child grows; asked both ways it exchanges subterms of one size only, so
+    each child has its parent's size. The graft has one child and asks one way: its child never grows.
+
+    Args:
+        recursive: The recursive-space query fixture.
+    """
+
+    def no_larger(replaced):
+        return lambda arriving: term_size(arriving) <= term_size(replaced)
+
+    first, second = parent(4, 1), parent(2, 3)
+    grown = shrunk = 0
+    for seed in range(30):
+        batch = SubtreeSwap(random.Random(seed), admits=no_larger).recombine(recursive, first, second)
+        assert [term_size(offspring) for offspring in batch] == [term_size(first), term_size(second)]
+        plain = SubtreeSwap(random.Random(seed)).recombine(recursive, first, second)
+        grown += term_size(plain[1]) > term_size(second)
+        (grafted,) = SubtreeGraft(random.Random(seed), admits=no_larger).recombine(recursive, first, second)
+        assert term_size(grafted) <= term_size(first)
+        shrunk += term_size(grafted) < term_size(first)
+    assert grown > 0, "without the filter some seed must let the second child grow"
+    assert shrunk > 0, "asked one way, the graft must take a smaller subterm under some seed"
+
+
+def test_the_filter_reads_a_subterm_of_a_parent_once(two_sorts):
+    """The filter maps a subterm to a predicate, and that predicate is kept for the subterm's position.
+
+    A filter that admits nothing makes the walk visit every pair. The first parent's subterms are
+    then each read once, however many pairs they stand in, and the second parent's never: the swap
+    asks its second direction only where the first one admits.
+
+    Args:
+        two_sorts: The two-sorted query and its counting space.
+    """
+    query, _counting = two_sorts
+    first, second = _two_sorts_parent(3, 2), _two_sorts_parent(2, 4)
+    read = []
+
+    def nothing(replaced):
+        read.append(rendered(replaced))
+        return lambda _arriving: False
+
+    assert SubtreeSwap(random.Random(0), admits=nothing).recombine(query, first, second) == []
+    assert len(_inner(first)) * len(_inner(second)) > len(_inner(first))
+    assert sorted(read) == sorted(rendered(first.subtree_at(position)) for position in _inner(first))

@@ -17,11 +17,26 @@ favour the leaves, which a term has most of, and at the pair of roots a swap ret
 unchanged, which would smuggle copies past the rates of the driver. The driver already makes
 copies, with the probability left over from ``mutation_rate`` and ``recombination_rate``. Mutation
 includes the root because reachability needs it there, and the asymmetry is intended.
+
+**A filter may stand in front of the acceptance test.** The walk over the pairs spends a membership
+test on every pair it tries, and on a space whose positions admit little it tries many before one
+is accepted. Whether a subterm can stand at a position is the residual's to say, and the residual is
+decided by a query; but a modelling often shows a cheap part of the answer at the root of a subterm:
+its sort, its interface. ``admits`` is that knowledge, handed in by whoever knows the space: a
+function from the subterm that stands at a position to a predicate on the subterm that would
+replace it. A pair the predicate refuses is neither built nor tested. The pair list is drawn as
+before and walked lazily, so the walk still ends at the first accepted pair.
+
+**The filter's contract is necessity**: it may refuse a pair only if the exchange certainly leaves
+the language. Under that contract the operator returns the batch it returns without a filter, from
+the same random numbers, and only the membership tests of the refused pairs are saved. A filter
+that refuses an acceptable pair is no longer a filter of this operator: it defines another one, the
+first acceptable pair among those it admits.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from cosy.core.solution_space import NT, G, T
 from cosy.search.partial import term_size
@@ -29,6 +44,7 @@ from cosy.search.queries import checker
 
 if TYPE_CHECKING:
     import random
+    from collections.abc import Callable, Iterator
 
     from cosy.core.tree import Path, Tree
     from cosy.search.queries import ResolutionQuery
@@ -73,21 +89,31 @@ class Recombination(Protocol[NT, T, G]):
 
 
 class _CheckedExchange:
-    """The acceptance test and the pair enumeration shared by the two operators.
+    """The acceptance test, the pair enumeration and the filter shared by the two operators.
 
     Attributes:
         rng (random.Random): The source of randomness for the order of the pairs.
         max_size (int | None): An optional bound on the size of an offspring, tested *inside* the
             acceptance test.
+        admits (Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None): An optional filter in
+            front of the acceptance test, from the subterm that stands at a position to a predicate
+            on the subterm that would replace it.
     """
 
-    def __init__(self, rng: random.Random, max_size: int | None = None) -> None:
+    def __init__(
+        self,
+        rng: random.Random,
+        max_size: int | None = None,
+        admits: Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None = None,
+    ) -> None:
         """Build the shared part.
 
         Args:
             rng (random.Random): The source of randomness for the order of the pairs.
             max_size (int | None): The maximum size of an offspring, or None for no bound.
                 (Default value = None)
+            admits (Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None): The filter, or None
+                to try every pair. (Default value = None)
 
         Raises:
             ValueError: If ``max_size`` is negative.
@@ -97,6 +123,7 @@ class _CheckedExchange:
             raise ValueError(msg)
         self.rng = rng
         self.max_size = max_size
+        self.admits = admits
 
     def _accepts(self, query: ResolutionQuery[NT, T, G], candidate: Tree[T]) -> bool:
         """Decide whether a candidate offspring is accepted.
@@ -145,6 +172,52 @@ class _CheckedExchange:
         self.rng.shuffle(pairs)
         return pairs
 
+    def _admitted(
+        self, first: Tree[T], second: Tree[T], *, both_ways: bool
+    ) -> Iterator[tuple[Path, Path, Tree[T], Tree[T]]]:
+        """Walk the pairs in their drawn order and yield those the filter lets through.
+
+        The walk is lazy: a pair is looked at when the caller asks for the next one, so a caller
+        that returns at its first accepted pair never pays for the pairs behind it. The pair list
+        itself is drawn in full, as :meth:`_pairs` draws it, which keeps the order, and with it the
+        random numbers consumed, the same with and without a filter.
+
+        The filter maps a subterm to a predicate, and a subterm stands in as many pairs as the other
+        parent has positions. Its predicate is therefore asked for once and kept for its position.
+
+        Args:
+            first (Tree[T]): The first parent.
+            second (Tree[T]): The second parent.
+            both_ways (bool): Whether the first parent's subterm must be admitted at the second
+                parent's position as well, which an exchange in both directions needs.
+
+        Yields:
+            tuple[Path, Path, Tree[T], Tree[T]]: A pair of positions and the two subterms there, the
+                first parent's and the second parent's.
+        """
+        admits = self.admits
+        subterms: tuple[dict[Path, Tree[T]], dict[Path, Tree[T]]] = ({}, {})
+        predicates: tuple[dict[Path, Callable[[Tree[Any]], bool]], dict[Path, Callable[[Tree[Any]], bool]]] = ({}, {})
+
+        def subterm(side: int, parent: Tree[T], position: Path) -> Tree[T]:
+            if position not in subterms[side]:
+                subterms[side][position] = parent.subtree_at(position)
+            return subterms[side][position]
+
+        for left, right in self._pairs(first, second):
+            mine, theirs = subterm(0, first, left), subterm(1, second, right)
+            if admits is not None:
+                if left not in predicates[0]:
+                    predicates[0][left] = admits(mine)
+                if not predicates[0][left](theirs):
+                    continue
+                if both_ways:
+                    if right not in predicates[1]:
+                        predicates[1][right] = admits(theirs)
+                    if not predicates[1][right](mine):
+                        continue
+            yield left, right, mine, theirs
+
 
 class SubtreeSwap(_CheckedExchange, Recombination[NT, T, G]):
     """Exchange the subterms at a pair of inner positions.
@@ -161,24 +234,40 @@ class SubtreeSwap(_CheckedExchange, Recombination[NT, T, G]):
     nonterminals and gets closure from that. Here the residual is what decides, and it is decided by
     a query rather than by a label.
 
+    A filter, when given, is asked before a pair is built: the second parent's subterm must be
+    admitted where the first parent's stands, and the first parent's where the second's stands,
+    since both offspring are asked for.
+
     Attributes:
         rng (random.Random): The source of randomness for the order of the pairs.
         max_size (int | None): An optional bound on the size of an offspring, tested inside the
             acceptance test.
+        admits (Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None): An optional filter in
+            front of the acceptance test.
     """
 
-    def __init__(self, rng: random.Random, max_size: int | None = None) -> None:
+    def __init__(
+        self,
+        rng: random.Random,
+        max_size: int | None = None,
+        admits: Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None = None,
+    ) -> None:
         """Build the operator.
 
         Args:
             rng (random.Random): The source of randomness for the order of the pairs.
             max_size (int | None): The maximum size of an offspring, or None for no bound.
                 (Default value = None)
+            admits (Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None): A filter in front
+                of the acceptance test: from the subterm that stands at a position to a predicate
+                on the subterm that would replace it. It must refuse a pair only if the exchange
+                certainly leaves the language; then the batch is the one returned without it.
+                None tries every pair. (Default value = None)
 
         Raises:
             ValueError: If ``max_size`` is negative.
         """
-        super().__init__(rng, max_size)
+        super().__init__(rng, max_size, admits)
 
     def recombine(self, query: ResolutionQuery[NT, T, G], first: Tree[T], second: Tree[T]) -> list[Tree[T]]:
         """Swap subterms until both offspring are accepted.
@@ -191,9 +280,9 @@ class SubtreeSwap(_CheckedExchange, Recombination[NT, T, G]):
         Returns:
             list[Tree[T]]: Both offspring of the first acceptable pair, or the empty batch.
         """
-        for left, right in self._pairs(first, second):
-            first_child = first.replace_subtree_at(left, second.subtree_at(right))
-            second_child = second.replace_subtree_at(right, first.subtree_at(left))
+        for left, right, mine, theirs in self._admitted(first, second, both_ways=True):
+            first_child = first.replace_subtree_at(left, theirs)
+            second_child = second.replace_subtree_at(right, mine)
             if self._accepts(query, first_child) and self._accepts(query, second_child):
                 return [first_child, second_child]
         return []
@@ -213,24 +302,39 @@ class SubtreeGraft(_CheckedExchange, Recombination[NT, T, G]):
     subterms of the secondary parent, is deliberately not here: several holes would have to be drawn
     together.
 
+    A filter, when given, is asked before the candidate is built, and in one direction: the
+    secondary parent's subterm must be admitted where the primary's stands.
+
     Attributes:
         rng (random.Random): The source of randomness for the order of the pairs.
         max_size (int | None): An optional bound on the size of an offspring, tested inside the
             acceptance test.
+        admits (Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None): An optional filter in
+            front of the acceptance test.
     """
 
-    def __init__(self, rng: random.Random, max_size: int | None = None) -> None:
+    def __init__(
+        self,
+        rng: random.Random,
+        max_size: int | None = None,
+        admits: Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None = None,
+    ) -> None:
         """Build the operator.
 
         Args:
             rng (random.Random): The source of randomness for the order of the pairs.
             max_size (int | None): The maximum size of an offspring, or None for no bound.
                 (Default value = None)
+            admits (Callable[[Tree[Any]], Callable[[Tree[Any]], bool]] | None): A filter in front
+                of the acceptance test: from the primary's subterm at a position to a predicate on
+                the secondary's subterm that would replace it. It must refuse a pair only if the
+                candidate certainly leaves the language. None tries every pair.
+                (Default value = None)
 
         Raises:
             ValueError: If ``max_size`` is negative.
         """
-        super().__init__(rng, max_size)
+        super().__init__(rng, max_size, admits)
 
     def recombine(self, query: ResolutionQuery[NT, T, G], first: Tree[T], second: Tree[T]) -> list[Tree[T]]:
         """Graft subterms until one offspring is accepted.
@@ -243,8 +347,8 @@ class SubtreeGraft(_CheckedExchange, Recombination[NT, T, G]):
         Returns:
             list[Tree[T]]: The one offspring of the first acceptable pair, or the empty batch.
         """
-        for left, right in self._pairs(first, second):
-            candidate = first.replace_subtree_at(left, second.subtree_at(right))
+        for left, _right, _mine, theirs in self._admitted(first, second, both_ways=False):
+            candidate = first.replace_subtree_at(left, theirs)
             if self._accepts(query, candidate):
                 return [candidate]
         return []
